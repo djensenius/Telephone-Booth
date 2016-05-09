@@ -265,6 +265,15 @@ if (cluster.isMaster) {
 	process.on('clear_code', function(spec) {
   		piphone.state.sofar = [];
 	});
+
+
+	var saveFile = function() {
+
+	};
+
+	var syncServer = function() {
+
+	};
 }
 
 /*
