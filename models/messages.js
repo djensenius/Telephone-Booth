@@ -18,6 +18,7 @@ function defineModels(mongoose, fn) {
 
     MessageSchema = new Schema ({
 		question: Question,
+		status: String,
 		file: File
     });
 	MessageSchema.plugin(timestamps);
