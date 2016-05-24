@@ -21,7 +21,9 @@ if (cluster.isMaster) {
 	cluster = require('cluster'),
 	morgan = require('morgan'),
 	multiparty = require('connect-multiparty'),
-	server = require('http').createServer(app);
+	pug = require('pug'),
+	server = require('http').createServer(app),
+	io = require('socket.io').listen(server);
 
 	var ObjectId = require('mongoose').Types.ObjectId; //required to query raw objectId in mongoose
 	var mongoConnect = mongoose.connect(config.mongooseAuth);
@@ -29,6 +31,9 @@ if (cluster.isMaster) {
 
 	app.use(morgan('dev')); // log every request to the console
 	app.set('port', config.portNum);
+	app.set('view engine', 'pug');
+	app.use('/components', express.static(__dirname + '/bower_components'));
+	app.use('/download', express.static('/Users/david/uploads'));
 
 	// Handle Errors gracefully
 	app.use(function(err, req, res, next) {
