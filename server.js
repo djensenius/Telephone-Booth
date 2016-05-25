@@ -20,8 +20,11 @@ if (cluster.isMaster) {
 	config = require('./config'),
 	cluster = require('cluster'),
 	morgan = require('morgan'),
+	path = require('path'),
 	multiparty = require('connect-multiparty'),
 	pug = require('pug'),
+	fs = require('fs'),
+	timestamps = require('mongoose-timestamp'),
 	server = require('http').createServer(app),
 	io = require('socket.io').listen(server);
 
@@ -34,6 +37,14 @@ if (cluster.isMaster) {
 	app.set('view engine', 'pug');
 	app.use('/components', express.static(__dirname + '/bower_components'));
 	app.use('/download', express.static('/Users/david/uploads'));
+	app.use(express.static(path.join(__dirname, 'public')));
+
+	models.defineModels(mongoose, function() {
+  		app.Map = Question = mongoose.model('Question');
+		app.Message = Message = mongoose.model('Message');
+  		app.File = File = mongoose.model('File');
+	});
+
 
 	// Handle Errors gracefully
 	app.use(function(err, req, res, next) {

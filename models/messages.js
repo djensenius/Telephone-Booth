@@ -4,24 +4,24 @@ function defineModels(mongoose, fn) {
 
 /* Use embedded model: http://docs.mongodb.org/manual/core/data-model-design/ */
 
-	FileSchema = new Schema ({
+	File = new Schema ({
 		title: String
 	});
-	FileSchema.plugin(timestamps);
+	File.plugin(timestamps);
 
-	QuestionSchema = new Schema ({
+	Question = new Schema ({
 		description: String,
 		voice: String,
 		file: File
 	});
-	QuestionSchema.plugin(timestamps);
+	Question.plugin(timestamps);
 
-    MessageSchema = new Schema ({
+    Message = new Schema ({
 		question: Question,
 		status: String,
 		file: File
     });
-	MessageSchema.plugin(timestamps);
+	Message.plugin(timestamps);
 
 	 mongoose.model('Message', Message);
 	 mongoose.model('Question', Question);

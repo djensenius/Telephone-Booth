@@ -1,15 +1,35 @@
 include header
 body
 	block body
-		div(ng-controller="MapListCtrl")
+		div(ng-controller="PhoneBothCtrl")
 			md-content
-				div(layout="row" layout-align="center center")
-					md-card(style="width: 500px;")
-						md-card-content
-							md-button( class="md-raised md-primary" ng-click="showNewGame($event)") New Game
-							md-list
-								md-list-item(ng-repeat="map in maps")
-									div(class="md-tile-content")
-										p
-											a(href="/edit_map/{{map._id}}") {{map.title}}
-										md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMap(map._id)" aria-label="Delete" class="md-secondary md-warn")
+				div(layout="row" layout-xs="column" layout-align="center")
+					div(flex class="pendingMessages")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Pending Messages
+							md-card-content
+								md-list
+									md-list-item(ng-repeat="map in maps")
+										div(class="md-tile-content")
+											p
+												a(href="/edit_map/{{map._id}}") {{map.title}}
+											md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMap(map._id)" aria-label="Delete" class="md-secondary md-warn")
+					div(flex class="questions")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Questions
+									span(flex)
+									md-button(class="md-icon-button" aria-label="New")
+										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewQuestion()")
+							md-card-content
+								md-list
+									md-list-item(ng-repeat="question in questions")
+										div(class="md-tile-content")
+											p
+												a(href="/edit_map/{{map._id}}") {{map.title}}
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
