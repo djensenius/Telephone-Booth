@@ -22,7 +22,6 @@
     "express": "^4.13.4",
     "gpiobutton": "0.0.2",
     "lodash": "^4.11.1",
-    "microphone": "~1.0.8",
     "mongoose": "^4.4.14",
     "mongoose-timestamp": "^0.5.0",
     "morgan": "^1.7.0",
