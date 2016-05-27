@@ -1,14 +1,8 @@
-md-dialog(aria-label="New Question")
+md-dialog(aria-label="New Message")
     md-dialog-content(class="sticky-container")
         div(class="dialog-content")
-            md-input-container
-                label Question
-                textarea(ng-model="question.description" md-maxlength="200" rows="5" md-select-on-focus)
             md-input-container(class="md-block")
-                label Voice
-                input(ng-model="question.voice" id="newVoice")
-            md-input-container(class="md-block")
-                div(ng-controller="eventUpload" class="uploadBox")
+                div(ng-controller="messageUpload" class="uploadBox")
                     div(ngf-drop ngf-select="upload($files)" ng-model="files" class="drop-box" ngf-drag-over-class="dragover" ngf-multiple="true" ngf-allow-dir="true" ngf-accept="'.jpg,.png,.pdf,.pd,.aiff,.wav,.mp3'") Add files <br>
                         md-progress-linear(class="md-accent progressPadding" md-mode="determinate" ng-value="determinateValue")
     md-dialog-actions(layout="row")

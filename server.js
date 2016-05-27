@@ -24,6 +24,7 @@ if (cluster.isMaster) {
 	multiparty = require('connect-multiparty'),
 	pug = require('pug'),
 	fs = require('fs'),
+	bodyParser = require('body-parser'),
 	timestamps = require('mongoose-timestamp'),
 	server = require('http').createServer(app),
 	io = require('socket.io').listen(server);
@@ -35,7 +36,11 @@ if (cluster.isMaster) {
 	app.use(morgan('dev')); // log every request to the console
 	app.set('port', config.portNum);
 	app.set('view engine', 'pug');
+	app.use(bodyParser.json({extended: true}));
+	app.use(bodyParser.urlencoded({extended: true}));
 	app.use('/components', express.static(__dirname + '/bower_components'));
+	app.use('/download/question', express.static(config.questionPath));
+	app.use('/download/message', express.static(config.answerPath));
 	app.use('/download', express.static('/Users/david/uploads'));
 	app.use(express.static(path.join(__dirname, 'public')));
 

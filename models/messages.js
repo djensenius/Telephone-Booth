@@ -12,14 +12,16 @@ function defineModels(mongoose, fn) {
 	Question = new Schema ({
 		description: String,
 		voice: String,
-		file: File
+		file: File,
+		playCount: Number
 	});
 	Question.plugin(timestamps);
 
     Message = new Schema ({
 		question: Question,
 		status: String,
-		file: File
+		file: File,
+		playCount: Number
     });
 	Message.plugin(timestamps);
 

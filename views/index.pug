@@ -10,13 +10,22 @@ body
 								div(class="md-toolbar-tools")
 									h2
 										span Pending Messages
+									span(flex)
+									md-button(class="md-icon-button" aria-label="New")
+										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewMessage()")
 							md-card-content
-								md-list
-									md-list-item(ng-repeat="map in maps")
-										div(class="md-tile-content")
-											p
-												a(href="/edit_map/{{map._id}}") {{map.title}}
-											md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMap(map._id)" aria-label="Delete" class="md-secondary md-warn")
+								div(class="md-tile-content")
+									md-list
+										md-list-item(class="md-2-line" ng-repeat="pending in pendings")
+											md-button(ng-click='sound[pending.file._id].paused ? sound[pending.file._id].play() : sound[pending.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+												md-icon(ng-if='sound[pending.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
+												md-icon(ng-if='!sound[pending.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
+											div(class="md-list-item-text")
+												h3 {{pending.createdAt | date: 'medium'}}
+												p
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_up_48px.svg" ng-click="approveMessage(pending._id)" aria-label="Approve" class="md-primary" style="padding-right: 2rem;")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_down_48px.svg" ng-click="rejectMessage(pending._id)" aria-label="Reject" class="md-warn md-hue-3")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMessage(pending._id)" aria-label="Delete" class="md-secondary md-warn")
 					div(flex class="questions")
 						md-card
 							md-toolbar(class="md-primary")
@@ -27,9 +36,53 @@ body
 									md-button(class="md-icon-button" aria-label="New")
 										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewQuestion()")
 							md-card-content
-								md-list
-									md-list-item(ng-repeat="question in questions")
-										div(class="md-tile-content")
-											p
-												a(href="/edit_map/{{map._id}}") {{map.title}}
-													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
+								div(class="md-tile-content")
+									md-list
+										md-list-item(class="md-2-line" ng-repeat="question in questions")
+											div(class="md-list-item-text")
+												h3 {{question.voice}}
+												p {{question.description}}
+												p
+													md-button(ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+														md-icon(ng-if='sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
+														md-icon(ng-if='!sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
+												md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
+				div(layout="row" layout-xs="column" layout-align="center")
+					div(flex class="approvedMessages")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Approved Messages
+							md-card-content
+								div(class="md-tile-content")
+									md-list
+										md-list-item(class="md-2-line" ng-repeat="a in approved")
+											md-button(ng-click='sound[a.file._id].paused ? sound[a.file._id].play() : sound[a.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+												md-icon(ng-if='sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
+												md-icon(ng-if='!sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
+											div(class="md-list-item-text")
+												h3 {{a.createdAt | date: 'medium'}}
+												p
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_up_48px.svg" ng-click="approveMessage(a._id)" aria-label="Approve" class="md-primary" style="padding-right: 2rem;")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_down_48px.svg" ng-click="rejectMessage(a._id)" aria-label="Reject" class="md-warn md-hue-3")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMessage(a._id)" aria-label="Delete" class="md-secondary md-warn")
+					div(flex class="rejectedMessages")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Rejected Messages
+							md-card-content
+								div(class="md-tile-content")
+									md-list
+										md-list-item(class="md-2-line" ng-repeat="r in rejected")
+											md-button(ng-click='sound[r.file._id].paused ? sound[r.file._id].play() : sound[r.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+												md-icon(ng-if='sound[r.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
+												md-icon(ng-if='!sound[r.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
+											div(class="md-list-item-text")
+												h3 {{r.createdAt | date: 'medium'}}
+												p
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_up_48px.svg" ng-click="approveMessage(r._id)" aria-label="Approve" class="md-primary" style="padding-right: 2rem;")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_down_48px.svg" ng-click="rejectMessage(r._id)" aria-label="Reject" class="md-warn md-hue-3")
+													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteMessage(r._id)" aria-label="Delete" class="md-secondary md-warn")
