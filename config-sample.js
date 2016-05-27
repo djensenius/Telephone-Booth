@@ -4,5 +4,7 @@ module.exports = {
 	mongooseAuth: 'mongodb://localhost/phone-booth',
 	answerPath: '/Users/david/questions/',
     questionPath: '/Users/david/answers/',
-    mongoSecret: 'sadpanda'
+    mongoSecret: 'sadpanda',
+	login: 'login',
+	password: 'password'
 }

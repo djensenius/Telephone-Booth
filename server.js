@@ -26,12 +26,17 @@ if (cluster.isMaster) {
 	fs = require('fs'),
 	bodyParser = require('body-parser'),
 	timestamps = require('mongoose-timestamp'),
+	basicAuth = require('basic-auth-connect'),
 	server = require('http').createServer(app),
 	io = require('socket.io').listen(server);
 
 	var ObjectId = require('mongoose').Types.ObjectId; //required to query raw objectId in mongoose
 	var mongoConnect = mongoose.connect(config.mongooseAuth);
 	var multipartyMiddleware = multiparty();
+
+	app.use(basicAuth(function(user, pass){
+		return config.login == user && config.password == pass;
+	}));
 
 	app.use(morgan('dev')); // log every request to the console
 	app.set('port', config.portNum);
