@@ -18,16 +18,26 @@ function defineModels(mongoose, fn) {
 	Question.plugin(timestamps);
 
     Message = new Schema ({
-		question: Question,
+		question: String,
 		status: String,
 		file: File,
 		playCount: Number
     });
 	Message.plugin(timestamps);
 
+	Status = new Schema({
+		ping: Date,
+		hookOn: Boolean,
+		recording: Boolean,
+		listeningQuestion: Boolean,
+		listeningMessage: Boolean
+	});
+	Status.plugin(timestamps);
+
 	 mongoose.model('Message', Message);
 	 mongoose.model('Question', Question);
 	 mongoose.model('File', File);
+	 mongoose.model('Status', Status);
 	 fn()
 }
 

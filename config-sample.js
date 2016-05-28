@@ -7,5 +7,6 @@ module.exports = {
     mongoSecret: 'sadpanda',
 	login: 'login',
 	password: 'password',
+	enablegpio: false,
 	apiRoot: 'http://localhost:3000'
 }
