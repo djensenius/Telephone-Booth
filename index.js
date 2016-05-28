@@ -5,7 +5,7 @@ server = require('http').createServer(app),
 mic = require('microphone'),
 fs = require('fs'),
 request = require('request'),
-Sound = require('aplay');
+mpg321 = require('mpg321');
 
 app.set('port', config.portNum + 1);
 
@@ -14,7 +14,6 @@ var recording = false;
 var listening = false;
 
 var stream;
-var music = new Sound();
 
 const gpio = require('rpi-gpio');
 var pRotary = false;
@@ -52,8 +51,9 @@ gpio.on('change', function(channel, value) {
             pPulse = false;
             pulse ++;
         }
+    } else if (channel == 15) {
+	console.log("Hangupper ", value);
     }
-
     console.log(channel, value);
 });
 
@@ -134,13 +134,14 @@ function playFile(file, type) {
 	//Play file, once done start recording
 	//If type == question, begin recording after
 	//If type == answer, set back to dialtone
-	music.play(file);
-	music.on('complete', function () {
-  		console.log('Done with playback!');
-		if (type == "question") {
-			startRecording();
-		}
+	/*
+	console.log("Going to play " + file);
+	player = mpg321().remote();
+	player.play(file);
+	player.on('end', function() {
+		console.log("Done playing file");
 	});
+	*/
 }
 
 getQuestion();
