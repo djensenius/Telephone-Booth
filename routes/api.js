@@ -78,6 +78,9 @@ module.exports = function(app, multipartyMiddleware) {
         var sym_path = target_path + "." + extension;
 
         var message = new Message();
+        if (req.body.question) {
+            message.question = req.body.question;
+        }
         message.file = uploadedFile;
         message.status = "Pending";
         console.log('Target path is: ' + target_path);
