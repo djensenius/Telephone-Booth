@@ -6,5 +6,6 @@ module.exports = {
     questionPath: '/Users/david/answers/',
     mongoSecret: 'sadpanda',
 	login: 'login',
-	password: 'password'
+	password: 'password',
+	apiRoot: 'http://localhost:3000'
 }

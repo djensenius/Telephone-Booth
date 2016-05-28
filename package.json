@@ -17,17 +17,20 @@
   },
   "homepage": "https://github.com/djensenius/phone-booth#readme",
   "dependencies": {
+    "aplay": "^1.0.0",
     "basic-auth-connect": "^1.0.0",
     "body-parser": "^1.15.1",
     "connect-multiparty": "^2.0.0",
     "express": "^4.13.4",
-    "gpiobutton": "0.0.2",
     "lodash": "^4.11.1",
+    "microphone": "git+ssh://git@github.com/djensenius/node-microphone.git#node6",
     "mongoose": "^4.4.14",
     "mongoose-timestamp": "^0.5.0",
     "morgan": "^1.7.0",
     "node-microphone": "0.0.2",
     "pug": "^2.0.0-alpha6",
+    "request": "^2.72.0",
+    "rpi-gpio": "^0.7.0",
     "socket.io": "^1.4.6"
   }
 }
