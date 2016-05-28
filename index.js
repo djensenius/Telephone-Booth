@@ -293,6 +293,7 @@ function updateStatus(formData) {
 	});
 }
 
+/*
 getQuestion();
 setTimeout(function() {
 	console.log("Debug timeout");
@@ -307,6 +308,7 @@ setInterval(function() {
 	}
 	updateStatus(formData);
 }, 5000);
+*/
 
 server.listen(app.get('port'), function(){
 	console.log('Express server listening on port ' + app.get('port'));
