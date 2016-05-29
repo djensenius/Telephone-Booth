@@ -61,6 +61,11 @@ if (config.enablegpio == true) {
 	            pulse ++;
 	        }
 	    } else if (channel == 15) {
+			if (value == 15) {
+				hangUp();
+			} else {
+				pickUp();
+			}
 			console.log("Hangupper ", value);
 	    }
 	    console.log(channel, value);
@@ -69,6 +74,24 @@ if (config.enablegpio == true) {
 	gpio.setup(11, gpio.DIR_IN, gpio.EDGE_BOTH);
 	gpio.setup(13, gpio.DIR_IN, gpio.EDGE_BOTH);
 	gpio.setup(15, gpio.DIR_IN, gpio.EDGE_BOTH);
+}
+
+function hangUp() {
+	if (recording == true) {
+		stopRecording();
+	}
+
+	if (listeningMessage == true) {
+		//Stop listening to the message
+	}
+
+	if (listeningQuestion == true) {
+		//Stop listening to the question
+	}
+
+	if (dialToneOn == true) {
+		//Stop the dial tone
+	}
 }
 
 function startRecording() {
