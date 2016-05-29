@@ -1,6 +1,6 @@
 var app = angular.module('TelephoneBoothApp', ['ngMaterial', 'ngFileUpload', 'ngAudio']);
 
-app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', 'ngAudio', function($scope, $mdDialog, $http, $rootScope, ngAudio){
+app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', 'ngAudio', 'socket', function($scope, $mdDialog, $http, $rootScope, ngAudio, socket){
 
     $scope.questions = [];
     $scope.pendings = [];
@@ -145,6 +145,11 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
         $scope.rejected = [];
         loadRejected();
     }
+
+    socket.on('status', function (data) {
+		console.log("Status is: ", data);
+	});
+
     function NewQuestionController($scope, $mdDialog, $http) {
         $rootScope.$watch('currentUploadMessageId', function() {
             $scope.currentUploadMessageId = $rootScope.currentUploadMessageId;

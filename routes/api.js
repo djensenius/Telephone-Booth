@@ -214,6 +214,8 @@ module.exports = function(app, multipartyMiddleware) {
             }
             status.save();
             setStatus = true;
+            io.sockets.emit('status', status);
+            console.log("EMITTED");
             res.json(status);
         });
     });

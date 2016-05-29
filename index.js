@@ -299,6 +299,7 @@ setTimeout(function() {
 	console.log("Debug timeout");
 	stopRecording();
 }, 5000);
+*/
 
 setInterval(function() {
 	var formData = {
@@ -308,7 +309,6 @@ setInterval(function() {
 	}
 	updateStatus(formData);
 }, 5000);
-*/
 
 server.listen(app.get('port'), function(){
 	console.log('Express server listening on port ' + app.get('port'));
