@@ -3,13 +3,26 @@ body
 	block body
 		div(ng-controller="PhoneBothCtrl")
 			md-content
-				div(layout="row" layout-xs="column" layout-align="center")
+				div(layout="row" layout-xs="column" layout-sm="column"  layout-align="center")
+					div(flex class="stats")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Status
+							md-card-content
+								div(class="md-tile-content")
+									p Last seen: {{lastSeen | date: 'medium'}}
+									p Hook on cradle: {{hook}}
+									p Listening to message: {{listeningMessage}}
+									p Listening to question: {{listeningQuestion}}
+									p Recording a message: {{recording}}
 					div(flex class="pendingMessages")
 						md-card
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Pending Messages
+										span Pending Messages ({{pendings.length}})
 									span(flex)
 									md-button(class="md-icon-button" aria-label="New")
 										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewMessage()")
@@ -31,7 +44,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Questions
+										span Questions ({{questions.length}})
 									span(flex)
 									md-button(class="md-icon-button" aria-label="New")
 										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewQuestion()")
@@ -53,7 +66,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Approved Messages
+										span Approved Messages ({{approved.length}})
 							md-card-content
 								div(class="md-tile-content")
 									md-list
@@ -72,7 +85,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Rejected Messages
+										span Rejected Messages ({{rejected.length}})
 							md-card-content
 								div(class="md-tile-content")
 									md-list

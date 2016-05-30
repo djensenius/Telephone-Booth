@@ -27,6 +27,7 @@ module.exports = function(app, multipartyMiddleware) {
                         console.log("Success!!!");
                         console.log(question);
                         console.log(target_path);
+                        io.sockets.emit('updateQuestion', quetion._id);
                         res.send({"_id": question._id});
                     }
                 });
@@ -66,6 +67,7 @@ module.exports = function(app, multipartyMiddleware) {
                         console.log("Success!!!");
                         console.log(message);
                         console.log(target_path);
+                        io.sockets.emit('updateMessages', message._id);
                         res.send({"_id": message._id});
                     }
                 });
@@ -216,6 +218,12 @@ module.exports = function(app, multipartyMiddleware) {
             setStatus = true;
             io.sockets.emit('status', status);
             console.log("EMITTED");
+            res.json(status);
+        });
+    });
+
+    app.get('/status', function(req, res, next) {
+        Status.findOne({}, function(err, status) {
             res.json(status);
         });
     });
