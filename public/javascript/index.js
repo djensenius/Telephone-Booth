@@ -148,6 +148,11 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
 
     socket.on('status', function (data) {
 		console.log("Status is: ", data);
+        $scope.lastSeen = data.ping;
+        $scope.listeningMessage = data.listeningMessage;
+        $scope.listeningQuestion = data.listeningQuestion;
+        $scope.recording = data.recording;
+        $scope.hook = data.hook;
 	});
 
     function NewQuestionController($scope, $mdDialog, $http) {

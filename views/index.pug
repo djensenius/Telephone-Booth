@@ -3,7 +3,20 @@ body
 	block body
 		div(ng-controller="PhoneBothCtrl")
 			md-content
-				div(layout="row" layout-xs="column" layout-align="center")
+				div(layout="row" layout-xs="column" layout-sm="column"  layout-align="center")
+					div(flex class="stats")
+						md-card
+							md-toolbar(class="md-primary")
+								div(class="md-toolbar-tools")
+									h2
+										span Status
+							md-card-content
+								div(class="md-tile-content")
+									p Last seen: {{lastSeen | date: 'medium'}}
+									p Hook on cradle: {{hook}}
+									p Listening to message: {{listeningMessage}}
+									p Listening to question: {{listeningQuestion}}
+									p Recording a message: {{recording}}
 					div(flex class="pendingMessages")
 						md-card
 							md-toolbar(class="md-primary")
