@@ -14,11 +14,46 @@ var hookOn = true;
 var recording = false;
 var listeningQuestion = false;
 var listeningMessage = false;
+var playingDialTone = false;
 var recordingFile = "";
 var recordingFileName = "";
+var playingType = "tone";
 
 var currentQuestion;
 var stream;
+
+player = mpg321().remote();
+player.on('end', function() {
+	console.log("Done playing file");
+        player.stop();
+        if (playingType == "question") {
+        	listeningQuestion = false;
+		playingType = "beep";
+		playFile('Beep.mp3');
+		setTimeout(function() {
+                	startRecording();
+		}, 1700);
+                var formData = {
+               		// Pass date
+                        status: "listeningQuestion",
+                        value: false
+                 }
+                 updateStatus(formData);
+	} else if (playingType == "message") {
+        	listeningMessage = false;
+                var formData = {
+                	// Pass date
+                        status: "listeningMessage",
+                        value: false
+                }
+                updateStatus(formData);
+		player.play('DialTone.mp3');
+        	playingDialTone = true;
+        	playingType = "tone";
+        } else if (playingType == "tone") {
+		playFile('DialTone.mp3');
+	}
+});
 
 if (config.enablegpio == true) {
 	const gpio = require('rpi-gpio');
@@ -44,7 +79,7 @@ if (config.enablegpio == true) {
 	                console.log('--- ROTARY REPORTED PULSE', digit);
 					if (hookOn == false) {
 						if (digit == 1) {
-							getQuestion()
+							getQuestion();
 						} else if (digit == 2) {
 							getMessage();
 						}
@@ -61,7 +96,7 @@ if (config.enablegpio == true) {
 	            pulse ++;
 	        }
 	    } else if (channel == 15) {
-			if (value == 15) {
+			if (value == true) {
 				hangUp();
 			} else {
 				pickUp();
@@ -76,7 +111,18 @@ if (config.enablegpio == true) {
 	gpio.setup(15, gpio.DIR_IN, gpio.EDGE_BOTH);
 }
 
+function pickUp() {
+	console.log("Playing ringtone");
+	player.play('DialTone.mp3');
+	playingDialTone = true;
+	playingType = "tone";
+	hookOn = false;
+}
+
 function hangUp() {
+	console.log("Hanging up...");
+	hookOn = true;
+	playingType = "none";
 	if (recording == true) {
 		stopRecording();
 	}
@@ -89,8 +135,10 @@ function hangUp() {
 		//Stop listening to the question
 	}
 
-	if (dialToneOn == true) {
+	if (playingDialTone == true) {
 		//Stop the dial tone
+		playingDialTone = false;
+		player.stop();
 	}
 }
 
@@ -157,7 +205,7 @@ function stopRecording() {
 			}
 			console.log('Upload successful!  Server responded with:', body);
 		});
-	}, 100);
+	}, 1000);
 }
 
 function getMessage() {
@@ -188,7 +236,8 @@ function getMessage() {
 			fs.stat(file, function(err, stat) {
 				if(err == null) {
 					console.log('File exists');
-					playFile(file, "message");
+					playingType = "message";
+					playFile(file);
 				} else if(err.code == 'ENOENT') {
 					// file does not exist
 					console.log("Gotta download the file ", file);
@@ -203,7 +252,8 @@ function getMessage() {
 						'url': downloadUrl
 					}, function(errorFile, responseFile, bodyFile) {
 						console.log("Done downloading, should play");
-						playFile(file, "message");
+						playingType = "message";
+						playFile(file);
 					}).pipe(fs.createWriteStream(file));
 				} else {
 					console.log('Some other error: ', err.code);
@@ -243,7 +293,8 @@ function getQuestion() {
 			fs.stat(file, function(err, stat) {
 				if(err == null) {
 					console.log('File exists');
-					playFile(file, "question");
+					playingType = "question";
+					playFile(file);
 				} else if(err.code == 'ENOENT') {
 					// file does not exist
 					console.log("Gotta download the file ", file);
@@ -258,6 +309,7 @@ function getQuestion() {
 						'url': downloadUrl
 					}, function(errorFile, responseFile, bodyFile) {
 						console.log("Done downloading, should play");
+						playingType = "question";
 						playFile(file, "question");
 					}).pipe(fs.createWriteStream(file));
 				} else {
@@ -268,35 +320,14 @@ function getQuestion() {
 	});
 }
 
-function playFile(file, type) {
+function playFile(file) {
 	//Play file, once done start recording
 	//If type == question, begin recording after
 	//If type == answer, set back to dialtone
-
+	playingDialTone = false;
+        player.stop();
 	console.log("Going to play " + file);
-	player = mpg321().remote();
 	player.play(file);
-	player.on('end', function() {
-		console.log("Done playing file");
-		if (type == "question") {
-			listeningQuestion = false;
-			startRecording();
-			var formData = {
-				// Pass date
-				status: "listeningQuestion",
-				value: false
-			}
-			updateStatus(formData);
-		} else if (type == "message") {
-			listeningMessage = false;
-			var formData = {
-				// Pass date
-				status: "listeningMessage",
-				value: false
-			}
-			updateStatus(formData);
-		}
-	});
 }
 
 function updateStatus(formData) {
