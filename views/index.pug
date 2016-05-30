@@ -22,7 +22,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Pending Messages
+										span Pending Messages ({{pendings.length}})
 									span(flex)
 									md-button(class="md-icon-button" aria-label="New")
 										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewMessage()")
@@ -44,7 +44,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Questions
+										span Questions ({{questions.length}})
 									span(flex)
 									md-button(class="md-icon-button" aria-label="New")
 										md-icon(md-svg-icon="/components/material-design-icons/action/svg/production/ic_note_add_48px.svg" ng-click="addNewQuestion()")
@@ -66,7 +66,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Approved Messages
+										span Approved Messages ({{approved.length}})
 							md-card-content
 								div(class="md-tile-content")
 									md-list
@@ -85,7 +85,7 @@ body
 							md-toolbar(class="md-primary")
 								div(class="md-toolbar-tools")
 									h2
-										span Rejected Messages
+										span Rejected Messages ({{rejected.length}})
 							md-card-content
 								div(class="md-tile-content")
 									md-list
