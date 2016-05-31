@@ -53,7 +53,7 @@ body
 										md-list-item(class="md-2-line" ng-repeat="question in questions")
 											div(class="md-list-item-text")
 												h3 {{question.voice}}
-												p {{question.description}}
+												p {{question.description}} ({{question.playCount}} listens)
 												p
 													md-button(ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
 														md-icon(ng-if='sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
@@ -74,7 +74,7 @@ body
 												md-icon(ng-if='sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
 												md-icon(ng-if='!sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
-												h3 {{a.createdAt | date: 'medium'}}
+												h3 {{a.createdAt | date: 'medium'}} ({{a.playCount}} listens)
 												p
 													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_up_48px.svg" ng-click="approveMessage(a._id)" aria-label="Approve" class="md-primary" style="padding-right: 2rem;")
 													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_down_48px.svg" ng-click="rejectMessage(a._id)" aria-label="Reject" class="md-warn md-hue-3")
