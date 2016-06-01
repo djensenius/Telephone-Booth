@@ -7,6 +7,11 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
   $scope.approved = [];
   $scope.rejected = [];
   $scope.sound = [];
+  $scope.loading = {};
+  $scope.downloaded = {};
+
+  $scope.questionPlays = 0;
+  $scope.messagePlays = 0;
 
   $scope.addNewQuestion = function(ev) {
     $scope.currentUploadMessageId = 0;
@@ -91,23 +96,19 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
 
   function loadQuestions() {
     $http.get('/questions').success(function(response) {
-      for (var i = 0; i < response.length; i++) {
-        var sound_id = response[i].file._id;
-        var extension = response[i].file.title.split('.').pop();
-        $scope.sound[sound_id] = ngAudio.load("/download/question/" + sound_id + "." + extension);
-      }
       $scope.questions = response;
+      $scope.questionPlays = 0;
+      for (var i = 0; i < response.length; i++) {
+        if (response.playCount) {
+          $scope.questionPlays = $scope.questionPlays + response.playCount;          
+        }
+      }
     });
   }
   loadQuestions();
 
   function loadPending() {
     $http.get('/pending').success(function(response) {
-      for (var i = 0; i < response.length; i++) {
-        var sound_id = response[i].file._id;
-        var extension = response[i].file.title.split('.').pop();
-        $scope.sound[sound_id] = ngAudio.load("/download/message/" + sound_id + "." + extension);
-      }
       $scope.pendings = response;
     });
   }
@@ -115,23 +116,19 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
 
   function loadApproved() {
     $http.get('/approved').success(function(response) {
-      for (var i = 0; i < response.length; i++) {
-        var sound_id = response[i].file._id;
-        var extension = response[i].file.title.split('.').pop();
-        $scope.sound[sound_id] = ngAudio.load("/download/message/" + sound_id + "." + extension);
-      }
       $scope.approved = response;
+      $scope.questionPlays = 0;
+      for (var i = 0; i < response.length; i++) {
+        if (response.playCount) {
+          $scope.messagePlays = $scope.messagePlays + response.playCount;
+        }
+      }
     });
   }
   loadApproved()
 
   function loadRejected() {
     $http.get('/rejected').success(function(response) {
-      for (var i = 0; i < response.length; i++) {
-        var sound_id = response[i].file._id;
-        var extension = response[i].file.title.split('.').pop();
-        $scope.sound[sound_id] = ngAudio.load("/download/message/" + sound_id + "." + extension);
-      }
       $scope.rejected = response;
     });
   }
@@ -207,6 +204,20 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
         });
       }
     };
+  }
+
+  $scope.loadSound = function(sound_id, fileName, type) {
+    console.log(fileName + " " + sound_id);
+    $scope.loading[fileName] = true;
+    var extension = fileName.split('.').pop();
+    if (type == "question") {
+      $scope.sound[sound_id] = ngAudio.load("/download/question/" + sound_id + "." + extension);
+    } else if (type == "message") {
+      $scope.sound[sound_id] = ngAudio.load("/download/message/" + sound_id + "." + extension);
+    }
+    $scope.downloaded[sound_id] = true;
+    console.log("Set download to true...");
+    //$scope.sound[sound_id] = ngAudio.load("/download/message/" + sound_id + "." + extension);
   }
 
   function NewMessageController($scope, $mdDialog, $http) {

@@ -16,6 +16,8 @@ body
 									p Listening to message: {{listeningMessage}}
 									p Listening to question: {{listeningQuestion}}
 									p Recording a message: {{recording}}
+									p Messages played: {{messagePlays}}
+									p Questions asked: {{questionPlays}}
 					div(flex class="pendingMessages")
 						md-card
 							md-toolbar(class="md-primary")
@@ -29,7 +31,9 @@ body
 								div(class="md-tile-content")
 									md-list
 										md-list-item(class="md-2-line" ng-repeat="pending in pendings")
-											md-button(ng-click='sound[pending.file._id].paused ? sound[pending.file._id].play() : sound[pending.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+											md-button(ng-if='!downloaded[a.file._id]' ng-click='loadSound(a.file._id, a.file.title, "message")' class="md-fab md-mini" aria-label="Load file")
+												md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
+											md-button(ng-if='downloaded[a.file._id]' ng-click='sound[pending.file._id].paused ? sound[pending.file._id].play() : sound[pending.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
 												md-icon(ng-if='sound[pending.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
 												md-icon(ng-if='!sound[pending.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
@@ -53,9 +57,12 @@ body
 										md-list-item(class="md-2-line" ng-repeat="question in questions")
 											div(class="md-list-item-text")
 												h3 {{question.voice}}
-												p {{question.description}} ({{question.playCount}} listens)
+												p {{question.description}} 
+													span(ng-if='a.playCounts') ({{question.playCount}} listens)
 												p
-													md-button(ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+													md-button(ng-if='!downloaded[a.file._id]' ng-click='loadSound(a.file._id, a.file.title, "message")' class="md-fab md-mini" aria-label="Load file")
+														md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
+													md-button(ng-if='downloaded[a.file._id]' ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
 														md-icon(ng-if='sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
 														md-icon(ng-if='!sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 												md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
@@ -70,11 +77,14 @@ body
 								div(class="md-tile-content")
 									md-list
 										md-list-item(class="md-2-line" ng-repeat="a in approved")
-											md-button(ng-click='sound[a.file._id].paused ? sound[a.file._id].play() : sound[a.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+											md-button(ng-if='!downloaded[a.file._id]' ng-click='loadSound(a.file._id, a.file.title, "message")' class="md-fab md-mini" aria-label="Load file")
+												md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
+											md-button(ng-if='downloaded[a.file._id]' ng-click='sound[a.file._id].paused ? sound[a.file._id].play() : sound[a.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
 												md-icon(ng-if='sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
 												md-icon(ng-if='!sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
-												h3 {{a.createdAt | date: 'medium'}} ({{a.playCount}} listens)
+												h3 {{a.createdAt | date: 'medium'}} 
+													span(ng-if='a.playCounts') ({{a.playCount}} listens)
 												p
 													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_up_48px.svg" ng-click="approveMessage(a._id)" aria-label="Approve" class="md-primary" style="padding-right: 2rem;")
 													md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_thumb_down_48px.svg" ng-click="rejectMessage(a._id)" aria-label="Reject" class="md-warn md-hue-3")
@@ -89,7 +99,9 @@ body
 								div(class="md-tile-content")
 									md-list
 										md-list-item(class="md-2-line" ng-repeat="r in rejected")
-											md-button(ng-click='sound[r.file._id].paused ? sound[r.file._id].play() : sound[r.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+											md-button(ng-if='!downloaded[a.file._id]' ng-click='loadSound(a.file._id, a.file.title, "message")' class="md-fab md-mini" aria-label="Load file")
+												md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
+											md-button(ng-if='downloaded[a.file._id]' ng-click='sound[r.file._id].paused ? sound[r.file._id].play() : sound[r.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
 												md-icon(ng-if='sound[r.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
 												md-icon(ng-if='!sound[r.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
