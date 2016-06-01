@@ -9,7 +9,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
   $scope.sound = [];
   $scope.loading = {};
   $scope.downloaded = {};
-
+  $scope.questionIndex = {};
   $scope.questionPlays = 0;
   $scope.messagePlays = 0;
 
@@ -101,6 +101,8 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
       for (var i = 0; i < response.length; i++) {
         if (response[i].playCount) {
           $scope.questionPlays = $scope.questionPlays + response[i].playCount;          
+          let id = response[i]._id;
+          $scope.questionIndex[id] = {description: response[i].description, voice: response[i].voice};
         }
       }
     });
@@ -144,7 +146,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
   }
 
   socket.on('status', function (data) {
-    console.log("Status is: ", data);
+    //console.log("Status is: ", data);
     $scope.lastSeen = data.ping;
     $scope.listeningMessage = data.listeningMessage;
     $scope.listeningQuestion = data.listeningQuestion;
