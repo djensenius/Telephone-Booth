@@ -99,8 +99,8 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
       $scope.questions = response;
       $scope.questionPlays = 0;
       for (var i = 0; i < response.length; i++) {
-        if (response.playCount) {
-          $scope.questionPlays = $scope.questionPlays + response.playCount;          
+        if (response[i].playCount) {
+          $scope.questionPlays = $scope.questionPlays + response[i].playCount;          
         }
       }
     });
@@ -116,11 +116,11 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
 
   function loadApproved() {
     $http.get('/approved').success(function(response) {
-      $scope.approved = response;
-      $scope.questionPlays = 0;
+      $scope.approved = response.reverse();
+      $scope.messagePlays = 0;
       for (var i = 0; i < response.length; i++) {
-        if (response.playCount) {
-          $scope.messagePlays = $scope.messagePlays + response.playCount;
+        if (response[i].playCount) {
+          $scope.messagePlays = $scope.messagePlays + response[i].playCount;
         }
       }
     });
@@ -129,7 +129,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
 
   function loadRejected() {
     $http.get('/rejected').success(function(response) {
-      $scope.rejected = response;
+      $scope.rejected = response.reverse();
     });
   }
   loadRejected()
