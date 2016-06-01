@@ -129,6 +129,13 @@ function hangUp() {
 
 	if (listeningMessage == true) {
 		//Stop listening to the message
+		listeningMessage = false;
+		player.stop();
+		var formData = {
+			status: "listeningMessage",
+			value: false
+		}
+		updateStatus(formData);
 	}
 
 	if (listeningQuestion == true) {
@@ -166,9 +173,9 @@ mic.audioStream.on('data', function(data) {
 function stopRecording() {
 	console.log("Going to stop recording " + recordingFileName);
 	mic.stopCapture();
+	recording = false;
 	setTimeout(function() {
 		stream.end();
-		recording = false;
 		var formData = {
 			// Pass date
 			status: "recording",
@@ -205,7 +212,7 @@ function stopRecording() {
 			}
 			console.log('Upload successful!  Server responded with:', body);
 		});
-	}, 1000);
+	}, 2000);
 }
 
 function getMessage() {
@@ -346,14 +353,6 @@ function updateStatus(formData) {
 		}
 	});
 }
-
-/*
-getQuestion();
-setTimeout(function() {
-	console.log("Debug timeout");
-	stopRecording();
-}, 5000);
-*/
 
 setInterval(function() {
 	var formData = {
