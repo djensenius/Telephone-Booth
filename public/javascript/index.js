@@ -101,7 +101,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
       for (var i = 0; i < response.length; i++) {
         if (response[i].playCount) {
           $scope.questionPlays = $scope.questionPlays + response[i].playCount;          
-          let id = response[i]._id;
+          var id = response[i]._id;
           $scope.questionIndex[id] = {description: response[i].description, voice: response[i].voice};
         }
       }
