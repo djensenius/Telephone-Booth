@@ -57,16 +57,15 @@ body
 								div(class="md-tile-content")
 									md-list
 										md-list-item(class="md-2-line" ng-repeat="question in questions")
+											md-button(ng-if='!downloaded[question.file._id]' ng-click='loadSound(question.file._id, question.file.title, "question")' class="md-fab md-mini" aria-label="Load file")
+												md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
+											md-button(ng-if='downloaded[question.file._id]' ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
+												md-icon(ng-if='sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
+												md-icon(ng-if='!sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
 												h3 {{question.voice}}
 												p {{question.description}} 
 													span(ng-if='question.playCount') ({{question.playCount}} listens)
-												p
-													md-button(ng-if='!downloaded[question.file._id]' ng-click='loadSound(question.file._id, question.file.title, "question")' class="md-fab md-mini" aria-label="Load file")
-														md-icon(md-svg-src="/components/material-design-icons/file/svg/production/ic_cloud_download_48px.svg")
-													md-button(ng-if='downloaded[question.file._id]' ng-click='sound[question.file._id].paused ? sound[question.file._id].play() : sound[question.file._id].pause()' class="md-fab md-mini" aria-label="Play sound file")
-														md-icon(ng-if='sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_play_arrow_48px.svg")
-														md-icon(ng-if='!sound[question.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 												md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
 				div(layout="row" layout-xs="column" layout-align="center")
 					div(flex class="approvedMessages")

@@ -27,7 +27,7 @@ module.exports = function(app, multipartyMiddleware) {
                         console.log("Success!!!");
                         console.log(question);
                         console.log(target_path);
-                        io.sockets.emit('updateQuestion', quetion._id);
+                        io.sockets.emit('updateQuestion', question._id);
                         res.send({"_id": question._id});
                     }
                 });
