@@ -16,8 +16,8 @@ body
 									p Listening to message: {{listeningMessage}}
 									p Listening to question: {{listeningQuestion}}
 									p Recording a message: {{recording}}
-									p Messages played: {{messagePlays}}
-									p Questions asked: {{questionPlays}}
+									p Messages played: {{messagePlays | number}}
+									p Questions asked: {{questionPlays | number}}
 					div(flex class="pendingMessages")
 						md-card
 							md-toolbar(class="md-primary")
@@ -65,7 +65,7 @@ body
 											div(class="md-list-item-text")
 												h3 {{question.voice}}
 												p {{question.description}} 
-													span(ng-if='question.playCount') ({{question.playCount}} listens)
+													span(ng-if='question.playCount') ({{question.playCount | number}} listens)
 												md-icon(md-svg-src="/components/material-design-icons/action/svg/production/ic_delete_48px.svg" ng-click="deleteQuestion(question._id)" aria-label="Delete" class="md-secondary md-warn")
 				div(layout="row" layout-xs="column" layout-align="center")
 					div(flex class="approvedMessages")
@@ -85,7 +85,7 @@ body
 												md-icon(ng-if='!sound[a.file._id].paused' md-svg-src="/components/material-design-icons/av/svg/production/ic_pause_48px.svg")
 											div(class="md-list-item-text")
 												h3 {{a.createdAt | date: 'medium'}} 
-													span(ng-if='a.playCount') ({{a.playCount}} listens)
+													span(ng-if='a.playCount') ({{a.playCount | number}} listens)
 												h4 {{questionIndex[a.question].voice}} - {{questionIndex[a.question].description}} 
 												p(ng-if='downloaded[a.file._id]') {{sound[a.file._id].remaining | trackTime}}
 												p(ng-if='downloaded[a.file._id]')

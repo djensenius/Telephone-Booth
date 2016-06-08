@@ -30,7 +30,9 @@ function defineModels(mongoose, fn) {
 		hookOn: Boolean,
 		recording: Boolean,
 		listeningQuestion: Boolean,
-		listeningMessage: Boolean
+		listeningMessage: Boolean,
+		messagePlays: Number,
+		questionPlays: Number
 	});
 	Status.plugin(timestamps);
 

@@ -13,6 +13,7 @@ fs = require('fs'),
 bodyParser = require('body-parser'),
 timestamps = require('mongoose-timestamp'),
 basicAuth = require('basic-auth-connect'),
+_ = require('lodash'),
 server = require('http').createServer(app),
 io = require('socket.io').listen(server);
 

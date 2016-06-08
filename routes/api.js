@@ -197,6 +197,8 @@ module.exports = function(app, multipartyMiddleware) {
 
     app.put('/status', function(req, res, next) {
         var setStatus = false;
+        var messagePlays = 0;
+        var questionPlays = 0;
         Status.findOne({}, function(err, status) {
             if (status == null) {
                 status = new Status();
@@ -216,23 +218,53 @@ module.exports = function(app, multipartyMiddleware) {
             }
             status.save();
             setStatus = true;
-            io.sockets.emit('status', status);
-            console.log("EMITTED");
-            res.json(status);
+            Message.find({status: 'Approved'}).sort('createdAt').exec(function(err, messages) {
+                if (err) return next(err);
+                _(messages).forEach(function(message) {
+                    if (message['playCount']) {
+                        messagePlays += message['playCount'];
+                    }
+                });
+                Question.find().sort('voice').exec(function(err, questions) {
+                    if (err) return next(err);
+                    _(questions).forEach(function(question) {
+                        if (question['playCount']) {
+                            questionPlays += question['playCount'];
+                        }
+                    });
+                    status.messagePlays = messagePlays;
+                    status.questionPlays = questionPlays;
+                    io.sockets.emit('status', status);
+                    console.log("EMITTED");
+                    res.json(status);
+	        });
+            });
         });
     });
 
     app.get('/status', function(req, res, next) {
-        Message.find({status: 'Approved'}).sort('createdAt').exec(function(err, questions) {
+	var messagePlays = 0;
+        var questionPlays = 0;
+        Message.find({status: 'Approved'}).sort('createdAt').exec(function(err, messages) {
             if (err) return next(err);
-
-        });
-        Question.find().sort('voice').exec(function(err, questions) {
-            if (err) return next(err);
-
-        });
-        Status.findOne({}, function(err, status) {
-            res.json(status);
+            _(messages).forEach(function(message) {
+		if (message['playCount']) {
+			messagePlays += message['playCount'];
+                }
+            });
+            Question.find().sort('voice').exec(function(err, questions) {
+                if (err) return next(err);
+                _(questions).forEach(function(question) {
+                    if (question['playCount']) {
+                        questionPlays += question['playCount'];
+                    }
+                });
+                Status.findOne({}, function(err, status) {
+                    status.messagePlays = messagePlays;
+                    status.questionPlays = questionPlays;
+                    res.json(status);
+                });
+            });
         });
     });
 };
