@@ -223,6 +223,14 @@ module.exports = function(app, multipartyMiddleware) {
     });
 
     app.get('/status', function(req, res, next) {
+        Message.find({status: 'Approved'}).sort('createdAt').exec(function(err, questions) {
+            if (err) return next(err);
+
+        });
+        Question.find().sort('voice').exec(function(err, questions) {
+            if (err) return next(err);
+
+        });
         Status.findOne({}, function(err, status) {
             res.json(status);
         });
