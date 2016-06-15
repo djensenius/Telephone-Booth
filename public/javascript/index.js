@@ -100,7 +100,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
       $scope.questionPlays = 0;
       for (var i = 0; i < response.length; i++) {
         if (response[i].playCount) {
-          $scope.questionPlays = $scope.questionPlays + response[i].playCount;          
+          $scope.questionPlays = $scope.questionPlays + response[i].playCount;
           var id = response[i]._id;
           $scope.questionIndex[id] = {description: response[i].description, voice: response[i].voice};
         }
@@ -115,6 +115,9 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
     });
   }
   loadPending();
+  setTimeout(function() {
+      loadPending();
+  }, 5000);
 
   function loadApproved() {
     $http.get('/approved').success(function(response) {
