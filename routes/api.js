@@ -245,12 +245,17 @@ module.exports = function(app, multipartyMiddleware) {
     app.get('/status', function(req, res, next) {
 	var messagePlays = 0;
         var questionPlays = 0;
-        Message.find({status: 'Approved'}).sort('createdAt').exec(function(err, messages) {
+	var pending = 0;
+        Message.find({$or:[ {status: 'Approved'}, {status: 'Pending'} ]}).sort('createdAt').exec(function(err, messages) {
             if (err) return next(err);
             _(messages).forEach(function(message) {
 		if (message['playCount']) {
 			messagePlays += message['playCount'];
                 }
+
+		if (message['status'] == "Pending") {
+			pending += 1;
+		}
             });
             Question.find().sort('voice').exec(function(err, questions) {
                 if (err) return next(err);
@@ -262,6 +267,7 @@ module.exports = function(app, multipartyMiddleware) {
                 Status.findOne({}, function(err, status) {
                     status.messagePlays = messagePlays;
                     status.questionPlays = questionPlays;
+                    status.pending = pending;
                     res.json(status);
                 });
             });

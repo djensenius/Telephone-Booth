@@ -22,6 +22,7 @@ var mongoConnect = mongoose.connect(config.mongooseAuth);
 var multipartyMiddleware = multiparty();
 
 app.use(basicAuth(function(user, pass){
+	console.log("Basic authing: ", user, "/", pass);
 	return config.login == user && config.password == pass;
 }));
 

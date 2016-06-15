@@ -32,7 +32,8 @@ function defineModels(mongoose, fn) {
 		listeningQuestion: Boolean,
 		listeningMessage: Boolean,
 		messagePlays: Number,
-		questionPlays: Number
+		questionPlays: Number,
+		pending: Number
 	});
 	Status.plugin(timestamps);
 
