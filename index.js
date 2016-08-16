@@ -15,6 +15,7 @@ var recording = false;
 var listeningQuestion = false;
 var listeningMessage = false;
 var playingDialTone = false;
+var listeningInstructions = false;
 var recordingFile = "";
 var recordingFileName = "";
 var playingType = "tone";
@@ -50,6 +51,17 @@ player.on('end', function() {
 		player.play('DialTone.mp3');
 		playingDialTone = true;
 		playingType = "tone";
+	} else if (playingType == "instructions") {
+		listeningInstructions = false;
+		var formData = {
+			// Pass date
+			status: "listeningInstructions",
+			value: false
+		}
+		updateStatus(formData);
+		player.play('DialTone.mp3');
+		playingDialTone = true;
+		playingType = "tone";
 	} else if (playingType == "tone") {
 		playFile('DialTone.mp3');
 	}
@@ -77,15 +89,17 @@ if (config.enablegpio == true) {
 
 				if (digit != -1) { // Report back all but invalid digits
 					console.log('--- ROTARY REPORTED PULSE', digit);
+					// TODO: Eliminate duplicate actiotns
 					if (hookOn == false) {
 						if (digit == 1) {
 							getQuestion();
 						} else if (digit == 2) {
 							getMessage();
+						} else if (digit > 2) {
+							playInstructions();
 						}
 					}
 				}
-
 				pulse = 0; // Reset Pulse
 			}
 		} else if (channel == 13) { // Pulse
@@ -140,6 +154,24 @@ function hangUp() {
 
 	if (listeningQuestion == true) {
 		//Stop listening to the question
+		listeningQuestion = false;
+		player.stop();
+		var formData = {
+			status: "listeningQuestion",
+			value: false
+		}
+		updateStatus(formData);
+	}
+
+	if (listeningInstructions == true) {
+		//Stop listening to the question
+		listeningInstructions = false;
+		player.stop();
+		var formData = {
+			status: "listeningInstructions",
+			value: false
+		}
+		updateStatus(formData);
 	}
 
 	if (playingDialTone == true) {
@@ -325,6 +357,20 @@ function getQuestion() {
 			});
 		}
 	});
+}
+
+function playInstructions() {
+	listeningInstructions = true;
+	var formData = {
+		// Pass date
+		status: "listeningInstructions",
+		value: true
+	}
+	updateStatus(formData);
+	console.log("Done...");
+	let file = 	'Instructions.mp3';
+	playingType = "instructions";
+	playFile(file);
 }
 
 function playFile(file) {
