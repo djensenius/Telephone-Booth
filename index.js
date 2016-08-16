@@ -1,12 +1,12 @@
 var express = require('express'),
-app = express(),
-config = require('./config'),
-server = require('http').createServer(app),
-mic = require('microphone'),
-fs = require('fs'),
-request = require('request'),
-_ = require('lodash'),
-mpg321 = require('mpg321');
+	app = express(),
+	config = require('./config'),
+	server = require('http').createServer(app),
+	mic = require('microphone'),
+	fs = require('fs'),
+	request = require('request'),
+	_ = require('lodash'),
+	mpg321 = require('mpg321');
 
 app.set('port', config.portNum + 1);
 
