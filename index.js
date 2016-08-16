@@ -25,32 +25,32 @@ var stream;
 player = mpg321().remote();
 player.on('end', function() {
 	console.log("Done playing file");
-        player.stop();
-        if (playingType == "question") {
-        	listeningQuestion = false;
+	player.stop();
+	if (playingType == "question") {
+		listeningQuestion = false;
 		playingType = "beep";
 		playFile('Beep.mp3');
 		setTimeout(function() {
-                	startRecording();
+			startRecording();
 		}, 1700);
-                var formData = {
-               		// Pass date
-                        status: "listeningQuestion",
-                        value: false
-                 }
-                 updateStatus(formData);
+		var formData = {
+			// Pass date
+			status: "listeningQuestion",
+			value: false
+		}
+		updateStatus(formData);
 	} else if (playingType == "message") {
-        	listeningMessage = false;
-                var formData = {
-                	// Pass date
-                        status: "listeningMessage",
-                        value: false
-                }
-                updateStatus(formData);
+		listeningMessage = false;
+		var formData = {
+			// Pass date
+			status: "listeningMessage",
+			value: false
+		}
+		updateStatus(formData);
 		player.play('DialTone.mp3');
-        	playingDialTone = true;
-        	playingType = "tone";
-        } else if (playingType == "tone") {
+		playingDialTone = true;
+		playingType = "tone";
+	} else if (playingType == "tone") {
 		playFile('DialTone.mp3');
 	}
 });
@@ -65,18 +65,18 @@ if (config.enablegpio == true) {
 		if (channel == 11) { // Rotary Channel
 			if (value == true && pRotary == false) { // Rotary Start
 				pRotary = true;
-	        } else if (value == false && pRotary == true) { // Rotary End
-	            pRotary = false;
+			} else if (value == false && pRotary == true) { // Rotary End
+				pRotary = false;
 
-	            var digit = pulse - 1;
-	            if (digit == 10) { // Handle 0
-	                digit = 0;
-	            } else if (digit > 10) { // Invalid Digit
-	                digit = -1;
-	            }
+				var digit = pulse - 1;
+				if (digit == 10) { // Handle 0
+					digit = 0;
+				} else if (digit > 10) { // Invalid Digit
+					digit = -1;
+				}
 
-	            if (digit != -1) { // Report back all but invalid digits
-	                console.log('--- ROTARY REPORTED PULSE', digit);
+				if (digit != -1) { // Report back all but invalid digits
+					console.log('--- ROTARY REPORTED PULSE', digit);
 					if (hookOn == false) {
 						if (digit == 1) {
 							getQuestion();
@@ -84,26 +84,26 @@ if (config.enablegpio == true) {
 							getMessage();
 						}
 					}
-	            }
+				}
 
-	            pulse = 0; // Reset Pulse
-	        }
-	    } else if (channel == 13) { // Pulse
-	        if (value == true && pPulse == false) { // Step Count
-	            pPulse = true;
-	        } else if (value == false && pPulse == true) { // End step, ignore extra values
-	            pPulse = false;
-	            pulse ++;
-	        }
-	    } else if (channel == 15) {
+				pulse = 0; // Reset Pulse
+			}
+		} else if (channel == 13) { // Pulse
+			if (value == true && pPulse == false) { // Step Count
+				pPulse = true;
+			} else if (value == false && pPulse == true) { // End step, ignore extra values
+				pPulse = false;
+				pulse ++;
+			}
+		} else if (channel == 15) {
 			if (value == true) {
 				hangUp();
 			} else {
 				pickUp();
 			}
 			console.log("Hangupper ", value);
-	    }
-	    console.log(channel, value);
+		}
+		console.log(channel, value);
 	});
 
 	gpio.setup(11, gpio.DIR_IN, gpio.EDGE_BOTH);
@@ -167,7 +167,7 @@ function startRecording() {
 }
 
 mic.audioStream.on('data', function(data) {
-        stream.write(data);
+	stream.write(data);
 });
 
 function stopRecording() {
@@ -236,7 +236,7 @@ function getMessage() {
 		'json': true
 	}, function (error, response, body) {
 		console.log("Done...");
-    	if (!error && response.statusCode === 200) {
+		if (!error && response.statusCode === 200) {
 			var extension = body.file.title.split('.').pop();
 			let file = config.answerPath + body.file._id + "." + extension;
 
@@ -266,7 +266,7 @@ function getMessage() {
 					console.log('Some other error: ', err.code);
 				}
 			});
-    	}
+		}
 	});
 }
 
@@ -291,9 +291,9 @@ function getQuestion() {
 		'json': true
 	}, function (error, response, body) {
 		console.log("Done...");
-    	if (!error && response.statusCode === 200) {
+		if (!error && response.statusCode === 200) {
 			currentQuestion = body._id;
-        	console.log(body) // Print the json response
+			console.log(body) // Print the json response
 			var extension = body.file.title.split('.').pop();
 			let file = config.questionPath + body.file._id + "." + extension;
 
@@ -323,7 +323,7 @@ function getQuestion() {
 					console.log('Some other error: ', err.code);
 				}
 			});
-    	}
+		}
 	});
 }
 
@@ -332,7 +332,7 @@ function playFile(file) {
 	//If type == question, begin recording after
 	//If type == answer, set back to dialtone
 	playingDialTone = false;
-        player.stop();
+	player.stop();
 	console.log("Going to play " + file);
 	player.play(file);
 }
@@ -369,5 +369,5 @@ server.listen(app.get('port'), function(){
 
 //HACKY thing to get mpg321 to quit
 process.on('SIGINT', function () {
-  process.exit();
+	process.exit();
 });
