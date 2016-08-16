@@ -116,7 +116,7 @@ app.controller('PhoneBothCtrl', ['$scope', '$mdDialog', '$http', '$rootScope', '
   }
   loadPending();
   setTimeout(function() {
-      loadPending();
+    loadPending();
   }, 5000);
 
   function loadApproved() {

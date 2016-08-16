@@ -38,9 +38,9 @@ app.use('/download', express.static('/Users/david/uploads'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 models.defineModels(mongoose, function() {
-		app.Map = Question = mongoose.model('Question');
+	app.Map = Question = mongoose.model('Question');
 	app.Message = Message = mongoose.model('Message');
-		app.File = File = mongoose.model('File');
+	app.File = File = mongoose.model('File');
 	app.Status = Status = mongoose.model('Status');
 });
 
