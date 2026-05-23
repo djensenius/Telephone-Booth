@@ -25,6 +25,7 @@ use booth_hal::{
 };
 use booth_pi::{AudioConfig, GpioConfig, GpioPull, OperatorConfig, PiAudioSink, PiAudioSource};
 use booth_telemetry::TelemetryBus;
+use observability::{ObservabilityConfig, SessionHandle};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
@@ -32,6 +33,8 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(feature = "simulator")]
 pub mod simulator;
+
+pub mod observability;
 
 /// Production config path used by the systemd service.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/phone-booth/config.toml";
@@ -59,6 +62,8 @@ pub struct RuntimeConfig {
     pub debug: DebugConfig,
     /// Telemetry and logging settings owned by the binary.
     pub telemetry: TelemetryConfig,
+    /// Observability stack (system metrics + operator event forwarding).
+    pub observability: ObservabilityConfig,
     /// Debug bearer token loaded from `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug_token: Option<String>,
@@ -89,6 +94,7 @@ impl Default for RuntimeConfig {
             operator: pi.operator,
             debug: DebugConfig::default(),
             telemetry: TelemetryConfig::default(),
+            observability: ObservabilityConfig::default(),
             debug_token: None,
         }
     }
@@ -373,6 +379,54 @@ async fn run_runtime(
     let (effect_tx, effect_rx) = mpsc::channel::<Effect>(EFFECT_CHANNEL);
     let (audio_tx, audio_rx) = mpsc::channel::<AudioCommand>(32);
     let next_remote_audio = Arc::new(Mutex::new(None));
+    let session_handle = SessionHandle::default();
+
+    // Install the Prometheus metrics registry (idempotent) and start the
+    // background tasks for booth-metrics + the operator forwarder. All of
+    // this is gated on `observability.enabled` so dev runs that don't
+    // care about metrics can opt out.
+    let mut observability_tasks: Vec<JoinHandle<()>> = Vec::new();
+    if config.observability.enabled {
+        match booth_metrics::install_registry(config.observability.booth_id.clone()) {
+            Ok(_handle) => {
+                let sampler = booth_metrics::SystemSampler::new();
+                let sampler_for_consumer = sampler.clone();
+                let sampler_config = booth_metrics::SamplerConfig {
+                    interval: Duration::from_millis(config.observability.sample_interval_ms),
+                };
+                let identity =
+                    observability::RuntimeIdentity::new(config.observability.booth_id.clone());
+                observability_tasks.push(booth_metrics::spawn_telemetry_consumer(
+                    &bus,
+                    sampler_for_consumer,
+                ));
+                observability_tasks.push(booth_metrics::spawn_system_sampler(
+                    sampler,
+                    bus.clone(),
+                    sampler_config,
+                    identity.start,
+                ));
+                if config.observability.operator_forward.enabled {
+                    observability_tasks.push(observability::spawn_event_forwarder(
+                        bus.clone(),
+                        Arc::clone(&operator),
+                        identity.clone(),
+                        config.observability.clone(),
+                        session_handle.clone(),
+                    ));
+                    observability_tasks.push(observability::spawn_system_pusher(
+                        bus.clone(),
+                        Arc::clone(&operator),
+                        identity,
+                        config.observability.clone(),
+                    ));
+                }
+            }
+            Err(err) => {
+                warn!(%err, "failed to install metrics registry; observability disabled");
+            }
+        }
+    }
 
     let gpio_task = tokio::spawn(gpio_task(gpio, event_tx.clone(), bus.clone()));
     let audio_task = tokio::spawn(audio_task(
@@ -389,6 +443,7 @@ async fn run_runtime(
         event_tx.clone(),
         bus.clone(),
         Arc::clone(&next_remote_audio),
+        session_handle.clone(),
     ));
 
     let debug_task = if options.start_debug {
@@ -450,6 +505,9 @@ async fn run_runtime(
     gpio_task.abort();
     audio_task.abort();
     effect_task.abort();
+    for task in observability_tasks {
+        task.abort();
+    }
     if let Some(task) = debug_task {
         task.abort();
     }
@@ -601,6 +659,7 @@ fn publish_audio_error(bus: &TelemetryBus, err: &AudioError) {
     warn!(%err, "audio adapter error");
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn effect_task(
     mut effect_rx: mpsc::Receiver<Effect>,
     audio_tx: mpsc::Sender<AudioCommand>,
@@ -609,6 +668,7 @@ async fn effect_task(
     event_tx: mpsc::Sender<Event>,
     bus: TelemetryBus,
     next_remote_audio: Arc<Mutex<Option<String>>>,
+    session_handle: SessionHandle,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     while let Some(effect) = effect_rx.recv().await {
@@ -627,6 +687,18 @@ async fn effect_task(
             }
             Effect::StopRecording => match audio_source.stop().await {
                 Ok(Some(recording_id)) => {
+                    if let Some(session_id) = session_handle.current() {
+                        let (duration_ms, bytes) = recording_size(&*audio_source, &recording_id)
+                            .await
+                            .unwrap_or((0, 0));
+                        bus.publish(TelemetryEvent::RecordingStopped {
+                            id: recording_id.clone(),
+                            session_id,
+                            duration_ms,
+                            bytes,
+                            at_monotonic_ns: monotonic_ns(),
+                        });
+                    }
                     let _ = event_tx
                         .send(Event::RecordingFinished { recording_id })
                         .await;
@@ -638,13 +710,28 @@ async fn effect_task(
                 recording_id,
                 question_id,
             } => {
+                let session_id = session_handle.current();
+                if let Some(sid) = session_id.clone() {
+                    bus.publish(TelemetryEvent::UploadStarted {
+                        recording_id: recording_id.clone(),
+                        session_id: sid,
+                        at_monotonic_ns: monotonic_ns(),
+                    });
+                }
+                let started = Instant::now();
+                let bytes = recording_size(&*audio_source, &recording_id)
+                    .await
+                    .map_or(0, |(_, b)| b);
                 upload_recording(
                     &*operator,
                     &*audio_source,
                     &event_tx,
                     &bus,
-                    recording_id,
+                    recording_id.clone(),
                     question_id,
+                    session_id,
+                    started,
+                    bytes,
                 )
                 .await;
             }
@@ -755,6 +842,7 @@ async fn fetch_random_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
     audio_source: &dyn AudioSource,
@@ -762,6 +850,9 @@ async fn upload_recording(
     bus: &TelemetryBus,
     recording_id: RecordingId,
     question_id: booth_hal::QuestionId,
+    session_id: Option<String>,
+    started: Instant,
+    bytes: u64,
 ) {
     let result = async {
         let path = audio_source
@@ -784,12 +875,30 @@ async fn upload_recording(
     }
     .await;
 
+    let duration_ms = elapsed_ms(started);
     match result {
         Ok(()) => {
+            if let Some(sid) = session_id {
+                bus.publish(TelemetryEvent::UploadCompleted {
+                    recording_id: recording_id.clone(),
+                    session_id: sid,
+                    duration_ms,
+                    bytes,
+                    at_monotonic_ns: monotonic_ns(),
+                });
+            }
             let _ = event_tx.send(Event::UploadComplete).await;
         }
         Err(err) => {
             publish_operator_error(bus, "upload_recording", &err);
+            if let Some(sid) = session_id {
+                bus.publish(TelemetryEvent::UploadFailed {
+                    recording_id: recording_id.clone(),
+                    session_id: sid,
+                    message: err.to_string(),
+                    at_monotonic_ns: monotonic_ns(),
+                });
+            }
             let _ = event_tx
                 .send(Event::UploadFailed {
                     reason: err.to_string(),
@@ -950,6 +1059,18 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
         ],
     )?;
 
+    if let Some(value) = env::var_os("BOOTH_OBSERVABILITY_ENABLED") {
+        config.observability.enabled =
+            parse_bool(&value.to_string_lossy()).context("parse BOOTH_OBSERVABILITY_ENABLED")?;
+    }
+    if let Some(value) = env::var_os("BOOTH_OBSERVABILITY_BOOTH_ID") {
+        config.observability.booth_id = value.to_string_lossy().into_owned();
+    }
+    if let Some(value) = env::var_os("BOOTH_OBSERVABILITY_FORWARD_ENABLED") {
+        config.observability.operator_forward.enabled = parse_bool(&value.to_string_lossy())
+            .context("parse BOOTH_OBSERVABILITY_FORWARD_ENABLED")?;
+    }
+
     Ok(())
 }
 
@@ -1048,6 +1169,19 @@ fn monotonic_ns() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let nanos = START.get_or_init(Instant::now).elapsed().as_nanos();
     u64::try_from(nanos).unwrap_or(u64::MAX)
+}
+
+async fn recording_size(
+    audio_source: &dyn AudioSource,
+    recording_id: &RecordingId,
+) -> Option<(u64, u64)> {
+    // Best-effort: look up the recording's on-disk path and report its
+    // file size. Duration is left as 0 because the adapter doesn't expose
+    // it without re-decoding the FLAC stream — Grafana derives it from
+    // CallStarted → RecordingStopped instead.
+    let path = audio_source.path_of(recording_id).await.ok()?;
+    let bytes = tokio::fs::metadata(&path).await.ok()?.len();
+    Some((0, bytes))
 }
 
 fn elapsed_ms(started: Instant) -> u64 {

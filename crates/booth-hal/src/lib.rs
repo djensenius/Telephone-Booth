@@ -328,6 +328,52 @@ pub trait OperatorClient: Send + Sync {
 
     /// Push a coarse status snapshot.
     async fn put_status(&self, status: BoothStatus) -> Result<(), OperatorError>;
+
+    /// Push a batch of telemetry events to the operator for durable
+    /// persistence and live fan-out. The body is already serialized JSON
+    /// shaped as `{ "events": [BoothEventWire, …] }` so the trait doesn't
+    /// have to be generic over the wire encoding. Idempotency is the
+    /// operator's responsibility (it deduplicates on
+    /// `(boothId, eventId)`); the caller may safely retry on transport
+    /// errors. Default implementation returns
+    /// [`OperatorError::Unsupported`] so adapters that have no operator
+    /// connection (e.g. embedded test stubs) can opt out cheaply.
+    async fn push_events_json(&self, _body: &str) -> Result<EventBatchAck, OperatorError> {
+        Err(OperatorError::Unsupported(
+            "push_events_json not supported by this client".into(),
+        ))
+    }
+
+    /// Push the latest live system snapshot to the operator. The operator
+    /// keeps only the most recent snapshot per booth in-memory; this is
+    /// **not** persisted. Default implementation returns
+    /// [`OperatorError::Unsupported`].
+    async fn put_system_snapshot(
+        &self,
+        _booth_id: &str,
+        _snapshot: &SystemSnapshot,
+    ) -> Result<(), OperatorError> {
+        Err(OperatorError::Unsupported(
+            "put_system_snapshot not supported by this client".into(),
+        ))
+    }
+}
+
+/// Acknowledgement returned by `POST /v1/events` after a bulk insert.
+///
+/// `accepted` is the number of newly persisted events; `duplicates` is the
+/// number that the operator already had on file (same `(boothId, eventId)`)
+/// and silently dropped. Callers should add the two together when
+/// computing "this batch is durable", and only retry the batch if the call
+/// errored out before any response was received.
+#[cfg(feature = "std")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventBatchAck {
+    /// Newly inserted events.
+    pub accepted: u32,
+    /// Events that were already present and silently dropped.
+    #[serde(default)]
+    pub duplicates: u32,
 }
 
 // ---------------------------------------------------------------------------

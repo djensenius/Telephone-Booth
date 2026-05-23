@@ -34,7 +34,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use booth_core::Event;
 use booth_hal::{
-    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, PinRole, TelemetryEvent,
+    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, PinRole, SystemSnapshot,
+    TelemetryEvent,
 };
 use parking_lot::Mutex;
 use rcgen::CertifiedKey;
@@ -477,6 +478,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/events", get(events_since))
         .route("/v1/gpio", get(gpio_snapshot))
         .route("/v1/audio", get(audio_snapshot))
+        .route("/v1/system", get(system_snapshot))
         .route("/v1/logs", get(logs))
         .route("/v1/config", get(config_redacted))
         .route("/v1/cert/fingerprint", get(cert_fingerprint))
@@ -554,6 +556,22 @@ async fn audio_snapshot(State(state): State<AppState>) -> Json<AudioMeterSnapsho
     let mut snapshot = snapshot_audio(&state.bus);
     snapshot.sample_rate_hz = sample_rate_from_config(&state.config.effective_config.audio);
     Json(snapshot)
+}
+
+async fn system_snapshot(State(state): State<AppState>) -> Response {
+    let latest = state
+        .bus
+        .snapshot_since(None)
+        .into_iter()
+        .rev()
+        .find_map(|record| match record.event {
+            TelemetryEvent::SystemSample { snapshot, .. } => Some(*snapshot),
+            _ => None,
+        });
+    latest.map_or_else(
+        || StatusCode::NO_CONTENT.into_response(),
+        |snapshot| Json::<SystemSnapshot>(snapshot).into_response(),
+    )
 }
 
 #[derive(Debug, Deserialize)]

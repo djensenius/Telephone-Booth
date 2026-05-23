@@ -179,6 +179,14 @@ pub struct SystemSampler {
     inner: Arc<SystemSamplerInner>,
 }
 
+impl Clone for SystemSampler {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
 struct SystemSamplerInner {
     #[cfg(feature = "system")]
     sysinfo: Mutex<SysinfoState>,
