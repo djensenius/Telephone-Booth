@@ -241,7 +241,9 @@ pub enum Effect {
 ///
 /// The function is deterministic, allocation-light, and entirely independent
 /// of wall-clock time — making it a perfect target for `proptest` and `insta`
-/// snapshot tests.
+/// snapshot tests. To keep the state machine pure, transition telemetry must be
+/// derived by the runtime from the returned state and deterministic effects
+/// (especially [`Effect::PutStatus`]) rather than published directly here.
 #[must_use]
 pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
     use Event as E;

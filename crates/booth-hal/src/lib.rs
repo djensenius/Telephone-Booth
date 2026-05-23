@@ -361,7 +361,8 @@ pub enum StorageError {
 ///
 /// HAL adapters, the core runtime, and the audio pipeline all publish
 /// `TelemetryEvent`s. The debug surface subscribes to drive the live UI and
-/// the WebSocket stream.
+/// the WebSocket stream. Use the `booth-telemetry` crate as the canonical
+/// in-process bus and replay-ring implementation for these payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TelemetryEvent {

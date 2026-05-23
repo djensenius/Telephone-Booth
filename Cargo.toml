@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/booth-core",
     "crates/booth-hal",
+    "crates/booth-telemetry",
     "crates/booth-mock",
     "crates/booth-debug",
     "crates/booth-pi",
@@ -50,6 +51,9 @@ multiple_crate_versions = "allow"
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
+# Workspace crates
+booth-telemetry = { path = "crates/booth-telemetry" }
+
 # Core / utility
 thiserror = "2"
 anyhow = "1"

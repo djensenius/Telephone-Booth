@@ -269,6 +269,7 @@ dependencies = [
  "axum",
  "booth-core",
  "booth-hal",
+ "booth-telemetry",
  "heapless",
  "mime_guess",
  "rcgen",
@@ -301,6 +302,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "booth-hal",
+ "booth-telemetry",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -331,6 +333,16 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tracing",
+]
+
+[[package]]
+name = "booth-telemetry"
+version = "0.1.0"
+dependencies = [
+ "booth-hal",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

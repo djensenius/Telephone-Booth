@@ -12,7 +12,8 @@
 
 #![warn(missing_docs)]
 
-use booth_hal::TelemetryEvent;
+pub use booth_telemetry::{TelemetryBus, TelemetryRecord};
+
 use serde::{Deserialize, Serialize};
 
 /// Bearer debug token loaded from `/etc/phone-booth/debug-token`.
@@ -82,16 +83,6 @@ pub enum DebugError {
     /// TLS certificate or key generation/load failed.
     #[error("tls error: {0}")]
     Tls(String),
-}
-
-/// Telemetry record stored in the ring buffer (`TelemetryEvent` + monotonic
-/// sequence id assigned by the bus).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelemetryRecord {
-    /// Monotonic id; clients can `?since=<id>` to catch up.
-    pub seq: u64,
-    /// The event itself.
-    pub event: TelemetryEvent,
 }
 
 /// Snapshot returned by `GET /debug/state`.

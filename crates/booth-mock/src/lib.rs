@@ -13,14 +13,16 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use booth_hal::{
-    AudioError, AudioLevel, AudioRef, AudioSink, AudioSource, BoothStatus, GpioEdge, GpioError,
-    GpioPort, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion, PinRole,
-    RecordingId, Storage, StorageError, UploadSlot,
+    AudioChannel, AudioError, AudioLevel, AudioRef, AudioSink, AudioSource, BoothStatus, GpioEdge,
+    GpioError, GpioPort, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion, PinRole,
+    RecordingId, Storage, StorageError, TelemetryEvent, UploadSlot,
 };
+use booth_telemetry::TelemetryBus;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, mpsc};
 
@@ -30,12 +32,19 @@ use tokio::sync::{Mutex, Notify, mpsc};
 
 /// Sender side for synthesizing GPIO edges into the [`MockGpioPort`].
 #[derive(Clone)]
-pub struct GpioInjector(mpsc::Sender<GpioEdge>);
+pub struct GpioInjector {
+    tx: mpsc::Sender<GpioEdge>,
+    telemetry: Option<TelemetryBus>,
+}
 
 impl GpioInjector {
     /// Push a debounced edge into the mock GPIO stream.
     pub async fn push(&self, edge: GpioEdge) {
-        let _ = self.0.send(edge).await;
+        if self.tx.send(edge).await.is_ok()
+            && let Some(bus) = &self.telemetry
+        {
+            bus.publish(TelemetryEvent::GpioEdge(edge));
+        }
     }
 }
 
@@ -48,8 +57,18 @@ impl MockGpioPort {
     /// Create a new mock port and its injector handle.
     #[must_use]
     pub fn new() -> (Self, GpioInjector) {
+        Self::build(None)
+    }
+
+    /// Create a new mock port that publishes injected edges to `bus`.
+    #[must_use]
+    pub fn with_telemetry(bus: &TelemetryBus) -> (Self, GpioInjector) {
+        Self::build(Some(bus.clone()))
+    }
+
+    fn build(telemetry: Option<TelemetryBus>) -> (Self, GpioInjector) {
         let (tx, rx) = mpsc::channel(64);
-        (Self { rx }, GpioInjector(tx))
+        (Self { rx }, GpioInjector { tx, telemetry })
     }
 }
 
@@ -76,6 +95,7 @@ impl GpioPort for MockGpioPort {
 #[derive(Default, Clone)]
 pub struct MockAudioSink {
     inner: Arc<MockSinkInner>,
+    telemetry: Option<TelemetryBus>,
 }
 
 #[derive(Default)]
@@ -84,8 +104,8 @@ struct MockSinkInner {
     end: Notify,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 /// Inspectable state of the mock audio sink.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct MockSinkState {
     /// What is currently playing (if anything).
     pub playing: Option<AudioRef>,
@@ -94,6 +114,21 @@ pub struct MockSinkState {
 }
 
 impl MockAudioSink {
+    /// Create a mock sink without telemetry publishing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a mock sink that publishes playback lifecycle logs to `bus`.
+    #[must_use]
+    pub fn with_telemetry(bus: &TelemetryBus) -> Self {
+        Self {
+            inner: Arc::new(MockSinkInner::default()),
+            telemetry: Some(bus.clone()),
+        }
+    }
+
     /// Inspect what the sink has played.
     pub async fn state(&self) -> MockSinkState {
         self.inner.state.lock().await.clone()
@@ -102,20 +137,35 @@ impl MockAudioSink {
     /// Signal that the currently-playing source finished naturally.
     pub fn finish_playback(&self) {
         self.inner.end.notify_waiters();
+        self.publish_log("playback finished".to_string());
+    }
+
+    fn publish_log(&self, message: String) {
+        if let Some(bus) = &self.telemetry {
+            bus.publish(TelemetryEvent::Log {
+                level: "debug".to_string(),
+                target: "booth_mock::audio_sink".to_string(),
+                message,
+            });
+        }
     }
 }
 
 #[async_trait]
 impl AudioSink for MockAudioSink {
     async fn play(&mut self, source: AudioRef) -> Result<(), AudioError> {
+        let message = format!("play {source:?}");
         let mut s = self.inner.state.lock().await;
         s.history.push(source.clone());
         s.playing = Some(source);
+        drop(s);
+        self.publish_log(message);
         Ok(())
     }
 
     async fn stop(&mut self) -> Result<(), AudioError> {
         self.inner.state.lock().await.playing = None;
+        self.publish_log("stop playback".to_string());
         Ok(())
     }
 
@@ -126,6 +176,7 @@ impl AudioSink for MockAudioSink {
         }
         self.inner.end.notified().await;
         self.inner.state.lock().await.playing = None;
+        self.publish_log("playback ended".to_string());
         Ok(())
     }
 }
@@ -135,6 +186,7 @@ impl AudioSink for MockAudioSink {
 #[derive(Default, Clone)]
 pub struct MockAudioSource {
     inner: Arc<Mutex<MockSourceState>>,
+    telemetry: Option<TelemetryBus>,
 }
 
 #[derive(Default, Debug)]
@@ -144,20 +196,55 @@ struct MockSourceState {
     last_finished: Option<RecordingId>,
 }
 
+impl MockAudioSource {
+    /// Create a mock source without telemetry publishing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a mock source that publishes recording lifecycle logs to `bus`.
+    #[must_use]
+    pub fn with_telemetry(bus: &TelemetryBus) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(MockSourceState::default())),
+            telemetry: Some(bus.clone()),
+        }
+    }
+
+    fn publish_log(&self, message: String) {
+        if let Some(bus) = &self.telemetry {
+            bus.publish(TelemetryEvent::Log {
+                level: "debug".to_string(),
+                target: "booth_mock::audio_source".to_string(),
+                message,
+            });
+        }
+    }
+}
+
 #[async_trait]
 impl AudioSource for MockAudioSource {
     async fn start(&mut self) -> Result<RecordingId, AudioError> {
-        let mut s = self.inner.lock().await;
-        s.next_id += 1;
-        let id = format!("rec-{:06}", s.next_id);
-        s.in_flight = Some(id.clone());
+        let id = {
+            let mut s = self.inner.lock().await;
+            s.next_id += 1;
+            let id = format!("rec-{:06}", s.next_id);
+            s.in_flight = Some(id.clone());
+            id
+        };
+        self.publish_log(format!("recording started {id}"));
         Ok(id)
     }
 
     async fn stop(&mut self) -> Result<Option<RecordingId>, AudioError> {
-        let mut s = self.inner.lock().await;
-        let id = s.in_flight.take();
-        s.last_finished = id.clone();
+        let id = {
+            let mut s = self.inner.lock().await;
+            let id = s.in_flight.take();
+            s.last_finished.clone_from(&id);
+            id
+        };
+        self.publish_log(format!("recording stopped {id:?}"));
         Ok(id)
     }
 
@@ -170,11 +257,19 @@ impl AudioSource for MockAudioSource {
 #[must_use]
 pub fn fake_level(peak: f32, rms: f32) -> AudioLevel {
     AudioLevel {
-        channel: booth_hal::AudioChannel::Input,
+        channel: AudioChannel::Input,
         peak,
         rms,
         at_monotonic_ns: 0,
     }
+}
+
+/// Synthesize an [`AudioLevel`] sample and publish it to `bus`.
+#[must_use]
+pub fn fake_level_with_telemetry(bus: &TelemetryBus, peak: f32, rms: f32) -> AudioLevel {
+    let level = fake_level(peak, rms);
+    bus.publish(TelemetryEvent::AudioLevel(level));
+    level
 }
 
 // ---------------------------------------------------------------------------
@@ -182,9 +277,21 @@ pub fn fake_level(peak: f32, rms: f32) -> AudioLevel {
 // ---------------------------------------------------------------------------
 
 /// Canned, predictable operator client for tests.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct MockOperatorClient {
     inner: Arc<Mutex<MockOperatorState>>,
+    telemetry: Option<TelemetryBus>,
+    request_seq: Arc<AtomicU64>,
+}
+
+impl Default for MockOperatorClient {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(MockOperatorState::default())),
+            telemetry: None,
+            request_seq: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 /// In-memory state of the mock operator.
@@ -203,49 +310,140 @@ pub struct MockOperatorState {
 }
 
 impl MockOperatorClient {
+    /// Create a mock operator client without telemetry publishing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a mock operator client that publishes request lifecycle events to `bus`.
+    #[must_use]
+    pub fn with_telemetry(bus: &TelemetryBus) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(MockOperatorState::default())),
+            telemetry: Some(bus.clone()),
+            request_seq: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     /// Read-only access to the inner state (for assertions).
     pub fn state(&self) -> Arc<Mutex<MockOperatorState>> {
         Arc::clone(&self.inner)
+    }
+
+    fn begin_request(&self, route: &str) -> (String, Instant) {
+        let request_id = format!(
+            "mock-{}",
+            self.request_seq.fetch_add(1, Ordering::Relaxed) + 1
+        );
+        if let Some(bus) = &self.telemetry {
+            bus.publish(TelemetryEvent::OperatorRequest {
+                id: request_id.clone(),
+                route: route.to_string(),
+            });
+        }
+        (request_id, Instant::now())
+    }
+
+    fn finish_request<T>(
+        &self,
+        request_id: &str,
+        started: Instant,
+        result: &Result<T, OperatorError>,
+    ) {
+        if let Some(bus) = &self.telemetry {
+            bus.publish(TelemetryEvent::OperatorResponse {
+                id: request_id.to_string(),
+                status: status_of(result),
+                duration_ms: elapsed_ms(started),
+            });
+            if let Err(err) = result {
+                bus.publish(TelemetryEvent::Error {
+                    source: "booth_mock::operator".to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn status_of<T>(result: &Result<T, OperatorError>) -> u16 {
+    match result {
+        Ok(_) => 200,
+        Err(OperatorError::Auth(_)) => 401,
+        Err(OperatorError::Server { status, .. }) => *status,
+        Err(OperatorError::Protocol(_)) => 502,
+        Err(OperatorError::Transport(_)) => 503,
+        Err(_) => 500,
     }
 }
 
 #[async_trait]
 impl OperatorClient for MockOperatorClient {
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
-        let mut s = self.inner.lock().await;
-        if let Some(err) = s.fail_questions.take() {
-            return Err(err);
-        }
-        s.questions
-            .pop_front()
-            .ok_or_else(|| OperatorError::Protocol("no questions queued".into()))
+        let (request_id, started) = self.begin_request("GET /mock/random-question");
+        let result = {
+            let mut s = self.inner.lock().await;
+            s.fail_questions.take().map_or_else(
+                || {
+                    s.questions
+                        .pop_front()
+                        .ok_or_else(|| OperatorError::Protocol("no questions queued".into()))
+                },
+                Err,
+            )
+        };
+        self.finish_request(&request_id, started, &result);
+        result
     }
 
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
-        let mut s = self.inner.lock().await;
-        s.messages
-            .pop_front()
-            .ok_or_else(|| OperatorError::Protocol("no messages queued".into()))
+        let (request_id, started) = self.begin_request("GET /mock/random-message");
+        let result = {
+            let mut s = self.inner.lock().await;
+            s.messages
+                .pop_front()
+                .ok_or_else(|| OperatorError::Protocol("no messages queued".into()))
+        };
+        self.finish_request(&request_id, started, &result);
+        result
     }
 
     async fn init_upload(
         &self,
         _question_id: Option<&booth_hal::QuestionId>,
     ) -> Result<UploadSlot, OperatorError> {
-        let mut s = self.inner.lock().await;
-        let slot = UploadSlot {
-            slot_id: format!("slot-{}", s.uploads.len() + 1),
-            put_url: "https://mock.invalid/upload".to_string(),
-            headers: vec![],
+        let (request_id, started) = self.begin_request("POST /mock/uploads");
+        let result = {
+            let mut s = self.inner.lock().await;
+            let slot_id = format!("slot-{}", s.uploads.len() + 1);
+            let slot: UploadSlot = serde_json::from_value(serde_json::json!({
+                "slot_id": slot_id.clone(),
+                "put_url": "https://mock.invalid/upload",
+                "headers": [],
+                "id": slot_id,
+                "uploadUrl": "https://mock.invalid/upload",
+                "expiresAt": "2099-01-01T00:00:00Z",
+                "contentType": "audio/flac"
+            }))
+            .map_err(|err| OperatorError::Protocol(format!("mock upload slot: {err}").into()))?;
+            s.uploads.push(slot.clone());
+            Ok(slot)
         };
-        s.uploads.push(slot.clone());
-        Ok(slot)
+        self.finish_request(&request_id, started, &result);
+        result
     }
 
     async fn put_upload(&self, _slot: &UploadSlot, _local_path: &str) -> Result<(), OperatorError> {
-        // Pretend the upload succeeded after a short async yield.
+        let (request_id, started) = self.begin_request("PUT /mock/upload");
         tokio::time::sleep(Duration::from_millis(1)).await;
-        Ok(())
+        let result = Ok(());
+        self.finish_request(&request_id, started, &result);
+        result
     }
 
     async fn complete_upload(
@@ -254,12 +452,18 @@ impl OperatorClient for MockOperatorClient {
         _sha256_hex: &str,
         _duration_ms: u64,
     ) -> Result<(), OperatorError> {
-        Ok(())
+        let (request_id, started) = self.begin_request("POST /mock/uploads/complete");
+        let result = Ok(());
+        self.finish_request(&request_id, started, &result);
+        result
     }
 
     async fn put_status(&self, status: BoothStatus) -> Result<(), OperatorError> {
+        let (request_id, started) = self.begin_request("PUT /mock/status");
         self.inner.lock().await.statuses.push(status);
-        Ok(())
+        let result = Ok(());
+        self.finish_request(&request_id, started, &result);
+        result
     }
 }
 
