@@ -314,7 +314,7 @@ impl PiOperatorClient {
         {
             let _ = (slot, local_path);
             Err(UploadError::Transport(
-                "booth-pi was compiled without the pi feature".into(),
+                "booth-pi was compiled without the operator feature".into(),
             ))
         }
     }
@@ -448,7 +448,7 @@ fn api_url(base_url: &str, path: &str) -> String {
 #[cfg(not(feature = "operator"))]
 fn unsupported<T>() -> Result<T, OperatorError> {
     Err(OperatorError::Unsupported(
-        "booth-pi was compiled without the pi feature".into(),
+        "booth-pi was compiled without the operator feature".into(),
     ))
 }
 
