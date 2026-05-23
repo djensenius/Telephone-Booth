@@ -28,13 +28,10 @@ booth-telemetry = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 parking_lot = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 sysinfo = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
-metrics-util = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "test-util"] }
