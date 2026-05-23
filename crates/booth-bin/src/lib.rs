@@ -30,6 +30,9 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "simulator")]
+pub mod simulator;
+
 /// Production config path used by the systemd service.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/phone-booth/config.toml";
 
@@ -278,6 +281,59 @@ pub fn build_mock_adapters(bus: &TelemetryBus) -> (RuntimeAdapters, MockRuntimeH
         operator,
     };
     (adapters, handles)
+}
+
+/// Build runtime adapters for the simulator TUI: a [`booth_mock::MockGpioPort`]
+/// paired with either mock or real audio/operator adapters.
+///
+/// When `mock_io` is `true`, all adapters come from `booth-mock` (no audio
+/// hardware or operator backend required). When `false`, the real
+/// `booth-pi` audio and operator adapters are constructed — this is what
+/// lets the simulator drive the actual cross-platform audio + HTTP code path
+/// from a development machine.
+///
+/// Returns the [`RuntimeAdapters`] bundle plus the [`booth_mock::GpioInjector`]
+/// the TUI uses to inject hook/rotary edges.
+#[cfg(all(feature = "simulator", feature = "mock"))]
+pub fn build_simulator_adapters(
+    config: &RuntimeConfig,
+    bus: &TelemetryBus,
+    mock_io: bool,
+) -> Result<(RuntimeAdapters, booth_mock::GpioInjector)> {
+    let (gpio, gpio_injector) = booth_mock::MockGpioPort::with_telemetry(bus);
+
+    let (audio_sink, audio_source, operator): (
+        Box<dyn AudioSink>,
+        Box<dyn AudioSource>,
+        Arc<dyn OperatorClient>,
+    ) = if mock_io {
+        let sink = booth_mock::MockAudioSink::with_telemetry(bus);
+        let source = booth_mock::MockAudioSource::with_telemetry(bus);
+        let operator = booth_mock::MockOperatorClient::with_telemetry(bus);
+        (Box::new(sink), Box::new(source), Arc::new(operator))
+    } else {
+        let (telemetry_tx, mut telemetry_rx) = mpsc::channel(128);
+        let telemetry_bus = bus.clone();
+        tokio::spawn(async move {
+            while let Some(event) = telemetry_rx.recv().await {
+                telemetry_bus.publish(event);
+            }
+        });
+        let sink = PiAudioSink::with_telemetry(config.audio.clone(), Some(telemetry_tx.clone()));
+        let source = PiAudioSource::with_telemetry(
+            config.audio.clone(),
+            Arc::new(MemoryStorage::default()),
+            Some(telemetry_tx),
+        );
+        let operator = booth_pi::PiOperatorClient::new(config.operator.clone())
+            .map_err(|err| anyhow!("create operator client: {err}"))?;
+        (Box::new(sink), Box::new(source), Arc::new(operator))
+    };
+
+    Ok((
+        RuntimeAdapters::new(Box::new(gpio), audio_sink, audio_source, operator),
+        gpio_injector,
+    ))
 }
 
 /// Spawn the runtime loop and return its command sender and join handle.
@@ -1057,13 +1113,14 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
         return Ok(());
     };
     let socket = socket.to_string_lossy();
-    let target = if let Some(stripped) = socket.strip_prefix('@') {
-        let mut abstract_name = String::from("\0");
-        abstract_name.push_str(stripped);
-        abstract_name
-    } else {
-        socket.into_owned()
-    };
+    let target = socket.strip_prefix('@').map_or_else(
+        || socket.clone().into_owned(),
+        |stripped| {
+            let mut abstract_name = String::from("\0");
+            abstract_name.push_str(stripped);
+            abstract_name
+        },
+    );
     let datagram = UnixDatagram::unbound()?;
     datagram.send_to(message.as_bytes(), target)?;
     Ok(())

@@ -1,6 +1,6 @@
 //! Optional GPIO loopback smoke test for Raspberry Pi hardware.
 
-#![cfg(feature = "pi")]
+#![cfg(all(feature = "pi", target_os = "linux"))]
 
 use std::error::Error;
 use std::time::Duration;

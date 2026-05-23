@@ -29,6 +29,7 @@ HAL events back into machine events.
 ## Consequences
 
 **Good:**
+
 - The full transition table is one big `match`. New states / events /
   effects need a single edit + a unit test.
 - We can snapshot transitions with `insta` and visually diff regressions.
@@ -36,6 +37,7 @@ HAL events back into machine events.
   identical output, which is invaluable for bug reports.
 
 **Trade-offs:**
+
 - Effects must be totally describable as data. Anything that needs
   ad-hoc runtime parameters (e.g. an arbitrary URL) needs to be modeled
   explicitly. See the `Effect::Play(AudioRef)` discussion in

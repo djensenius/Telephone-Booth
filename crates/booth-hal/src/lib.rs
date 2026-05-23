@@ -2,7 +2,7 @@
 //!
 //! This crate defines the **ports** in the project's hexagonal architecture.
 //! The pure [`booth_core`](../booth_core/index.html) state machine emits
-//! [`Effect`](crate::Effect) values that a runtime translates into calls on
+//! `Effect` values that a runtime translates into calls on
 //! the traits defined here. Concrete **adapters** — one for the Raspberry Pi
 //! using `rppal` + `cpal` + `reqwest`, mock adapters for host testing, and any
 //! future ESP32 / RP2040 adapter — live in their own crates and implement

@@ -30,12 +30,14 @@ Either listener can be disabled in config.
 ## Consequences
 
 **Good:**
+
 - Real LE certs with no DNS or 80/443 exposure.
 - A working fallback for LAN debugging when Tailscale is down or
   unavailable to the operator's browser.
 - Zero CA infrastructure to run.
 
 **Trade-offs:**
+
 - Tailscale is a dependency — but it's optional; disabling it falls back
   cleanly to the LAN listener.
 - Two listeners means two attack surfaces; both gate on the same Bearer

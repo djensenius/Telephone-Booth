@@ -26,18 +26,30 @@ serde_json = { workspace = true }
 heapless = { workspace = true }
 sha2 = { workspace = true }
 
-# Hardware-only deps are gated behind the `pi` feature so the workspace builds
-# on macOS / x86_64-linux for tests and tooling.
-rppal = { workspace = true, optional = true }
+# Cross-platform audio + decode/encode. Enabled by the `audio` feature so the
+# host TUI simulator on macOS / Linux can use them without the `pi` feature.
 cpal = { workspace = true, optional = true }
 flacenc = { workspace = true, optional = true }
 claxon = { workspace = true, optional = true }
 hound = { workspace = true, optional = true }
 symphonia = { workspace = true, optional = true }
 
+# rppal only builds on Linux (it uses Linux-specific termios / ioctl), so the
+# dependency is also gated by `target_os = "linux"` to keep `--all-features`
+# green on macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+rppal = { workspace = true, optional = true }
+
 [features]
 default = []
-pi = ["dep:reqwest", "dep:rppal", "dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia"]
+# Cross-platform audio playback + capture + FLAC handling. Pulls reqwest so
+# remote-URL playback (operator audio) keeps working without the `operator`
+# feature.
+audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest"]
+# Cross-platform operator HTTP client.
+operator = ["dep:reqwest"]
+# Real Raspberry Pi build: cross-platform audio + operator plus rppal GPIO.
+pi = ["audio", "operator", "dep:rppal"]
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -14,7 +14,7 @@ sketches the adapter.
 
 ## Crate skeleton
 
-```
+```text
 crates/booth-pico/
 ├── Cargo.toml          embassy-rp, embassy-net, cyw43, embedded-svc
 ├── src/
