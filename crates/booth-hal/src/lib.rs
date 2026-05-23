@@ -235,13 +235,16 @@ pub struct OperatorMessage {
 
 /// Slot the operator allocates for a forthcoming upload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UploadSlot {
     /// Opaque slot id; pass back to `complete_upload`.
-    pub slot_id: String,
+    pub id: String,
     /// Presigned URL (Azure SAS) the client PUTs the recording to.
-    pub put_url: String,
-    /// Suggested HTTP headers to include with the PUT.
-    pub headers: Vec<(String, String)>,
+    pub upload_url: String,
+    /// RFC3339 timestamp at which the presigned URL expires.
+    pub expires_at: String,
+    /// MIME type the blob store expects for the upload.
+    pub content_type: String,
 }
 
 /// Coarse status broadcast from the phone client to the operator.
@@ -273,6 +276,15 @@ pub enum OperatorError {
     /// Authentication failed (bad / expired token).
     #[error("operator auth error: {0}")]
     Auth(Cow<'static, str>),
+    /// Authentication failed (bad / expired token); rotate the configured token.
+    #[error("operator unauthorized: {0}")]
+    Unauthorized(Cow<'static, str>),
+    /// The operator already has this recording; safe to treat as success.
+    #[error("duplicate recording: {0}")]
+    DuplicateRecording(Cow<'static, str>),
+    /// This adapter was compiled without support for the requested operation.
+    #[error("operator operation unsupported: {0}")]
+    Unsupported(Cow<'static, str>),
     /// The operator returned a non-success response we cannot recover from.
     #[error("operator returned an error: {status} {body}")]
     Server {
@@ -303,11 +315,10 @@ pub trait OperatorClient: Send + Sync {
         question_id: Option<&QuestionId>,
     ) -> Result<UploadSlot, OperatorError>;
 
-    /// PUT the bytes of `local_path` to `slot.put_url`.
+    /// PUT the bytes of `local_path` to `slot.upload_url`.
     async fn put_upload(&self, slot: &UploadSlot, local_path: &str) -> Result<(), OperatorError>;
 
-    /// Notify the operator that the upload at `slot_id` is complete and
-    /// metadata (duration, sha256) is attached.
+    /// Notify the operator that the upload at `slot_id` is complete.
     async fn complete_upload(
         &self,
         slot_id: &str,

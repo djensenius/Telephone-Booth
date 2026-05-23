@@ -6,7 +6,7 @@
 //! * `cpal` (ALSA on the Pi) for USB-Audio-Class-2 capture and playback,
 //!   notably the user's Focusrite.
 //! * `flacenc` / `claxon` / `symphonia` for FLAC encode + decode.
-//! * `reqwest` + `tokio-tungstenite` for talking to the operator backend.
+//! * `reqwest` for the phone-side operator HTTP client.
 //!
 //! Hardware-only dependencies are gated behind the `pi` Cargo feature so the
 //! crate still type-checks on macOS / x86_64-linux when running the workspace
@@ -15,13 +15,10 @@
 
 #![warn(missing_docs)]
 
+use std::fmt;
+
 use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
-
-pub mod gpio;
-
-#[cfg(feature = "pi")]
-pub use gpio::PiGpioPort;
 
 pub mod audio;
 
@@ -29,6 +26,15 @@ pub use audio::{
     PiAudioSink, PiAudioSource, RecordingHandle, device_name_matches, embedded_tone_bytes,
     has_flac_stream_marker,
 };
+
+pub mod operator;
+
+pub use operator::{PiOperatorClient, UploadError};
+
+pub mod gpio;
+
+#[cfg(feature = "pi")]
+pub use gpio::PiGpioPort;
 
 /// Pi-side configuration. Loaded from `/etc/phone-booth/config.toml` (with
 /// per-key environment-variable overrides) at startup.
@@ -210,34 +216,81 @@ impl Default for AudioConfig {
 }
 
 /// Operator backend connection settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OperatorConfig {
     /// Base URL of the operator backend (e.g. `https://operator.example.com`).
     #[serde(default = "default_operator_url")]
     pub base_url: String,
-    /// Bearer API token. Use `${PHONE_BOOTH_TOKEN}` to read from env at boot.
-    #[serde(default)]
-    pub api_token: String,
-    /// Connect timeout (seconds).
-    #[serde(default = "default_connect_timeout")]
-    pub connect_timeout_seconds: u64,
+    /// Bearer API token. Use `${PHONE_BOOTH_OPERATOR__TOKEN}` to read from env at boot.
+    #[serde(default, alias = "api_token")]
+    pub token: String,
+    /// Status topic / booth id used by deployments that multiplex status streams.
+    #[serde(default = "default_status_topic")]
+    pub status_topic: String,
+    /// Per-request HTTP timeout, in seconds.
+    #[serde(
+        default = "default_http_timeout_secs",
+        alias = "connect_timeout_seconds"
+    )]
+    pub http_timeout_secs: u64,
+    /// Initial reconnect backoff for operator WebSocket consumers, in milliseconds.
+    #[serde(default = "default_ws_reconnect_initial_ms")]
+    pub ws_reconnect_initial_ms: u64,
+    /// Maximum reconnect backoff for operator WebSocket consumers, in milliseconds.
+    #[serde(default = "default_ws_reconnect_max_ms")]
+    pub ws_reconnect_max_ms: u64,
 }
 
 fn default_operator_url() -> String {
     "https://operator.example.com".to_string()
 }
-fn default_connect_timeout() -> u64 {
+fn default_status_topic() -> String {
+    "booth-1".to_string()
+}
+fn default_http_timeout_secs() -> u64 {
     10
+}
+fn default_ws_reconnect_initial_ms() -> u64 {
+    500
+}
+fn default_ws_reconnect_max_ms() -> u64 {
+    30_000
 }
 
 impl Default for OperatorConfig {
     fn default() -> Self {
         Self {
             base_url: default_operator_url(),
-            api_token: String::new(),
-            connect_timeout_seconds: default_connect_timeout(),
+            token: String::new(),
+            status_topic: default_status_topic(),
+            http_timeout_secs: default_http_timeout_secs(),
+            ws_reconnect_initial_ms: default_ws_reconnect_initial_ms(),
+            ws_reconnect_max_ms: default_ws_reconnect_max_ms(),
         }
     }
+}
+
+impl fmt::Debug for OperatorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OperatorConfig")
+            .field("base_url", &self.base_url)
+            .field("token", &redacted_token(&self.token))
+            .field("status_topic", &self.status_topic)
+            .field("http_timeout_secs", &self.http_timeout_secs)
+            .field("ws_reconnect_initial_ms", &self.ws_reconnect_initial_ms)
+            .field("ws_reconnect_max_ms", &self.ws_reconnect_max_ms)
+            .finish()
+    }
+}
+
+pub(crate) fn redacted_token(token: &str) -> String {
+    if token.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let mut last_four = token.chars().rev().take(4).collect::<Vec<_>>();
+    last_four.reverse();
+    format!("<redacted:{}>", last_four.into_iter().collect::<String>())
 }
 
 impl Default for PiConfig {
