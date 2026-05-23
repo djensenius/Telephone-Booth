@@ -2,6 +2,11 @@
 
 Thanks for hacking on the booth! A few conventions:
 
+> AI-agent conventions (Copilot etc.) live in
+> [`.github/copilot-instructions.md`](../.github/copilot-instructions.md)
+> and the path-scoped files under [`.github/instructions/`](../.github/instructions/).
+> Humans and agents should follow the same rules.
+
 ## Branches
 
 - `main` is the **legacy Node.js** code (kept on tag `legacy-node` for
