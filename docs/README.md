@@ -23,6 +23,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 
 - [Architecture](architecture.md) — hexagonal layout, state machine, event/effect catalog
 - [Debug panel](debug-panel.md) — endpoints, auth, telemetry schema, htmx UI tour
+- [Observability](observability.md) — events, host vitals, `/metrics`, vmagent + Grafana
 
 ## Future portability
 
@@ -46,3 +47,4 @@ rebuilds it from the filesystem; CI fails if it drifts.
 - [0003 — FLAC as recording format](adr/0003-flac-as-recording-format.md)
 - [0004 — Tailscale serve for debug TLS](adr/0004-tailscale-serve-for-debug-tls.md)
 - [0005 — Rust 1.95.0](adr/0005-rust-1.95.0.md)
+- [0006 — Observability stack](adr/0006-observability-stack.md)

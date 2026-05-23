@@ -54,6 +54,24 @@ The packaged service reads the token from `BOOTH_DEBUG_TOKEN` in
 | `POST`   | `/debug/hangup`                     | Force state machine to `Idle` (controls)              |
 | `POST`   | `/debug/replay-last-recording`      | Play the most recent recording out the sink (controls) |
 
+In addition to the historical `/debug/*` aliases, the runtime today
+exposes the canonical `v1` routes:
+
+| Method   | Path                | Purpose                                                                 |
+| -------- | ------------------- | ----------------------------------------------------------------------- |
+| `GET`    | `/v1/state`         | Latest [`StatusSnapshot`](../crates/booth-debug/src/lib.rs).            |
+| `GET`    | `/v1/system`        | Latest [`SystemSnapshot`](observability.md#systemsnapshot-fields).      |
+| `GET`    | `/v1/events?since=` | Telemetry ring-buffer replay.                                           |
+| `GET`    | `/v1/ws/telemetry`  | Live telemetry firehose.                                                |
+| `GET`    | `/metrics`          | Prometheus text exposition. **Loopback only**, no bearer auth required. |
+
+The `/metrics` route is only mounted on the loopback listener (so
+`tailscale serve` exposes it under the existing ACL) and intentionally
+skips the bearer-auth middleware so the
+`telephone-booth-vmagent.service` sidecar can scrape it without
+credentials. See [observability.md](observability.md) and
+[ADR 0006](adr/0006-observability-stack.md).
+
 **Routes marked _(controls)_** are gated by `debug.allow_controls = true`
 in the config file. The flag is intentionally _not_ toggle-able at runtime;
 flipping it requires editing config and restarting the service.

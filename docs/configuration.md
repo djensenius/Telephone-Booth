@@ -55,25 +55,56 @@ loopback_skip_auth   = false
 
 [telemetry]
 journal_level = "info"        # tracing filter
+
+[observability]
+enabled            = true     # master switch for metrics + operator forwarding
+booth_id           = "booth-01"
+sample_interval_ms = 5000     # how often booth-metrics samples sysinfo
+
+[observability.operator_forward]
+enabled           = true
+batch_max         = 200       # events per POST /v1/events
+flush_interval_ms = 2000
+buffer_max        = 4096      # hard cap; drop-oldest on overflow
 ```
+
+### Observability
+
+When `observability.enabled = true` (the default) the runtime installs
+the Prometheus registry, spawns the system sampler, and — if
+`operator_forward.enabled = true` — forwards every telemetry event to
+the operator API as a `BoothEvent` row and pushes the latest
+`SystemSnapshot` every sample.
+
+Remote write to VictoriaMetrics is **not** controlled here — that's
+vmagent's job. See [`observability.md`](observability.md#packaging)
+for the vmagent unit and the `BOOTH_VM_REMOTE_WRITE_URL` env var that
+lives in `/etc/phone-booth/vmagent.env`.
 
 ## Environment variables
 
 The runtime currently supports explicit overrides for deployment-sensitive
 settings:
 
-| File key / setting       | Env override                                                                      |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `operator.base_url`      | `BOOTH_OPERATOR_BASE_URL`                                                         |
-| `operator.token`         | `BOOTH_OPERATOR_TOKEN` or `BOOTH_OPERATOR_TOKEN_FILE`                             |
-| debug bearer token       | `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`                                   |
-| `audio.device_substring` | `BOOTH_AUDIO_DEVICE`                                                              |
-| `gpio.hook`              | `BOOTH_GPIO_HOOK` or `BOOTH_GPIO_HOOK_BCM`                                        |
-| `gpio.rotary_pulse`      | `BOOTH_GPIO_ROTARY_PULSE` or `BOOTH_GPIO_ROTARY_PULSE_BCM`                        |
-| `gpio.rotary_read`       | `BOOTH_GPIO_ROTARY_READ`, `BOOTH_GPIO_ROTARY_READ_BCM`, or `BOOTH_GPIO_ROTARY_GATE_BCM` |
-| `gpio.debounce_ms`       | `BOOTH_GPIO_DEBOUNCE_MS`                                                          |
-| `gpio.pull`              | `BOOTH_GPIO_PULL` (`up` or `down`)                                                |
-| `gpio.invert.*`          | `BOOTH_GPIO_INVERT_HOOK`, `BOOTH_GPIO_INVERT_ROTARY_PULSE`, `BOOTH_GPIO_INVERT_ROTARY_READ` |
+| File key / setting                              | Env override                                                                      |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| `operator.base_url`                             | `BOOTH_OPERATOR_BASE_URL`                                                         |
+| `operator.token`                                | `BOOTH_OPERATOR_TOKEN` or `BOOTH_OPERATOR_TOKEN_FILE`                             |
+| debug bearer token                              | `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`                                   |
+| `audio.device_substring`                        | `BOOTH_AUDIO_DEVICE`                                                              |
+| `gpio.hook`                                     | `BOOTH_GPIO_HOOK` or `BOOTH_GPIO_HOOK_BCM`                                        |
+| `gpio.rotary_pulse`                             | `BOOTH_GPIO_ROTARY_PULSE` or `BOOTH_GPIO_ROTARY_PULSE_BCM`                        |
+| `gpio.rotary_read`                              | `BOOTH_GPIO_ROTARY_READ`, `BOOTH_GPIO_ROTARY_READ_BCM`, or `BOOTH_GPIO_ROTARY_GATE_BCM` |
+| `gpio.debounce_ms`                              | `BOOTH_GPIO_DEBOUNCE_MS`                                                          |
+| `gpio.pull`                                     | `BOOTH_GPIO_PULL` (`up` or `down`)                                                |
+| `gpio.invert.*`                                 | `BOOTH_GPIO_INVERT_HOOK`, `BOOTH_GPIO_INVERT_ROTARY_PULSE`, `BOOTH_GPIO_INVERT_ROTARY_READ` |
+| `observability.enabled`                         | `BOOTH_OBSERVABILITY__ENABLED`                                                    |
+| `observability.booth_id`                        | `BOOTH_OBSERVABILITY__BOOTH_ID`                                                   |
+| `observability.sample_interval_ms`              | `BOOTH_OBSERVABILITY__SAMPLE_INTERVAL_MS`                                         |
+| `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__ENABLED`                                  |
+| `observability.operator_forward.batch_max`      | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__BATCH_MAX`                                |
+| `observability.operator_forward.flush_interval_ms` | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__FLUSH_INTERVAL_MS`                     |
+| `observability.operator_forward.buffer_max`     | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__BUFFER_MAX`                               |
 
 ## Secret precedence
 

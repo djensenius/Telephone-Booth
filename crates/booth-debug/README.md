@@ -11,14 +11,20 @@ Embedded debug HTTP + WebSocket surface for the Telephone Booth Rust client.
 | `GET` | `/v1/events?since=<seq>` | Retained telemetry records with ids greater than `since`. |
 | `GET` | `/v1/gpio` | Latest GPIO pin levels and edge timestamps from telemetry. |
 | `GET` | `/v1/audio` | Latest input/output audio meter values and device info. |
+| `GET` | `/v1/system` | Latest [`SystemSnapshot`](../../docs/observability.md#systemsnapshot-fields) (CPU/temp/mem/disk/net/uptime). |
 | `GET` | `/v1/logs?level=info&limit=200` | Recent tracing log lines from the in-process ring buffer. |
 | `GET` | `/v1/config` | Effective config projection with tokens redacted to the last 4 chars. |
 | `GET` | `/v1/cert/fingerprint` | Loopback-only SHA-256 fingerprint for LAN cert pinning. |
 | `POST` | `/v1/simulate/event` | Inject a serialized `booth_core::Event`. |
 | `POST` | `/v1/simulate/pulse` | Inject N rotary pulses followed by `Tick`. |
 | `WS` | `/v1/ws/telemetry` | Live `TelemetryRecord` JSON frames; optional first message `{\"replay_from\": seq}`. |
+| `GET` | `/metrics` | **Loopback only.** Prometheus text exposition. Skips bearer auth — Tailscale ACLs gate the loopback front door. |
 
-All HTTP and WebSocket requests require `Authorization: Bearer <debug-token>` when `DebugConfig::token` is set. WebSocket clients may also pass `Sec-WebSocket-Protocol: bearer.<token>`.
+All HTTP and WebSocket requests require `Authorization: Bearer <debug-token>` when `DebugConfig::token` is set, **except** `/metrics`, which is intentionally unauthenticated and mounted only on the loopback listener so vmagent can scrape it. WebSocket clients may also pass `Sec-WebSocket-Protocol: bearer.<token>`.
+
+The metrics renderer is supplied by the runtime as an
+`Option<MetricsRender>` argument to [`serve_with_handles`]; when `None`,
+the `/metrics` route is not mounted at all (404).
 
 ## Simulation controls
 

@@ -1,0 +1,236 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Top-level booth health: vitals, uptime, call rate.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_cpu_temperature_celsius{booth_id=~\"$booth\"}",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU temperature",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 4 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_load_average{booth_id=~\"$booth\",window=\"1m\"}",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Load average (1 min)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.75 },
+              { "color": "red", "value": 0.9 }
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_memory_used_bytes{booth_id=~\"$booth\"} / booth_memory_total_bytes{booth_id=~\"$booth\"}",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory usage",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green" }] },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_uptime_seconds{booth_id=~\"$booth\"}",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Uptime",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "avg by (booth_id) (booth_cpu_usage_ratio{booth_id=~\"$booth\"})",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU usage (avg across cores)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "Bps" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_network_receive_bytes_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "rx {{iface}} {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(booth_network_transmit_bytes_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "tx {{iface}} {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Network throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_calls_started_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "{{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Calls per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "booth_disk_used_bytes{booth_id=~\"$booth\"} / booth_disk_total_bytes{booth_id=~\"$booth\"}",
+          "legendFormat": "{{mountpoint}} {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Disk usage per mountpoint",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["booth", "overview"],
+  "templating": {
+    "list": [
+      {
+        "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+        "definition": "label_values(booth_uptime_seconds, booth_id)",
+        "label": "Booth",
+        "name": "booth",
+        "options": [],
+        "query": "label_values(booth_uptime_seconds, booth_id)",
+        "refresh": 2,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Booth — Overview",
+  "uid": "booth-overview",
+  "version": 1,
+  "weekStart": ""
+}

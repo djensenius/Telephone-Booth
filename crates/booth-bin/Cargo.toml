@@ -63,16 +63,20 @@ extended-description = "Phone-side software for the Telephone Booth art installa
 section = "sound"
 priority = "optional"
 depends = "tailscale, alsa-utils"
+recommends = "vmagent"
 assets = [
     ["target/release/telephone-booth", "/usr/bin/telephone-booth", "755"],
     ["../../README.md", "/usr/share/doc/telephone-booth/README.md", "644"],
     ["../../packaging/debian/telephone-booth.service", "/lib/systemd/system/telephone-booth.service", "644"],
     ["../../packaging/debian/telephone-booth-tailscale-serve.service", "/lib/systemd/system/telephone-booth-tailscale-serve.service", "644"],
+    ["../../packaging/debian/telephone-booth-vmagent.service", "/lib/systemd/system/telephone-booth-vmagent.service", "644"],
     ["../../packaging/debian/telephone-booth.sysusers", "/usr/lib/sysusers.d/telephone-booth.conf", "644"],
     ["../../packaging/debian/telephone-booth.tmpfiles", "/usr/lib/tmpfiles.d/telephone-booth.conf", "644"],
     ["../../packaging/debian/config.example.toml", "/etc/phone-booth/config.example.toml", "644"],
     ["../../packaging/debian/env.example", "/etc/phone-booth/env", "640"],
+    ["../../packaging/debian/vmagent.env.example", "/etc/phone-booth/vmagent.env", "640"],
+    ["../../packaging/debian/vmagent.yaml", "/etc/phone-booth/vmagent.yaml", "644"],
     ["../../scripts/setup-tailscale-serve.sh", "/usr/share/telephone-booth/setup-tailscale-serve.sh", "755"],
 ]
-conf-files = ["/etc/phone-booth/env"]
+conf-files = ["/etc/phone-booth/env", "/etc/phone-booth/vmagent.env", "/etc/phone-booth/vmagent.yaml"]
 maintainer-scripts = "../../packaging/debian"

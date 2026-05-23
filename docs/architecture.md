@@ -38,14 +38,16 @@ flowchart LR
 
 ## Crates
 
-| Crate          | Responsibility                                                                     |
-| -------------- | ---------------------------------------------------------------------------------- |
-| `booth-hal`    | Trait definitions (`GpioPort`, `AudioSink`, …) + shared types (`AudioRef`, …)       |
-| `booth-core`   | Pure state machine: `fn handle(state, event) -> (state, Vec<Effect>)`               |
-| `booth-mock`   | In-memory HAL adapters for unit tests and host-side runs                            |
-| `booth-pi`     | Pi adapter — `rppal` GPIO, `cpal` audio, `reqwest` HTTP                             |
-| `booth-debug`  | Embedded debug HTTP server (`axum` + `tokio::sync::broadcast` + htmx UI)            |
-| `booth-bin`    | Wires it all together: tokio runtime, config loader, signal handling                |
+| Crate              | Responsibility                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `booth-hal`        | Trait definitions (`GpioPort`, `AudioSink`, …) + shared types (`AudioRef`, `SystemSnapshot`, `CallOutcome`, …) |
+| `booth-core`       | Pure state machine: `fn handle(state, event) -> (state, Vec<Effect>)`                                           |
+| `booth-mock`       | In-memory HAL adapters for unit tests and host-side runs                                                        |
+| `booth-pi`         | Pi adapter — `rppal` GPIO, `cpal` audio, `reqwest` HTTP                                                         |
+| `booth-telemetry`  | In-process broadcast bus for `TelemetryEvent` records (used by `booth-debug`, `booth-metrics`, and the forwarder) |
+| `booth-metrics`    | Periodic `SystemSnapshot` sampler + Prometheus `MetricsHandle` (gauges/counters/histograms) updated from the bus |
+| `booth-debug`      | Embedded debug HTTP server (`axum` + `tokio::sync::broadcast` + htmx UI). Loopback also serves `/metrics`.       |
+| `booth-bin`        | Wires it all together: tokio runtime, config loader, signal handling, session tracker, event forwarder.        |
 
 ## State machine
 
