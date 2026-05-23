@@ -98,13 +98,13 @@ settings:
 | `gpio.debounce_ms`                              | `BOOTH_GPIO_DEBOUNCE_MS`                                                          |
 | `gpio.pull`                                     | `BOOTH_GPIO_PULL` (`up` or `down`)                                                |
 | `gpio.invert.*`                                 | `BOOTH_GPIO_INVERT_HOOK`, `BOOTH_GPIO_INVERT_ROTARY_PULSE`, `BOOTH_GPIO_INVERT_ROTARY_READ` |
-| `observability.enabled`                         | `BOOTH_OBSERVABILITY__ENABLED`                                                    |
-| `observability.booth_id`                        | `BOOTH_OBSERVABILITY__BOOTH_ID`                                                   |
-| `observability.sample_interval_ms`              | `BOOTH_OBSERVABILITY__SAMPLE_INTERVAL_MS`                                         |
-| `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__ENABLED`                                  |
-| `observability.operator_forward.batch_max`      | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__BATCH_MAX`                                |
-| `observability.operator_forward.flush_interval_ms` | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__FLUSH_INTERVAL_MS`                     |
-| `observability.operator_forward.buffer_max`     | `BOOTH_OBSERVABILITY__OPERATOR_FORWARD__BUFFER_MAX`                               |
+| `observability.enabled`                         | `BOOTH_OBSERVABILITY_ENABLED`                                                     |
+| `observability.booth_id`                        | `BOOTH_OBSERVABILITY_BOOTH_ID`                                                    |
+| `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY_FORWARD_ENABLED`                                             |
+
+Other observability settings (`sample_interval_ms`, `batch_max`,
+`flush_interval_ms`, `buffer_max`) are config-file only and have no
+env override.
 
 ## Secret precedence
 
