@@ -4,6 +4,7 @@ members = [
     "crates/booth-core",
     "crates/booth-hal",
     "crates/booth-telemetry",
+    "crates/booth-metrics",
     "crates/booth-mock",
     "crates/booth-debug",
     "crates/booth-pi",
@@ -69,6 +70,13 @@ sha2 = "0.10"
 parking_lot = "0.12"
 subtle = "2.6"
 time = { version = "0.3", features = ["formatting"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Metrics / system stats
+sysinfo = "0.32"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+metrics-util = "0.18"
 
 # Async / runtime (only used by std adapters)
 tokio = { version = "1", features = ["full"] }
