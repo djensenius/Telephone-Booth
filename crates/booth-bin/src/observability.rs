@@ -25,6 +25,7 @@
 //! self-amplifying feedback loop where every forwarded event triggers
 //! more events to forward.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -286,7 +287,8 @@ pub fn spawn_event_forwarder(
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
         let mut tracker = SessionTracker::new();
-        let mut batch: Vec<Value> = Vec::with_capacity(config.operator_forward.batch_max);
+        let mut batch: VecDeque<Value> =
+            VecDeque::with_capacity(config.operator_forward.batch_max);
         let mut dropped: u64 = 0;
         let mut flush = tokio::time::interval(Duration::from_millis(
             config.operator_forward.flush_interval_ms,
@@ -386,13 +388,14 @@ async fn flush_tick(interval: &mut tokio::time::Interval) {
 
 async fn flush_once(
     operator: &Arc<dyn OperatorClient>,
-    batch: &mut Vec<Value>,
+    batch: &mut VecDeque<Value>,
     identity: &RuntimeIdentity,
 ) {
     if batch.is_empty() {
         return;
     }
-    let body = json!({ "events": batch.as_slice() }).to_string();
+    let events: Vec<&Value> = batch.iter().collect();
+    let body = json!({ "events": events }).to_string();
     match operator.push_events_json(&body).await {
         Ok(ack) => {
             debug!(
@@ -417,13 +420,20 @@ async fn flush_once(
     }
 }
 
-fn push_with_cap(batch: &mut Vec<Value>, item: Value, cap: usize, dropped_counter: &mut u64) {
+fn push_with_cap(
+    batch: &mut VecDeque<Value>,
+    item: Value,
+    cap: usize,
+    dropped_counter: &mut u64,
+) {
     if batch.len() >= cap {
-        // Drop the oldest entry so newer events survive.
-        batch.remove(0);
+        // Drop the oldest entry so newer events survive. VecDeque does
+        // this in O(1) which matters when the operator is unreachable
+        // for an extended period and the buffer stays at capacity.
+        batch.pop_front();
         *dropped_counter = dropped_counter.saturating_add(1);
     }
-    batch.push(item);
+    batch.push_back(item);
 }
 
 fn monotonic_ns_of(record: &TelemetryRecord) -> u64 {

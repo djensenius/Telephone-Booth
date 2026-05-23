@@ -15,11 +15,10 @@ workspace = true
 default = ["std"]
 # Enables std-only conveniences (Display impls, std::error::Error, async-trait).
 # Disable for embedded targets to keep the crate strictly no_std + alloc.
-std = ["dep:async-trait", "dep:serde_json"]
+std = ["dep:async-trait"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive", "alloc"] }
-serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true, optional = true }
 heapless = { workspace = true }
