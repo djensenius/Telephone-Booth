@@ -14,7 +14,7 @@ Thanks for hacking on the booth! A few conventions:
 
 Conventional Commits are preferred but not strictly enforced:
 
-```
+```text
 feat(core): allow rotary gate inversion via config
 fix(pi): handle USB-audio device disappearing mid-recording
 docs(authentik): clarify required groups claim path

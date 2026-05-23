@@ -26,11 +26,13 @@ Record and store **FLAC** (16-bit, 48 kHz, mono).
 ## Consequences
 
 **Good:**
+
 - Lossless, no perceptible quality loss for archival.
 - ~50% the size of WAV at our sample rate.
 - One container format from microphone to operator UI.
 
 **Trade-offs:**
+
 - FLAC is bigger than MP3 by ~5×. At 60 s mono / 48 kHz / 16-bit that's
   ~5 MB per recording; budget Azure storage costs accordingly. Lifecycle
   rules in `docs/azure-storage.md` cover this.

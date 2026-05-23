@@ -61,7 +61,7 @@ porting to ESP32/Pico, runbook, ADRs) is in [`docs/`](./docs/README.md).
 
 ## Repository layout
 
-```
+```text
 crates/
 ├── booth-core/   pure state machine, no IO (no_std-friendly)
 ├── booth-hal/    trait-based HAL: GpioPort, AudioSink/Source, OperatorClient, …

@@ -25,6 +25,7 @@ We adopt a strict **hexagonal (ports & adapters) layout**:
 ## Consequences
 
 **Good:**
+
 - Every state transition has a unit test that runs in milliseconds on a
   laptop.
 - Adding a new platform doesn't touch the core or the existing adapters.
@@ -32,6 +33,7 @@ We adopt a strict **hexagonal (ports & adapters) layout**:
   provide.
 
 **Trade-offs:**
+
 - More crates, more `Cargo.toml`s — slight upfront friction.
 - Trait objects (`Box<dyn AudioSink>`) cost a vtable dispatch per call,
   which is irrelevant at our scale but worth knowing.

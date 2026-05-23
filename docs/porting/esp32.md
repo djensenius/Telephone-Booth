@@ -15,7 +15,7 @@ a `booth-esp32` adapter crate would look like.
 
 ## Crate skeleton
 
-```
+```text
 crates/booth-esp32/
 ├── Cargo.toml          esp-hal, embassy, embedded-svc, esp-wifi
 ├── src/
