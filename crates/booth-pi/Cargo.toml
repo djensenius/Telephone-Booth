@@ -1,0 +1,39 @@
+[package]
+name = "booth-pi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Raspberry Pi adapter for the Telephone Booth phone client (rppal GPIO + cpal/ALSA audio + reqwest HTTP)."
+
+[lints]
+workspace = true
+
+[dependencies]
+booth-hal = { path = "../booth-hal" }
+booth-core = { path = "../booth-core" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+heapless = { workspace = true }
+
+# Hardware-only deps are gated behind the `pi` feature so the workspace builds
+# on macOS / x86_64-linux for tests and tooling.
+rppal = { workspace = true, optional = true }
+cpal = { workspace = true, optional = true }
+flacenc = { workspace = true, optional = true }
+claxon = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+symphonia = { workspace = true, optional = true }
+
+[features]
+default = []
+pi = ["dep:rppal", "dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia"]

@@ -1,0 +1,32 @@
+[package]
+name = "booth-debug"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Embedded HTTP/WS debug surface for the Telephone Booth phone client (axum + rust-embed)."
+
+[lints]
+workspace = true
+
+[dependencies]
+booth-hal = { path = "../booth-hal" }
+booth-core = { path = "../booth-core" }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+heapless = { workspace = true }

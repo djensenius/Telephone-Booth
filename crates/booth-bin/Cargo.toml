@@ -1,0 +1,51 @@
+[package]
+name = "booth-bin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "telephone-booth binary: wires HAL adapters to the booth-core state machine and runs the loop."
+default-run = "telephone-booth"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "telephone-booth"
+path = "src/main.rs"
+
+[features]
+default = ["mock"]
+mock = ["dep:booth-mock"]
+pi = ["booth-pi/pi"]
+
+[dependencies]
+booth-core = { path = "../booth-core" }
+booth-hal = { path = "../booth-hal" }
+booth-debug = { path = "../booth-debug" }
+booth-pi = { path = "../booth-pi" }
+booth-mock = { path = "../booth-mock", optional = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+config = { workspace = true }
+directories = { workspace = true }
+
+[package.metadata.deb]
+name = "telephone-booth"
+maintainer = "David Jensenius"
+copyright = "2024-2026, David Jensenius"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Phone-side software for the Telephone Booth art installation. Drives a rotary phone via GPIO and talks to the operator backend."
+section = "sound"
+priority = "optional"
+assets = [
+    ["target/release/telephone-booth", "/usr/bin/", "755"],
+    ["../../README.md", "/usr/share/doc/telephone-booth/README.md", "644"],
+]
+maintainer-scripts = "debian/"

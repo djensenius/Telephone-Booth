@@ -1,0 +1,21 @@
+[package]
+name = "booth-mock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Mock HAL adapters for the Telephone Booth phone client. Used by integration tests and the host dev runtime."
+
+[lints]
+workspace = true
+
+[dependencies]
+booth-hal = { path = "../booth-hal" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

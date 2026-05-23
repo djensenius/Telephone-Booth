@@ -1,0 +1,14 @@
+[tools]
+rust = "1.95.0"
+"cargo:cargo-deny" = "latest"
+"cargo:cargo-audit" = "latest"
+"cargo:cargo-deb" = "latest"
+"cargo:cross" = "latest"
+"cargo:cargo-nextest" = "latest"
+just = "latest"
+lychee = "latest"
+markdownlint-cli2 = "latest"
+
+[env]
+RUST_LOG = "info,booth=debug"
+RUST_BACKTRACE = "1"

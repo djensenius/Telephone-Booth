@@ -1,0 +1,27 @@
+[package]
+name = "booth-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Pure (no_std + alloc) state machine that drives the Telephone Booth phone client."
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["booth-hal/std"]
+
+[dependencies]
+booth-hal = { path = "../booth-hal", default-features = false }
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror = { workspace = true }
+heapless = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }

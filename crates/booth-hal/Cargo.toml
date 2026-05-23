@@ -1,0 +1,24 @@
+[package]
+name = "booth-hal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Hardware Abstraction Layer traits for the Telephone Booth phone client. no_std + alloc."
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+# Enables std-only conveniences (Display impls, std::error::Error, async-trait).
+# Disable for embedded targets to keep the crate strictly no_std + alloc.
+std = ["dep:async-trait"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror = { workspace = true }
+async-trait = { workspace = true, optional = true }
+heapless = { workspace = true }

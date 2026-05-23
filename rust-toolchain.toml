@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned to Rust 1.95.0 per project decision; bump in one place when newer
+# stables ship. CI uses this file as the source of truth for the toolchain.
+channel = "1.95.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"
