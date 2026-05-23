@@ -79,6 +79,9 @@ pub enum GpioError {
     /// The pin stream was lost or the underlying device closed.
     #[error("gpio stream lost: {0}")]
     Stream(Cow<'static, str>),
+    /// GPIO is not available on this platform or build configuration.
+    #[error("gpio unsupported: {0}")]
+    Unsupported(Cow<'static, str>),
 }
 
 /// Object-safe handle that yields debounced edge events for configured pins.

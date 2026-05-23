@@ -10,13 +10,18 @@
 //!
 //! Hardware-only dependencies are gated behind the `pi` Cargo feature so the
 //! crate still type-checks on macOS / x86_64-linux when running the workspace
-//! test suite. The fully-functional adapter modules are filled in by the
-//! parallel agent tasks `rust-pi-gpio`, `rust-pi-audio`, and `rust-pi-client`.
+//! test suite. The GPIO adapter is implemented in [`gpio`]; audio and operator
+//! adapters are filled in by the remaining `rust-pi-*` agent tasks.
 
 #![warn(missing_docs)]
 
 use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
+
+pub mod gpio;
+
+#[cfg(feature = "pi")]
+pub use gpio::PiGpioPort;
 
 pub mod audio;
 
@@ -42,31 +47,72 @@ pub struct PiConfig {
     pub operator: OperatorConfig,
 }
 
-/// BCM pin assignments for the booth.
+/// BCM pin assignments and electrical settings for the booth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpioConfig {
-    /// Rotary pulse pin (physical 11 = BCM 17 by default).
-    #[serde(default = "default_rotary_pulse")]
+    /// Rotary pulse pin (physical 13 = BCM 27 by default).
+    #[serde(default = "default_rotary_pulse", alias = "rotary_pulse_bcm")]
     pub rotary_pulse: u8,
-    /// Rotary "reading" pin (physical 13 = BCM 27 by default).
-    #[serde(default = "default_rotary_read")]
+    /// Rotary "reading" / dialing gate pin (physical 15 = BCM 22 by default).
+    #[serde(
+        default = "default_rotary_read",
+        alias = "rotary_gate",
+        alias = "rotary_gate_bcm",
+        alias = "rotary_read_bcm"
+    )]
     pub rotary_read: u8,
-    /// Hook switch pin (physical 15 = BCM 22 by default).
-    #[serde(default = "default_hook")]
+    /// Hook switch pin (physical 11 = BCM 17 by default).
+    #[serde(default = "default_hook", alias = "hook_bcm")]
     pub hook: u8,
+    /// Internal pull resistor applied to all configured inputs.
+    #[serde(default)]
+    pub pull: GpioPull,
     /// Debounce window applied to all pins.
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
+    /// Optional per-role inversion applied after reading the physical level.
+    #[serde(default)]
+    pub invert: GpioInvertConfig,
+}
+
+/// Internal pull resistor direction for GPIO inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpioPull {
+    /// Enable the Raspberry Pi's internal pull-up resistor.
+    Up,
+    /// Enable the Raspberry Pi's internal pull-down resistor.
+    Down,
+}
+
+impl Default for GpioPull {
+    fn default() -> Self {
+        Self::Up
+    }
+}
+
+/// Per-role GPIO level inversion settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GpioInvertConfig {
+    /// Invert rotary pulse levels.
+    #[serde(default)]
+    pub rotary_pulse: bool,
+    /// Invert rotary read / dialing gate levels.
+    #[serde(default, alias = "rotary_gate")]
+    pub rotary_read: bool,
+    /// Invert hook switch levels.
+    #[serde(default)]
+    pub hook: bool,
 }
 
 fn default_rotary_pulse() -> u8 {
-    17
-}
-fn default_rotary_read() -> u8 {
     27
 }
-fn default_hook() -> u8 {
+fn default_rotary_read() -> u8 {
     22
+}
+fn default_hook() -> u8 {
+    17
 }
 fn default_debounce_ms() -> u64 {
     5
@@ -78,7 +124,9 @@ impl Default for GpioConfig {
             rotary_pulse: default_rotary_pulse(),
             rotary_read: default_rotary_read(),
             hook: default_hook(),
+            pull: GpioPull::default(),
             debounce_ms: default_debounce_ms(),
+            invert: GpioInvertConfig::default(),
         }
     }
 }
@@ -91,6 +139,16 @@ impl GpioConfig {
             PinRole::RotaryPulse => self.rotary_pulse,
             PinRole::RotaryRead => self.rotary_read,
             PinRole::Hook => self.hook,
+        }
+    }
+
+    /// Return whether the physical level for `role` should be inverted.
+    #[must_use]
+    pub fn inverted(&self, role: PinRole) -> bool {
+        match role {
+            PinRole::RotaryPulse => self.invert.rotary_pulse,
+            PinRole::RotaryRead => self.invert.rotary_read,
+            PinRole::Hook => self.invert.hook,
         }
     }
 }
@@ -192,7 +250,7 @@ impl Default for PiConfig {
     }
 }
 
-// NOTE: the concrete `rppal`-backed `GpioPort`, `cpal`-backed
-// `AudioSink` + `AudioSource`, and `reqwest`-backed `OperatorClient`
-// implementations are added by the `rust-pi-*` agent tasks. Each lives in its
-// own submodule (`gpio`, `audio`, `client`) gated behind the `pi` feature.
+// NOTE: the concrete `cpal`-backed `AudioSink` + `AudioSource`, and
+// `reqwest`-backed `OperatorClient` implementations are added by the remaining
+// `rust-pi-*` agent tasks. Each lives in its own submodule (`audio`, `client`)
+// gated behind the `pi` feature.

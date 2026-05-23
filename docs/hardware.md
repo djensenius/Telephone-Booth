@@ -16,8 +16,9 @@ The booth uses three GPIO inputs against ground, debounced in software:
 
 Ground is physical pin 9 (any GND pin on the header works).
 
-All three inputs are configured with the Pi's internal pull-up resistor and
-read **active-low** (closed = 0). The state machine treats:
+All three inputs are configured with the Pi's internal pull-up resistor by default
+(`rppal` `PullUp`, overridable to `PullDown`) and read **active-low** when wired
+as contacts to ground (closed = 0). The state machine treats:
 
 - Hook switch closed → `HookOn`; open → `HookOff`.
 - Rotary "dialing" gate **closed** while the user spins the dial; on the
@@ -27,7 +28,9 @@ read **active-low** (closed = 0). The state machine treats:
   emitted as `RotaryPulse` after a 5 ms debounce.
 
 If your phone wiring is reversed, set `gpio.invert.<role> = true` in the
-config file — see [`configuration.md`](configuration.md).
+config file — see [`configuration.md`](configuration.md). The ignored
+`booth-pi` loopback test documents a hardware smoke test using an output pin
+wired to one of these inputs.
 
 ### Pin mapping defaults
 
