@@ -400,6 +400,81 @@ impl SimulatorState {
                     style: Style::default().fg(Color::DarkGray),
                 });
             }
+            TelemetryEvent::SystemSample { .. } => {
+                // The simulator does not currently render the live system
+                // panel; the operator UI is the authoritative surface.
+            }
+            TelemetryEvent::CallStarted { session_id, .. } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("call started (session={session_id})"),
+                    style: Style::default().fg(Color::Green),
+                });
+            }
+            TelemetryEvent::CallEnded {
+                session_id,
+                outcome,
+                ..
+            } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("call ended ({outcome}, session={session_id})"),
+                    style: Style::default().fg(Color::Green),
+                });
+            }
+            TelemetryEvent::RecordingStarted { id, session_id, .. } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("recording started id={id} session={session_id}"),
+                    style: Style::default().fg(Color::Magenta),
+                });
+            }
+            TelemetryEvent::RecordingStopped {
+                id,
+                duration_ms,
+                bytes,
+                ..
+            } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!(
+                        "recording stopped id={id} duration={duration_ms}ms bytes={bytes}"
+                    ),
+                    style: Style::default().fg(Color::Magenta),
+                });
+            }
+            TelemetryEvent::UploadStarted { recording_id, .. } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("upload started recording={recording_id}"),
+                    style: Style::default().fg(Color::Blue),
+                });
+            }
+            TelemetryEvent::UploadCompleted {
+                recording_id,
+                duration_ms,
+                bytes,
+                ..
+            } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!(
+                        "upload completed recording={recording_id} duration={duration_ms}ms bytes={bytes}"
+                    ),
+                    style: Style::default().fg(Color::Blue),
+                });
+            }
+            TelemetryEvent::UploadFailed {
+                recording_id,
+                message,
+                ..
+            } => {
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("upload failed recording={recording_id}: {message}"),
+                    style: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                });
+            }
         }
         self.booth_status = derive_booth_status(&self.current_state).to_string();
         while self.history.len() > EVENT_HISTORY {

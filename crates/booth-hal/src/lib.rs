@@ -368,6 +368,239 @@ pub enum StorageError {
 }
 
 // ---------------------------------------------------------------------------
+// System snapshot
+// ---------------------------------------------------------------------------
+
+/// Live host-vitals snapshot collected periodically by the booth.
+///
+/// Every field is optional so adapters that cannot read a given metric (for
+/// example macOS reading the Pi's `thermal_zone0`) can leave it `None`
+/// without breaking the wire format. The snapshot is produced by
+/// `booth-metrics` and consumed by the debug surface (`/v1/system`), the
+/// operator API (`PUT /v1/system`), and the operator UI's Live System
+/// panel.
+///
+/// New fields can be added over time without breaking older clients
+/// because everything is optional and serde uses field names.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemSnapshot {
+    /// CPU utilization and load averages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuStats>,
+    /// CPU temperature in degrees Celsius (Pi `thermal_zone0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_celsius: Option<f32>,
+    /// Memory in use vs total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryStats>,
+    /// Per-mountpoint disk usage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disks: Vec<DiskStats>,
+    /// Per-interface network counters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub networks: Vec<NetworkStats>,
+    /// Host uptime in seconds since boot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+    /// Stats for the booth process itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessStats>,
+    /// Currently-selected audio devices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioDeviceStats>,
+    /// Tailscale link summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleStats>,
+    /// Pi throttling / undervoltage flags (`vcgencmd get_throttled`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throttling: Option<ThrottlingFlags>,
+}
+
+/// CPU utilization plus load averages.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuStats {
+    /// Overall usage ratio in `[0.0, 1.0]` (averaged across cores).
+    pub usage_ratio: f32,
+    /// Per-core usage ratios in `[0.0, 1.0]`, ordered by core index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_core_usage_ratio: Vec<f32>,
+    /// Number of physical cores reported by the OS.
+    pub physical_cores: u16,
+    /// 1-minute load average.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_1m: Option<f32>,
+    /// 5-minute load average.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_5m: Option<f32>,
+    /// 15-minute load average.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_15m: Option<f32>,
+}
+
+/// Memory usage in bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStats {
+    /// Total physical memory.
+    pub total_bytes: u64,
+    /// Memory currently in use (non-cache).
+    pub used_bytes: u64,
+    /// Total swap space.
+    pub swap_total_bytes: u64,
+    /// Swap currently in use.
+    pub swap_used_bytes: u64,
+}
+
+/// One mounted filesystem's usage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskStats {
+    /// Mountpoint path, e.g. `/`.
+    pub mount_point: String,
+    /// Filesystem type (e.g. `ext4`, `apfs`).
+    pub filesystem: String,
+    /// Total filesystem size in bytes.
+    pub total_bytes: u64,
+    /// Bytes currently free.
+    pub available_bytes: u64,
+}
+
+/// One network interface's cumulative byte counters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkStats {
+    /// Interface name (`eth0`, `wlan0`, `en0`, ...).
+    pub interface: String,
+    /// Cumulative received bytes since boot.
+    pub receive_bytes_total: u64,
+    /// Cumulative transmitted bytes since boot.
+    pub transmit_bytes_total: u64,
+}
+
+/// Stats for the booth process itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessStats {
+    /// Resident-set-size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resident_bytes: Option<u64>,
+    /// Virtual memory in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub virtual_bytes: Option<u64>,
+    /// Open file descriptor count, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_fds: Option<u32>,
+    /// Thread count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<u32>,
+    /// Process uptime in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+}
+
+/// Currently-selected audio devices, when known.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDeviceStats {
+    /// Input device name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_device: Option<String>,
+    /// Output device name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_device: Option<String>,
+    /// Configured sample rate, Hz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate_hz: Option<u32>,
+}
+
+/// Summary of the booth's Tailscale link.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TailscaleStats {
+    /// True when the daemon reports `BackendState: Running`.
+    pub connected: bool,
+    /// Number of peers, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_count: Option<u32>,
+    /// Tailnet hostname this booth advertises, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    /// Currently-used exit node hostname, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_node: Option<String>,
+}
+
+/// Raspberry Pi throttling / undervoltage flags from `vcgencmd get_throttled`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThrottlingFlags {
+    /// Currently undervoltage.
+    pub undervoltage: bool,
+    /// Currently in arm-frequency-capped state.
+    pub arm_freq_capped: bool,
+    /// Currently being thermal-throttled.
+    pub throttled: bool,
+    /// Soft temperature limit currently active.
+    pub soft_temp_limit: bool,
+    /// Undervoltage occurred since boot.
+    pub undervoltage_occurred: bool,
+    /// Throttling occurred since boot.
+    pub throttled_occurred: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Call outcome
+// ---------------------------------------------------------------------------
+
+/// Terminal outcome of one pickup-to-hangup call session.
+///
+/// Determined by `booth-bin`'s session tracker at hangup time. The set is
+/// closed: every call ends in exactly one of these states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallOutcome {
+    /// Caller hung up while in dial tone / dialing, before any digit was
+    /// fully decoded.
+    HungUpBeforeDial,
+    /// Caller hung up while a prompt (question, message, instructions) was
+    /// playing.
+    HungUpDuringPrompt,
+    /// Caller hung up while recording their answer.
+    HungUpDuringRecording,
+    /// Caller hung up while the recording was uploading.
+    HungUpDuringUpload,
+    /// Recording was made and uploaded successfully.
+    RecordingCompleted,
+    /// Recording failed on the booth side (audio I/O, codec, ...).
+    RecordingFailed,
+    /// Upload to the operator failed terminally.
+    UploadFailed,
+    /// Pre-prompt operator interaction (e.g. fetching a random question)
+    /// failed and the call was aborted.
+    OperatorError,
+    /// Any other terminal path not covered above.
+    Aborted,
+}
+
+impl fmt::Display for CallOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HungUpBeforeDial => f.write_str("hung_up_before_dial"),
+            Self::HungUpDuringPrompt => f.write_str("hung_up_during_prompt"),
+            Self::HungUpDuringRecording => f.write_str("hung_up_during_recording"),
+            Self::HungUpDuringUpload => f.write_str("hung_up_during_upload"),
+            Self::RecordingCompleted => f.write_str("recording_completed"),
+            Self::RecordingFailed => f.write_str("recording_failed"),
+            Self::UploadFailed => f.write_str("upload_failed"),
+            Self::OperatorError => f.write_str("operator_error"),
+            Self::Aborted => f.write_str("aborted"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Telemetry bus
 // ---------------------------------------------------------------------------
 
@@ -442,6 +675,85 @@ pub enum TelemetryEvent {
         source: String,
         /// Display-formatted error.
         message: String,
+    },
+    /// Live host-vitals snapshot, emitted periodically by `booth-metrics`.
+    SystemSample {
+        /// Captured system snapshot. Boxed to keep the enum small.
+        snapshot: Box<SystemSnapshot>,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// A call session started: receiver went off hook.
+    CallStarted {
+        /// UUIDv4 minted by the runtime for this pickup-to-hangup cycle.
+        session_id: String,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// A call session ended: receiver went back on hook (or otherwise
+    /// terminated). Exactly one `CallEnded` is emitted per `CallStarted`.
+    CallEnded {
+        /// Matching session id from the preceding `CallStarted`.
+        session_id: String,
+        /// Terminal outcome of the call.
+        outcome: CallOutcome,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// Recording of the caller's answer began.
+    RecordingStarted {
+        /// Adapter-assigned id for this recording.
+        id: RecordingId,
+        /// Session this recording belongs to.
+        session_id: String,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// Recording of the caller's answer finished.
+    RecordingStopped {
+        /// Adapter-assigned id for this recording.
+        id: RecordingId,
+        /// Session this recording belongs to.
+        session_id: String,
+        /// Recording length, milliseconds.
+        duration_ms: u64,
+        /// Recording file size, bytes.
+        bytes: u64,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// Upload to the operator started.
+    UploadStarted {
+        /// Recording being uploaded.
+        recording_id: RecordingId,
+        /// Session this upload belongs to.
+        session_id: String,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// Upload to the operator completed successfully.
+    UploadCompleted {
+        /// Recording that was uploaded.
+        recording_id: RecordingId,
+        /// Session this upload belongs to.
+        session_id: String,
+        /// Time spent uploading, milliseconds.
+        duration_ms: u64,
+        /// Bytes uploaded.
+        bytes: u64,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
+    /// Upload to the operator failed terminally.
+    UploadFailed {
+        /// Recording that was being uploaded.
+        recording_id: RecordingId,
+        /// Session this upload belongs to.
+        session_id: String,
+        /// Display-formatted error.
+        message: String,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
     },
 }
 

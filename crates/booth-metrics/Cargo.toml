@@ -1,0 +1,37 @@
+[package]
+name = "booth-metrics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Host-vitals sampler and Prometheus metrics registry for the Telephone Booth phone client."
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "system"]
+# Marker feature; the crate is std-only today but the feature exists so
+# downstream crates can opt in explicitly the same way they do for
+# `booth-hal`.
+std = []
+# Enables sysinfo-backed sampling. With the feature disabled the crate
+# still compiles but `SystemSampler::sample_once` returns an empty
+# snapshot. Useful for embedded targets that have no procfs.
+system = ["dep:sysinfo"]
+
+[dependencies]
+booth-hal = { path = "../booth-hal" }
+booth-telemetry = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+parking_lot = { workspace = true }
+sysinfo = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "test-util"] }
