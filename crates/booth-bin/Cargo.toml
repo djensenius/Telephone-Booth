@@ -25,12 +25,13 @@ pi = ["booth-pi/pi"]
 systemd = []
 # Interactive `--simulator` TUI. Requires `mock` (for MockGpioPort) and pulls
 # in ratatui + crossterm.
-simulator = ["mock", "dep:ratatui", "dep:crossterm", "dep:futures-util", "dep:tracing-appender", "dep:time"]
+simulator = ["mock", "dep:ratatui", "dep:crossterm", "dep:futures-util", "dep:tracing-appender"]
 
 [dependencies]
 booth-core = { path = "../booth-core" }
 booth-hal = { path = "../booth-hal" }
 booth-debug = { path = "../booth-debug" }
+booth-metrics = { path = "../booth-metrics" }
 booth-telemetry = { workspace = true }
 booth-pi = { path = "../booth-pi" }
 booth-mock = { path = "../booth-mock", optional = true }
@@ -46,10 +47,12 @@ toml = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 directories = { workspace = true }
+parking_lot = { workspace = true }
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", features = ["event-stream"], optional = true }
 futures-util = { workspace = true, optional = true }
-time = { workspace = true, optional = true }
+time = { workspace = true, features = ["formatting"] }
+uuid = { workspace = true }
 
 [package.metadata.deb]
 name = "telephone-booth"

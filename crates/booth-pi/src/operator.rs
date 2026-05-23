@@ -21,8 +21,8 @@ use std::path::Path;
 use crate::{OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
-    BoothStatus, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion, QuestionId,
-    UploadSlot,
+    BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion,
+    QuestionId, SystemSnapshot, UploadSlot,
 };
 
 #[cfg(feature = "operator")]
@@ -413,6 +413,63 @@ impl OperatorClient for PiOperatorClient {
 
     async fn put_status(&self, status: BoothStatus) -> Result<(), OperatorError> {
         self.put_status_ref(&status).await
+    }
+
+    async fn push_events_json(&self, body: &str) -> Result<EventBatchAck, OperatorError> {
+        #[cfg(feature = "operator")]
+        {
+            let url = self.api_url_for_path("/v1/events");
+            debug!(path = "/v1/events", "operator request (bulk events)");
+            let response = self
+                .client
+                .request(reqwest::Method::POST, &url)
+                .header(CONTENT_TYPE, HeaderValue::from_static(JSON_CONTENT_TYPE))
+                .body(body.to_owned())
+                .send()
+                .await
+                .map_err(operator_transport)?;
+            let status = response.status();
+            debug!(status = status.as_u16(), "operator response (bulk events)");
+            if !status.is_success() {
+                return Err(map_operator_response(status.as_u16(), response).await);
+            }
+            response.json::<EventBatchAck>().await.map_err(|err| {
+                OperatorError::Protocol(
+                    format!("failed to decode /v1/events response: {err}").into(),
+                )
+            })
+        }
+
+        #[cfg(not(feature = "operator"))]
+        {
+            let _ = body;
+            unsupported()
+        }
+    }
+
+    async fn put_system_snapshot(
+        &self,
+        booth_id: &str,
+        snapshot: &SystemSnapshot,
+    ) -> Result<(), OperatorError> {
+        #[cfg(feature = "operator")]
+        {
+            #[derive(Serialize)]
+            struct Body<'a> {
+                #[serde(rename = "boothId")]
+                booth_id: &'a str,
+                snapshot: &'a SystemSnapshot,
+            }
+            let body = Body { booth_id, snapshot };
+            self.send_empty(reqwest::Method::PUT, "/v1/system", Some(&body))
+                .await
+        }
+
+        #[cfg(not(feature = "operator"))]
+        {
+            let _ = (booth_id, snapshot);
+            unsupported()
+        }
     }
 }
 
