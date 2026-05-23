@@ -10,7 +10,7 @@
 //! histogram (`booth_calls_total{outcome=…}`, `booth_digits_dialed_total{digit=…}`,
 //! `booth_recording_duration_seconds`, …).
 //!
-//! In this PR the crate is freestanding: nothing in [`booth_bin`] calls
+//! In this PR the crate is freestanding: nothing in `booth-bin` calls
 //! into it yet. The follow-up PR (`tb-runtime`) wires
 //! [`spawn_system_sampler`] and [`spawn_telemetry_consumer`] into the
 //! runtime task set and adds the `/v1/system` debug route. A later PR
@@ -549,7 +549,12 @@ fn monotonic_ns_since(start: std::time::Instant) -> u64 {
 fn read_cpu_temp_celsius() -> Option<f32> {
     let raw = std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").ok()?;
     let millis: i32 = raw.trim().parse().ok()?;
-    Some(millis as f32 / 1000.0)
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "thermal_zone values are well below f32 mantissa precision"
+    )]
+    let celsius = millis as f32 / 1000.0;
+    Some(celsius)
 }
 
 #[cfg(not(target_os = "linux"))]
