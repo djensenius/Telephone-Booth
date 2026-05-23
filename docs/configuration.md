@@ -2,13 +2,14 @@
 
 The client merges config from three sources, in this order (later wins):
 
-1. **Defaults** baked into `booth-pi::PiConfig::default()`.
-2. **`/etc/phone-booth/config.toml`** (installed by the `.deb`).
-3. **Environment variables** prefixed with `PHONE_BOOTH_`
-   (e.g. `PHONE_BOOTH_OPERATOR_TOKEN`).
+1. **Defaults** baked into `booth-pi::PiConfig::default()` plus runtime/debug defaults.
+2. **`/etc/phone-booth/config.toml`** (installed by the `.deb`), falling back to
+   `./config.toml` for host development when the production file is absent.
+3. **Environment variables** prefixed with `BOOTH_`
+   (for example `BOOTH_OPERATOR_TOKEN`).
 
-Run `telephone-booth --print-config` at any time to dump the effective
-merged config with secrets redacted to the last 4 characters.
+Run `telephone-booth print-config` at any time to dump the effective merged
+config as TOML with secrets redacted to the last 4 characters.
 
 ## Full example
 
@@ -60,24 +61,29 @@ journal_level = "info"        # tracing filter
 
 ## Environment variables
 
-Every key in the file can be overridden via env. Nested keys use `__` as a
-separator (so they survive shells that disallow dots in names):
+The runtime currently supports explicit overrides for deployment-sensitive
+settings:
 
-| File key                 | Env override                          |
-| ------------------------ | ------------------------------------- |
-| `gpio.hook_bcm`          | `PHONE_BOOTH_GPIO__HOOK_BCM`          |
-| `audio.device_substring` | `PHONE_BOOTH_AUDIO__DEVICE_SUBSTRING` |
-| `operator.token`         | `PHONE_BOOTH_OPERATOR__TOKEN`         |
-| `debug.allow_controls`   | `PHONE_BOOTH_DEBUG__ALLOW_CONTROLS`   |
+| File key / setting       | Env override                                                                      |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `operator.base_url`      | `BOOTH_OPERATOR_BASE_URL`                                                         |
+| `operator.token`         | `BOOTH_OPERATOR_TOKEN` or `BOOTH_OPERATOR_TOKEN_FILE`                             |
+| debug bearer token       | `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`                                   |
+| `audio.device_substring` | `BOOTH_AUDIO_DEVICE`                                                              |
+| `gpio.hook`              | `BOOTH_GPIO_HOOK` or `BOOTH_GPIO_HOOK_BCM`                                        |
+| `gpio.rotary_pulse`      | `BOOTH_GPIO_ROTARY_PULSE` or `BOOTH_GPIO_ROTARY_PULSE_BCM`                        |
+| `gpio.rotary_read`       | `BOOTH_GPIO_ROTARY_READ`, `BOOTH_GPIO_ROTARY_READ_BCM`, or `BOOTH_GPIO_ROTARY_GATE_BCM` |
+| `gpio.debounce_ms`       | `BOOTH_GPIO_DEBOUNCE_MS`                                                          |
+| `gpio.pull`              | `BOOTH_GPIO_PULL` (`up` or `down`)                                                |
+| `gpio.invert.*`          | `BOOTH_GPIO_INVERT_HOOK`, `BOOTH_GPIO_INVERT_ROTARY_PULSE`, `BOOTH_GPIO_INVERT_ROTARY_READ` |
 
 ## Secret precedence
 
 Two secrets are never written to the journal:
 
 - `operator.token` — phone-client API token.
-- `debug.token` — Bearer for the local debug surface.
+- debug bearer token — supplied via `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
 
-Both can be supplied via either the file or the env. On first run, if
-`debug.token_file` does not exist, the runtime generates a fresh 256-bit
-token, writes it `0600` to the file, and prints it once to the journal so
-you can copy it.
+For secrets, the direct env var wins over its `*_FILE` partner. File values are
+trimmed for trailing newlines so they work with systemd credentials and
+Kubernetes-style secret mounts.

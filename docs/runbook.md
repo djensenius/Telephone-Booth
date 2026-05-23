@@ -1,5 +1,19 @@
 # Runbook (day-2 ops)
 
+## Runtime CLI
+
+```sh
+telephone-booth run [--config /etc/phone-booth/config.toml] [--mock]
+telephone-booth print-config [--config /etc/phone-booth/config.toml]
+telephone-booth check [--config /etc/phone-booth/config.toml]
+telephone-booth simulate <pulses>
+```
+
+- `run` starts the service. Exit code `0` means clean shutdown; nonzero means config, adapter, or runtime startup failed.
+- `print-config` renders effective TOML with tokens redacted.
+- `check` is intended for `ExecStartPre`; it exits nonzero if config validation, audio probing, or GPIO reservation fails.
+- `simulate` is a host-side diagnostic and exits nonzero only for invalid CLI input.
+
 ## Rotating the operator API token
 
 1. Operator UI → Settings → API tokens → **Create** (label `booth-1-rotated-yyyy-mm-dd`).

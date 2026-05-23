@@ -20,19 +20,23 @@ path = "src/main.rs"
 default = ["mock"]
 mock = ["dep:booth-mock"]
 pi = ["booth-pi/pi"]
+systemd = []
 
 [dependencies]
 booth-core = { path = "../booth-core" }
 booth-hal = { path = "../booth-hal" }
 booth-debug = { path = "../booth-debug" }
+booth-telemetry = { workspace = true }
 booth-pi = { path = "../booth-pi" }
 booth-mock = { path = "../booth-mock", optional = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
+clap = { workspace = true }
 config = { workspace = true }
 directories = { workspace = true }
 
