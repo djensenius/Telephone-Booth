@@ -1,0 +1,36 @@
+[gpio]
+hook_bcm = 17
+rotary_pulse_bcm = 27
+rotary_gate_bcm = 22
+pull = "up"
+debounce_ms = 5
+invert.hook = false
+invert.rotary_pulse = false
+invert.rotary_gate = false
+
+[audio]
+device_substring = "Focusrite"
+sample_rate_hz = 48000
+channels = 1
+max_recording_secs = 60
+recordings_dir = "/var/lib/phone-booth/recordings"
+
+[operator]
+base_url = "https://operator.example.com"
+token = "replace-with-operator-token"
+status_topic = "booth-1"
+http_timeout_secs = 10
+ws_reconnect_initial_ms = 500
+ws_reconnect_max_ms = 30000
+
+[debug]
+tailscale_enabled = true
+lan_enabled = true
+lan_bind = "0.0.0.0:8443"
+loopback_bind = "127.0.0.1:8080"
+allow_controls = false
+ring_buffer_capacity = 4096
+loopback_skip_auth = false
+
+[telemetry]
+journal_level = "info"

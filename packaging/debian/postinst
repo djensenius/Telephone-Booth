@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if command -v systemd-sysusers >/dev/null 2>&1; then
+    systemd-sysusers /usr/lib/sysusers.d/telephone-booth.conf
+fi
+
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/telephone-booth.conf
+fi
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable telephone-booth.service telephone-booth-tailscale-serve.service
+    systemctl restart telephone-booth.service || true
+    systemctl start telephone-booth-tailscale-serve.service || true
+fi
+
+exit 0

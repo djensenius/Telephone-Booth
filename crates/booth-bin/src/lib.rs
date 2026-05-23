@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
-use booth_debug::{DebugConfig, RuntimeCommand};
+use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioPort, OperatorClient,
     OperatorError, PinRole, RecordingId, Storage, StorageError, TelemetryEvent,
@@ -336,7 +336,10 @@ async fn run_runtime(
     ));
 
     let debug_task = if options.start_debug {
-        let debug_config = config.debug.clone();
+        let mut debug_config = config.debug.clone();
+        if let Some(token) = config.debug_token.clone() {
+            debug_config.token = Some(DebugToken(token));
+        }
         let debug_bus = bus.clone();
         let debug_cmd_tx = cmd_tx.clone();
         Some(tokio::spawn(async move {

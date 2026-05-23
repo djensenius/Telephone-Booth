@@ -11,7 +11,7 @@ fn audio_config_defaults_match_hardware_docs() {
     assert_eq!(config.sample_rate_hz, 48_000);
     assert_eq!(config.channels, 1);
     assert_eq!(config.max_recording_secs, 60);
-    assert_eq!(config.recordings_dir, "/var/lib/telephone-booth/recordings");
+    assert_eq!(config.recordings_dir, "/var/lib/phone-booth/recordings");
 }
 
 #[test]

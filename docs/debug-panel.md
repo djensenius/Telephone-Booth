@@ -33,9 +33,9 @@ For WebSocket, the operator UI passes the token in the
 `Sec-WebSocket-Protocol: bearer.<token>` subprotocol header so it isn't
 logged in URLs.
 
-The token is stored at `/etc/phone-booth/debug-token` (mode `0600`),
-generated automatically on first run. To rotate it: delete the file and
-restart the service.
+The packaged service reads the token from `BOOTH_DEBUG_TOKEN` in
+`/etc/phone-booth/env`. To rotate it, edit that value, restart
+`telephone-booth.service`, and update the operator UI.
 
 ## Endpoints
 

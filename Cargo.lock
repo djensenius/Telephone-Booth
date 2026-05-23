@@ -293,6 +293,7 @@ dependencies = [
  "config",
  "directories",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tracing",

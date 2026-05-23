@@ -3,9 +3,9 @@
 #![warn(missing_docs)]
 
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use booth_bin::{
     DEFAULT_CONFIG_PATH, RuntimeOptions, build_pi_adapters, check_runtime, load_config,
     render_config_toml, simulate_pulses, spawn_runtime,
@@ -52,6 +52,8 @@ enum Command {
         /// Number of rotary pulses to inject before the timeout tick.
         pulses: u8,
     },
+    /// Print Tailscale MagicDNS, serve config, and health status.
+    TailscaleStatus,
 }
 
 #[tokio::main]
@@ -88,7 +90,108 @@ async fn run_cli() -> Result<()> {
             }
             Ok(())
         }
+        Command::TailscaleStatus => print_tailscale_status(),
     }
+}
+
+fn print_tailscale_status() -> Result<()> {
+    let output = ProcessCommand::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .context("run tailscale status --json")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("tailscale status --json failed: {}", stderr.trim());
+    }
+
+    let status: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse tailscale status JSON")?;
+    let magicdnsname = magic_dns_name(&status).unwrap_or_else(|| "<unknown>".to_string());
+
+    println!("magicdnsname: {magicdnsname}");
+    if magicdnsname == "<unknown>" {
+        println!("url: <unknown>");
+    } else {
+        println!("url: https://{magicdnsname}");
+    }
+
+    println!("health:");
+    print_health(status.get("Health"))?;
+
+    println!("serve_config:");
+    let serve_config = if let Some(value) = status
+        .get("ServeConfig")
+        .or_else(|| status.get("serve_config"))
+        .or_else(|| status.get("Serve"))
+    {
+        Some(value.clone())
+    } else {
+        load_tailscale_serve_config()?
+    };
+    print_json_block(serve_config.as_ref())?;
+
+    Ok(())
+}
+
+fn load_tailscale_serve_config() -> Result<Option<serde_json::Value>> {
+    let output = ProcessCommand::new("tailscale")
+        .args(["serve", "status", "--json"])
+        .output()
+        .context("run tailscale serve status --json")?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(None);
+    }
+    let status =
+        serde_json::from_slice(&output.stdout).context("parse tailscale serve status JSON")?;
+    Ok(Some(status))
+}
+
+fn magic_dns_name(status: &serde_json::Value) -> Option<String> {
+    let value = status
+        .pointer("/Self/DNSName")
+        .or_else(|| status.get("MagicDNSName"))
+        .or_else(|| status.get("magicdnsname"))
+        .or_else(|| status.get("DNSName"))?;
+    let name = value.as_str()?.trim().trim_end_matches('.');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn print_health(value: Option<&serde_json::Value>) -> Result<()> {
+    match value {
+        Some(serde_json::Value::Array(items)) if items.is_empty() => println!("  ok"),
+        Some(serde_json::Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    println!("  - {text}");
+                } else {
+                    print_json_block(Some(item))?;
+                }
+            }
+        }
+        Some(serde_json::Value::Null) | None => println!("  <none reported>"),
+        Some(value) => print_json_block(Some(value))?,
+    }
+    Ok(())
+}
+
+fn print_json_block(value: Option<&serde_json::Value>) -> Result<()> {
+    let Some(value) = value else {
+        println!("  <none>");
+        return Ok(());
+    };
+    if value.is_null() {
+        println!("  <none>");
+        return Ok(());
+    }
+    let rendered = serde_json::to_string_pretty(value).context("render tailscale status JSON")?;
+    for line in rendered.lines() {
+        println!("  {line}");
+    }
+    Ok(())
 }
 
 async fn run(config: booth_bin::RuntimeConfig, mock: bool) -> Result<()> {

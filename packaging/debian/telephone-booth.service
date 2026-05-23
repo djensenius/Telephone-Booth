@@ -1,0 +1,27 @@
+[Unit]
+Description=Telephone Booth phone client runtime
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=phonebooth
+Group=audio
+SupplementaryGroups=gpio dialout
+ExecStartPre=/usr/bin/telephone-booth check
+ExecStart=/usr/bin/telephone-booth run
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+EnvironmentFile=/etc/phone-booth/env
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/phone-booth /var/log/phone-booth
+CapabilityBoundingSet=
+NoNewPrivileges=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

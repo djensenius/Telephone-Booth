@@ -200,7 +200,7 @@ fn default_max_recording_secs() -> u32 {
     60
 }
 fn default_recordings_dir() -> String {
-    "/var/lib/telephone-booth/recordings".to_string()
+    "/var/lib/phone-booth/recordings".to_string()
 }
 
 impl Default for AudioConfig {

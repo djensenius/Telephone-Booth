@@ -77,7 +77,7 @@ telemetry bus roughly every 50 ms.
 
 All recordings are **FLAC** (lossless, mono, 48 kHz) — see
 [ADR 0003](adr/0003-flac-as-recording-format.md). Files are stored at
-`/var/lib/telephone-booth/recordings/<sha256>.flac` and uploaded to Azure
+`/var/lib/phone-booth/recordings/<sha256>.flac` and uploaded to Azure
 Blob Storage via a presigned SAS URL.
 
 ## Power & boot

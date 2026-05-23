@@ -1,72 +1,80 @@
 # LAN fallback (self-signed TLS + fingerprint pinning)
 
-If Tailscale isn't available — you're on the same Wi-Fi as the booth, the
-tailnet is down, or you're debugging from a guest browser — you can reach
-the debug panel directly on the LAN.
+Use LAN fallback when Tailscale is unavailable, the node is expired, or an
+operator is standing on the same Wi-Fi as the booth. The preferred path is
+still [Tailscale serve](tailscale.md), which gives a real Let's Encrypt
+certificate; LAN fallback uses a self-signed certificate and explicit
+fingerprint pinning.
 
 ## How it works
 
-On first boot, `booth-debug` generates a self-signed X.509 cert via
-[`rcgen`](https://crates.io/crates/rcgen), writes it to disk, and pins the
-SHA-256 fingerprint to `/etc/phone-booth/debug-cert.fingerprint`. The
-binary then listens on `0.0.0.0:8443` (configurable) for TLS connections
-that present a Bearer debug token.
+`booth-debug` listens on `0.0.0.0:8443` for the LAN path and requires the
+same Bearer debug token as the Tailscale path. Because the certificate is
+self-signed, trust comes from comparing the SHA-256 certificate
+fingerprint over an out-of-band channel, not from a public CA chain.
 
-You verify the cert **by fingerprint**, not by CA chain. The operator UI's
-Debug tab stores the fingerprint on first successful connect and refuses
-to talk to a booth whose cert has changed.
+## Reading the fingerprint
 
-## Finding the fingerprint
-
-On the Pi:
+From a trusted shell on the Pi, ask the local loopback API for the active
+certificate fingerprint:
 
 ```sh
-sudo cat /etc/phone-booth/debug-cert.fingerprint
-# e.g.  3a:6d:0f:…:c4:91
+curl -fsS \
+  -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
+  http://127.0.0.1:8080/v1/cert/fingerprint
 ```
 
-Also printed to the systemd journal at every startup:
+You can also read it through the Tailscale URL while Tailscale is healthy:
 
 ```sh
-journalctl -u telephone-booth -g 'cert fingerprint'
+curl -fsS \
+  -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
+  https://phone-booth.<your-tailnet>.ts.net/v1/cert/fingerprint
 ```
 
-## Pinning in the operator UI
+Record the `sha256` value before pinning a LAN connection.
 
-1. Settings → Debug → **Add a booth**.
-2. Paste the booth's LAN URL: `https://192.168.1.42:8443`.
-3. Paste the Bearer debug token (from `/etc/phone-booth/debug-token`).
-4. On first connect the UI shows the cert fingerprint and asks you to
-   confirm it matches the one from the Pi. Confirm → it's stored.
-5. If the booth's cert ever rotates, the UI will refuse to connect and
-   ask you to re-pin.
+## Pinning with `CertFingerprintCard`
+
+The operator UI's Debug settings include `CertFingerprintCard`, which is
+responsible for showing and storing the pinned LAN certificate
+fingerprint.
+
+1. Open **Settings → Debug** and add or edit the booth.
+2. Set the LAN URL, for example `https://192.168.1.42:8443`.
+3. Paste the current debug Bearer token from `/etc/phone-booth/env`
+   (`BOOTH_DEBUG_TOKEN`).
+4. Connect once. `CertFingerprintCard` displays the presented SHA-256
+   fingerprint.
+5. Compare it to the trusted value collected from the Pi. If it matches,
+   click **Pin fingerprint**.
+6. Future LAN connections must present the same fingerprint. If it
+   changes unexpectedly, the card blocks the connection until an operator
+   verifies and re-pins it.
 
 ## Direct browser access
 
-Browsers won't trust the self-signed cert, so you'll get a warning page
-the first time. After the warning, the panel works normally.
+Browsers will warn because the LAN certificate is self-signed. That is
+expected. Prefer the operator UI because it pins the fingerprint; only
+bypass browser warnings for short local diagnostics.
 
-To skip the warning, **install the booth's cert** as a trusted root on the
-machine doing the debugging:
+## Rotating the LAN certificate
 
-```sh
-scp pi@booth-1.local:/etc/phone-booth/debug-cert.pem .
-# macOS:  add to Keychain → System → mark "Always trust"
-# Linux:  copy into /usr/local/share/ca-certificates/, run update-ca-certificates
-```
-
-## Rotating the cert
+Restarting the booth may generate a new self-signed certificate depending
+on the deployed debug-surface configuration. After any intentional
+rotation:
 
 ```sh
-sudo rm /etc/phone-booth/debug-cert.{pem,key}.pem /etc/phone-booth/debug-cert.fingerprint
-sudo systemctl restart telephone-booth
-sudo cat /etc/phone-booth/debug-cert.fingerprint   # new fingerprint
+sudo systemctl restart telephone-booth.service
+curl -fsS -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
+  http://127.0.0.1:8080/v1/cert/fingerprint
 ```
 
-Then re-pin in the operator UI.
+Compare the new `sha256` value with the operator UI and use
+`CertFingerprintCard` to replace the old pin.
 
 ## Disabling the LAN listener
 
-Set `debug.lan_enabled = false` in `/etc/phone-booth/config.toml` and
-restart. The Tailscale-backed listener (loopback + `tailscale serve`)
-keeps working.
+Set `debug.lan_enabled = false` in `/etc/phone-booth/config.toml` (or a
+future packaged config override) and restart. The loopback listener used
+by `tailscale serve` continues to work.

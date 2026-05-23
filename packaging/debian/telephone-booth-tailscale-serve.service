@@ -1,0 +1,13 @@
+[Unit]
+Description=Tailscale serve proxy for Telephone Booth debug surface
+After=tailscaled.service telephone-booth.service
+Requires=tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/sbin/tailscale serve --bg --https=443 --set-path=/ http://127.0.0.1:8080
+ExecStop=/usr/sbin/tailscale serve reset
+
+[Install]
+WantedBy=multi-user.target

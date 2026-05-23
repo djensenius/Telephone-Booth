@@ -60,7 +60,7 @@ pub use booth_telemetry::{TelemetryBus, TelemetryRecord};
 const DEFAULT_STATE_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
 const WS_REPLAY_WAIT: Duration = Duration::from_millis(25);
 
-/// Bearer debug token loaded from `/etc/phone-booth/debug-token`.
+/// Bearer debug token supplied by the runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebugToken(pub String);
 

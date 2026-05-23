@@ -35,6 +35,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
@@ -48,8 +49,17 @@ license-file = ["../../LICENSE", "0"]
 extended-description = "Phone-side software for the Telephone Booth art installation. Drives a rotary phone via GPIO and talks to the operator backend."
 section = "sound"
 priority = "optional"
+depends = "tailscale, alsa-utils"
 assets = [
-    ["target/release/telephone-booth", "/usr/bin/", "755"],
+    ["target/release/telephone-booth", "/usr/bin/telephone-booth", "755"],
     ["../../README.md", "/usr/share/doc/telephone-booth/README.md", "644"],
+    ["../../packaging/debian/telephone-booth.service", "/lib/systemd/system/telephone-booth.service", "644"],
+    ["../../packaging/debian/telephone-booth-tailscale-serve.service", "/lib/systemd/system/telephone-booth-tailscale-serve.service", "644"],
+    ["../../packaging/debian/telephone-booth.sysusers", "/usr/lib/sysusers.d/telephone-booth.conf", "644"],
+    ["../../packaging/debian/telephone-booth.tmpfiles", "/usr/lib/tmpfiles.d/telephone-booth.conf", "644"],
+    ["../../packaging/debian/config.example.toml", "/etc/phone-booth/config.example.toml", "644"],
+    ["../../packaging/debian/env.example", "/etc/phone-booth/env", "640"],
+    ["../../scripts/setup-tailscale-serve.sh", "/usr/share/telephone-booth/setup-tailscale-serve.sh", "755"],
 ]
-maintainer-scripts = "debian/"
+conf-files = ["/etc/phone-booth/env"]
+maintainer-scripts = "../../packaging/debian"

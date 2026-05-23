@@ -38,7 +38,7 @@ jobs:
         with:
           tool: cross,cargo-deb
       - name: Cross-build release
-        run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi --no-default-features
+        run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
       - name: Build .deb
         run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4

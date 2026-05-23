@@ -31,7 +31,7 @@ device_substring   = "Focusrite"
 sample_rate_hz     = 48000
 channels           = 1
 max_recording_secs = 60
-recordings_dir     = "/var/lib/telephone-booth/recordings"
+recordings_dir     = "/var/lib/phone-booth/recordings"
 beep_volume        = 0.8
 dialtone_volume    = 0.6
 
@@ -50,10 +50,8 @@ lan_bind             = "0.0.0.0:8443"
 loopback_bind        = "127.0.0.1:8080"
 allow_controls       = false
 ring_buffer_capacity = 4096
-token_file           = "/etc/phone-booth/debug-token"
-cert_file            = "/etc/phone-booth/debug-cert.pem"
-key_file             = "/etc/phone-booth/debug-key.pem"
-fingerprint_file     = "/etc/phone-booth/debug-cert.fingerprint"
+loopback_skip_auth   = false
+# Set the bearer token with BOOTH_DEBUG_TOKEN or BOOTH_DEBUG_TOKEN_FILE.
 
 [telemetry]
 journal_level = "info"        # tracing filter
