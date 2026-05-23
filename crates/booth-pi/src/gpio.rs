@@ -51,31 +51,32 @@ mod imp {
 
             let (tx, rx) = mpsc::unbounded_channel();
             let started_at = Instant::now();
-            let mut debounce_tasks = Vec::with_capacity(3);
-            debounce_tasks.push(configure_interrupt(
-                &mut pins.hook,
-                PinRole::Hook,
-                &config,
-                &handle,
-                tx.clone(),
-                started_at,
-            )?);
-            debounce_tasks.push(configure_interrupt(
-                &mut pins.rotary_pulse,
-                PinRole::RotaryPulse,
-                &config,
-                &handle,
-                tx.clone(),
-                started_at,
-            )?);
-            debounce_tasks.push(configure_interrupt(
-                &mut pins.rotary_read,
-                PinRole::RotaryRead,
-                &config,
-                &handle,
-                tx,
-                started_at,
-            )?);
+            let debounce_tasks = vec![
+                configure_interrupt(
+                    &mut pins.hook,
+                    PinRole::Hook,
+                    &config,
+                    &handle,
+                    tx.clone(),
+                    started_at,
+                )?,
+                configure_interrupt(
+                    &mut pins.rotary_pulse,
+                    PinRole::RotaryPulse,
+                    &config,
+                    &handle,
+                    tx.clone(),
+                    started_at,
+                )?,
+                configure_interrupt(
+                    &mut pins.rotary_read,
+                    PinRole::RotaryRead,
+                    &config,
+                    &handle,
+                    tx,
+                    started_at,
+                )?,
+            ];
 
             info!(
                 hook_bcm = config.bcm_for(PinRole::Hook),
@@ -212,7 +213,9 @@ mod imp {
                         pending_level = next_level;
                     }
                     () = tokio::time::sleep(debounce) => {
-                        if last_forwarded != Some(pending_level) {
+                        if last_forwarded == Some(pending_level) {
+                            debug!(?role, level = pending_level, "suppressed duplicate gpio edge");
+                        } else {
                             last_forwarded = Some(pending_level);
                             let edge = GpioEdge {
                                 role,
@@ -226,8 +229,6 @@ mod imp {
                             }
 
                             debug!(?role, level = pending_level, "forwarded debounced gpio edge");
-                        } else {
-                            debug!(?role, level = pending_level, "suppressed duplicate gpio edge");
                         }
                         break;
                     }
@@ -261,10 +262,7 @@ mod imp {
     }
 
     fn monotonic_ns(elapsed: Duration) -> u64 {
-        match u64::try_from(elapsed.as_nanos()) {
-            Ok(ns) => ns,
-            Err(_) => u64::MAX,
-        }
+        u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
     }
 }
 

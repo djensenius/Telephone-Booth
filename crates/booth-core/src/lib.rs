@@ -3,7 +3,7 @@
 //! This crate is intentionally `no_std + alloc` and side-effect-free: it does
 //! not perform any I/O, spawn any tasks, or take any wall-clock readings.
 //! Every transition is computed by the single function
-//! [`handle`](crate::handle) which takes `(State, Event)` and returns a new
+//! [`handle`] which takes `(State, Event)` and returns a new
 //! `(State, Vec<Effect>)`. A runtime ([`booth-bin`](../booth_bin/index.html))
 //! is responsible for translating effects into HAL calls and feeding the
 //! resulting events back in.
