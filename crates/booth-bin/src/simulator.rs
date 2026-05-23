@@ -47,7 +47,7 @@ const DEFAULT_OPERATOR_URL: &str = "https://operator.example.com";
 /// `mock_io` selects whether audio and the operator client are mocked or
 /// backed by the real `booth-pi` adapters. `log_path` is the file the TUI
 /// surfaces in its footer so the user knows where logs were redirected to
-/// (set by [`crate::install_simulator_tracing`]).
+/// (set by `install_simulator_tracing` in the `booth-bin` binary).
 pub async fn run_simulator(
     config: RuntimeConfig,
     mock_io: bool,
