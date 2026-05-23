@@ -164,8 +164,14 @@ for the full table; key knobs:
 | `observability.operator_forward.flush_interval_ms` | `2000`  | Force a flush every N ms even if the batch isn't full.                  |
 | `observability.operator_forward.buffer_max`    | `4096`      | Hard cap on the in-memory queue; drop-oldest on overflow.               |
 
-Env overrides use the standard `BOOTH_OBSERVABILITY__*` prefix, e.g.
-`BOOTH_OBSERVABILITY__BOOTH_ID=booth-42`.
+A small subset of these settings can be overridden via environment
+variables (single underscore between segments):
+
+- `BOOTH_OBSERVABILITY_ENABLED` — master kill switch.
+- `BOOTH_OBSERVABILITY_BOOTH_ID` — e.g. `BOOTH_OBSERVABILITY_BOOTH_ID=booth-42`.
+- `BOOTH_OBSERVABILITY_FORWARD_ENABLED` — toggle the operator forwarder.
+
+All other observability settings are config-file only.
 
 Remote-write configuration is **not** in `config.toml`. vmagent reads
 its scrape config from `/etc/phone-booth/vmagent.yaml` and its
