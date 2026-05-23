@@ -287,8 +287,7 @@ pub fn spawn_event_forwarder(
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
         let mut tracker = SessionTracker::new();
-        let mut batch: VecDeque<Value> =
-            VecDeque::with_capacity(config.operator_forward.batch_max);
+        let mut batch: VecDeque<Value> = VecDeque::with_capacity(config.operator_forward.batch_max);
         let mut dropped: u64 = 0;
         let mut flush = tokio::time::interval(Duration::from_millis(
             config.operator_forward.flush_interval_ms,
@@ -420,12 +419,7 @@ async fn flush_once(
     }
 }
 
-fn push_with_cap(
-    batch: &mut VecDeque<Value>,
-    item: Value,
-    cap: usize,
-    dropped_counter: &mut u64,
-) {
+fn push_with_cap(batch: &mut VecDeque<Value>, item: Value, cap: usize, dropped_counter: &mut u64) {
     if batch.len() >= cap {
         // Drop the oldest entry so newer events survive. VecDeque does
         // this in O(1) which matters when the operator is unreachable
