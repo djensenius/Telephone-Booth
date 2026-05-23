@@ -26,6 +26,11 @@ The original 2016 Node.js implementation lives on the `legacy-node` tag.
   exposes pin matrix, state history, audio meters, and raw-event telemetry
   over WebSocket. Reachable over Tailscale (real Let's Encrypt cert) or LAN
   (self-signed + fingerprint pin).
+- **First-class observability** — every booth ships a `booth-metrics`
+  registry on `/metrics` (loopback only, scraped by a vmagent sidecar
+  that remote_writes to VictoriaMetrics) plus a thorough event log that
+  the operator persists in Postgres. See
+  [`docs/observability.md`](./docs/observability.md).
 - **Everything is tested** — `proptest` over state-machine transitions, snapshot
   tests via `insta`, integration tests against `booth-mock`, and a CI matrix
   that cross-compiles for Pi 3/4/5 (`armv7-unknown-linux-gnueabihf` and

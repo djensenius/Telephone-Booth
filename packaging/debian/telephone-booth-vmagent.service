@@ -1,0 +1,30 @@
+[Unit]
+Description=vmagent sidecar for the Telephone Booth (scrape + remote_write)
+Documentation=https://docs.victoriametrics.com/vmagent/
+After=network-online.target telephone-booth.service
+Wants=network-online.target telephone-booth.service
+
+[Service]
+Type=simple
+User=phonebooth
+Group=phonebooth
+EnvironmentFile=/etc/phone-booth/vmagent.env
+ExecStart=/usr/bin/vmagent \
+    -promscrape.config=/etc/phone-booth/vmagent.yaml \
+    -remoteWrite.url=${BOOTH_VM_REMOTE_WRITE_URL} \
+    -remoteWrite.bearerTokenFile=/etc/phone-booth/vmagent-token \
+    -remoteWrite.tmpDataPath=/var/lib/phone-booth/vmagent
+Restart=on-failure
+RestartSec=5s
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/phone-booth/vmagent
+CapabilityBoundingSet=
+NoNewPrivileges=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

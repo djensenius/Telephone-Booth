@@ -2,7 +2,7 @@
 set -e
 
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-    systemctl stop telephone-booth-tailscale-serve.service telephone-booth.service || true
+    systemctl stop telephone-booth-vmagent.service telephone-booth-tailscale-serve.service telephone-booth.service || true
 fi
 
 exit 0

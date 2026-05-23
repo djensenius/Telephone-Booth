@@ -366,6 +366,11 @@ pub struct ServeHandles {
     pub cert_fingerprint: String,
 }
 
+/// Renderer that produces Prometheus text exposition for the loopback
+/// `/metrics` route. Supplied by the runtime so `booth-debug` stays
+/// decoupled from the concrete metrics registry implementation.
+pub type MetricsRender = Arc<dyn Fn() -> String + Send + Sync>;
+
 #[derive(Clone)]
 struct AppState {
     config: Arc<DebugConfig>,
@@ -380,14 +385,23 @@ pub async fn serve(
     bus: TelemetryBus,
     runtime_tx: mpsc::Sender<RuntimeCommand>,
 ) -> Result<JoinHandle<()>, DebugError> {
-    Ok(serve_with_handles(config, bus, runtime_tx).await?.handle)
+    Ok(serve_with_handles(config, bus, runtime_tx, None)
+        .await?
+        .handle)
 }
 
 /// Start enabled debug listeners and return bound addresses along with the task handle.
+///
+/// When `metrics_render` is `Some`, a `GET /metrics` route is mounted on the
+/// loopback listener (Prometheus text exposition). The LAN listener never
+/// exposes `/metrics` so the route is gated behind the Tailscale ACL on
+/// the loopback front door. The route also bypasses the bearer-token
+/// middleware so vmagent can scrape without credentials.
 pub async fn serve_with_handles(
     config: DebugConfig,
     bus: TelemetryBus,
     runtime_tx: mpsc::Sender<RuntimeCommand>,
+    metrics_render: Option<MetricsRender>,
 ) -> Result<ServeHandles, DebugError> {
     global_logs().set_capacity(config.ring_buffer_capacity);
     let tls = generate_tls_config()?;
@@ -398,7 +412,12 @@ pub async fn serve_with_handles(
         runtime_tx,
         cert_fingerprint: Arc::new(fingerprint.clone()),
     };
-    let router = build_router(state.clone());
+    let authed_router = build_router(state.clone());
+    let loopback_router = metrics_render.map_or_else(
+        || authed_router.clone(),
+        |render| authed_router.clone().merge(build_metrics_router(render)),
+    );
+    let lan_router = authed_router;
 
     let loopback_listener = if config.tailscale_enabled {
         let listener = TcpListener::bind(&config.loopback_bind)
@@ -427,9 +446,7 @@ pub async fn serve_with_handles(
     let handle = tokio::spawn(async move {
         let mut tasks = Vec::new();
         if let Some(listener) = loopback_listener {
-            let service = router
-                .clone()
-                .into_make_service_with_connect_info::<DebugConnectInfo>();
+            let service = loopback_router.into_make_service_with_connect_info::<DebugConnectInfo>();
             tasks.push(tokio::spawn(async move {
                 if let Err(err) = axum::serve(listener, service).await {
                     tracing::error!(error = %err, "loopback debug server stopped");
@@ -437,7 +454,7 @@ pub async fn serve_with_handles(
             }));
         }
         if let Some(listener) = lan_listener {
-            let service = router.into_make_service_with_connect_info::<DebugConnectInfo>();
+            let service = lan_router.into_make_service_with_connect_info::<DebugConnectInfo>();
             tasks.push(tokio::spawn(async move {
                 if let Err(err) = axum::serve(listener, service).await {
                     tracing::error!(error = %err, "lan debug server stopped");
@@ -488,6 +505,31 @@ fn build_router(state: AppState) -> Router {
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
         .layer(cors)
+}
+
+/// Build a tiny sub-router that exposes Prometheus text exposition.
+///
+/// This router is intentionally separate from [`build_router`] so it can
+/// be merged into the loopback listener without picking up the bearer-token
+/// middleware. The LAN listener never sees this router, so `/metrics` is
+/// only reachable through `tailscale serve` (loopback front door).
+fn build_metrics_router(render: MetricsRender) -> Router {
+    Router::new().route(
+        "/metrics",
+        get(move || {
+            let render = Arc::clone(&render);
+            async move {
+                let body = render();
+                (
+                    [(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; version=0.0.4"),
+                    )],
+                    body,
+                )
+            }
+        }),
+    )
 }
 
 fn cors_layer(origin: Option<&str>) -> CorsLayer {

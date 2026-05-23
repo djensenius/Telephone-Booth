@@ -14,6 +14,13 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl enable telephone-booth.service telephone-booth-tailscale-serve.service
     systemctl restart telephone-booth.service || true
     systemctl start telephone-booth-tailscale-serve.service || true
+    # vmagent is a "recommends" dependency. Enable + start the sidecar
+    # when the binary is present; otherwise leave the unit disabled so a
+    # later `apt-get install vmagent` can pick it up.
+    if [ -x /usr/bin/vmagent ]; then
+        systemctl enable telephone-booth-vmagent.service || true
+        systemctl restart telephone-booth-vmagent.service || true
+    fi
 fi
 
 exit 0

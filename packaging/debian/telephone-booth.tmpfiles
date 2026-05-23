@@ -1,3 +1,4 @@
 d /var/lib/phone-booth 0750 phonebooth phonebooth -
+d /var/lib/phone-booth/vmagent 0750 phonebooth phonebooth -
 d /var/log/phone-booth 0750 phonebooth phonebooth -
 d /etc/phone-booth 0750 root phonebooth -

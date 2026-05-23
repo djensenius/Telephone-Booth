@@ -1,0 +1,104 @@
+{
+  "annotations": { "list": [] },
+  "description": "Audio levels and operator HTTP health.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "none", "min": -120, "max": 0 } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "booth_audio_input_dbfs{booth_id=~\"$booth\"}",
+          "legendFormat": "input {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_audio_output_dbfs{booth_id=~\"$booth\"}",
+          "legendFormat": "output {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Audio levels (dBFS)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_operator_requests_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "{{route}} {{status_class}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Operator HTTP rate by status class",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(booth_operator_request_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
+          "legendFormat": "p95 {{route}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Operator request duration p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_events_dropped_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "{{reason}} {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Forwarder events dropped per second",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["booth", "audio"],
+  "templating": {
+    "list": [
+      {
+        "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+        "definition": "label_values(booth_audio_input_dbfs, booth_id)",
+        "label": "Booth",
+        "name": "booth",
+        "options": [],
+        "query": "label_values(booth_audio_input_dbfs, booth_id)",
+        "refresh": 2,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Booth — Audio & operator HTTP",
+  "uid": "booth-audio",
+  "version": 1,
+  "weekStart": ""
+}

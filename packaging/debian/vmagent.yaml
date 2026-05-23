@@ -1,0 +1,25 @@
+# vmagent scrape configuration for the Telephone Booth.
+#
+# vmagent scrapes the booth's loopback /metrics endpoint every 10 s and
+# remote-writes to the external VictoriaMetrics instance configured in
+# /etc/phone-booth/vmagent.env.
+#
+# The booth's /metrics endpoint is exposed only on the loopback listener
+# (127.0.0.1:8080 by default) and skips bearer auth — Tailscale ACLs gate
+# external access. Bearer credentials for the remote_write target live in
+# /etc/phone-booth/vmagent-token (mode 0600).
+
+global:
+  scrape_interval: 10s
+  scrape_timeout: 5s
+  external_labels:
+    # Override at install time via debconf or by editing this file.
+    booth_id: "booth-01"
+
+scrape_configs:
+  - job_name: booth
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8080"]
+        labels:
+          job: booth

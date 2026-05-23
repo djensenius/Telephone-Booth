@@ -1,0 +1,141 @@
+{
+  "annotations": { "list": [] },
+  "description": "Call activity: rate, outcomes, digit histogram, recording duration, upload failures.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_calls_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "{{outcome}} {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Call completions per second by outcome",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(booth_calls_total{booth_id=~\"$booth\"}[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Calls by outcome over selected range",
+      "type": "piechart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "sum by (digit) (increase(booth_digits_dialed_total{booth_id=~\"$booth\"}[$__range]))",
+          "legendFormat": "digit {{digit}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Digits dialed",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, booth_id) (rate(booth_recording_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
+          "legendFormat": "p50 {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, booth_id) (rate(booth_recording_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
+          "legendFormat": "p95 {{booth_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, booth_id) (rate(booth_recording_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
+          "legendFormat": "p99 {{booth_id}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Recording duration percentiles",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "rate(booth_upload_failures_total{booth_id=~\"$booth\"}[5m])",
+          "legendFormat": "{{reason}} {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Upload failures per second by reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(booth_upload_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
+          "legendFormat": "p95 {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Upload duration p95 by outcome",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["booth", "calls"],
+  "templating": {
+    "list": [
+      {
+        "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+        "definition": "label_values(booth_calls_started_total, booth_id)",
+        "label": "Booth",
+        "name": "booth",
+        "options": [],
+        "query": "label_values(booth_calls_started_total, booth_id)",
+        "refresh": 2,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Booth — Call activity",
+  "uid": "booth-call-activity",
+  "version": 1,
+  "weekStart": ""
+}

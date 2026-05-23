@@ -386,9 +386,11 @@ async fn run_runtime(
     // this is gated on `observability.enabled` so dev runs that don't
     // care about metrics can opt out.
     let mut observability_tasks: Vec<JoinHandle<()>> = Vec::new();
+    let mut metrics_handle: Option<booth_metrics::MetricsHandle> = None;
     if config.observability.enabled {
         match booth_metrics::install_registry(config.observability.booth_id.clone()) {
-            Ok(_handle) => {
+            Ok(handle) => {
+                metrics_handle = Some(handle);
                 let sampler = booth_metrics::SystemSampler::new();
                 let sampler_for_consumer = sampler.clone();
                 let sampler_config = booth_metrics::SamplerConfig {
@@ -453,8 +455,21 @@ async fn run_runtime(
         }
         let debug_bus = bus.clone();
         let debug_cmd_tx = cmd_tx.clone();
+        let metrics_render: Option<booth_debug::MetricsRender> =
+            metrics_handle.as_ref().map(|handle| {
+                let handle = handle.clone();
+                let render: booth_debug::MetricsRender = Arc::new(move || handle.render());
+                render
+            });
         Some(tokio::spawn(async move {
-            if let Err(err) = booth_debug::serve(debug_config, debug_bus, debug_cmd_tx).await {
+            if let Err(err) = booth_debug::serve_with_handles(
+                debug_config,
+                debug_bus,
+                debug_cmd_tx,
+                metrics_render,
+            )
+            .await
+            {
                 error!(%err, "debug surface stopped");
             }
         }))

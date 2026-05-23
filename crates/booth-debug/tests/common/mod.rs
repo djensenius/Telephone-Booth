@@ -2,8 +2,11 @@
 
 use std::error::Error;
 use std::io;
+use std::sync::Arc;
 
-use booth_debug::{DebugConfig, RuntimeCommand, ServeHandles, TelemetryBus, serve_with_handles};
+use booth_debug::{
+    DebugConfig, MetricsRender, RuntimeCommand, ServeHandles, TelemetryBus, serve_with_handles,
+};
 use tokio::sync::mpsc;
 
 pub struct TestServer {
@@ -19,7 +22,14 @@ impl Drop for TestServer {
     }
 }
 
-pub async fn spawn(mut config: DebugConfig) -> Result<TestServer, Box<dyn Error>> {
+pub async fn spawn(config: DebugConfig) -> Result<TestServer, Box<dyn Error>> {
+    spawn_with_metrics(config, None).await
+}
+
+pub async fn spawn_with_metrics(
+    mut config: DebugConfig,
+    metrics_render: Option<MetricsRender>,
+) -> Result<TestServer, Box<dyn Error>> {
     config.loopback_bind = "127.0.0.1:0".to_string();
     config.lan_enabled = false;
     config.tailscale_enabled = true;
@@ -27,7 +37,7 @@ pub async fn spawn(mut config: DebugConfig) -> Result<TestServer, Box<dyn Error>
 
     let bus = TelemetryBus::new(config.ring_buffer_capacity);
     let (tx, rx) = mpsc::channel(32);
-    let handles = serve_with_handles(config, bus.clone(), tx).await?;
+    let handles = serve_with_handles(config, bus.clone(), tx, metrics_render).await?;
     let addr = handles
         .loopback_addr
         .ok_or_else(|| io::Error::other("loopback listener did not start"))?;
@@ -37,4 +47,10 @@ pub async fn spawn(mut config: DebugConfig) -> Result<TestServer, Box<dyn Error>
         rx,
         handles,
     })
+}
+
+/// Build a `MetricsRender` that returns a fixed Prometheus text body. Used
+/// by tests to assert routing without bringing in `booth-metrics`.
+pub fn static_metrics(body: &'static str) -> MetricsRender {
+    Arc::new(move || body.to_string())
 }
