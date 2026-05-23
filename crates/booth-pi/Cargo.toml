@@ -24,6 +24,7 @@ tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 heapless = { workspace = true }
+sha2 = { workspace = true }
 
 # Hardware-only deps are gated behind the `pi` feature so the workspace builds
 # on macOS / x86_64-linux for tests and tooling.

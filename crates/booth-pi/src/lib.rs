@@ -18,6 +18,13 @@
 use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
 
+pub mod audio;
+
+pub use audio::{
+    PiAudioSink, PiAudioSource, RecordingHandle, device_name_matches, embedded_tone_bytes,
+    has_flac_stream_marker,
+};
+
 /// Pi-side configuration. Loaded from `/etc/phone-booth/config.toml` (with
 /// per-key environment-variable overrides) at startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,23 +100,39 @@ impl GpioConfig {
 pub struct AudioConfig {
     /// Match audio device by name substring (e.g. `"Focusrite"`). If unset,
     /// uses the system default.
-    #[serde(default)]
-    pub device_name_substring: Option<String>,
-    /// Recording sample rate. 48000 is recommended for USB-Audio-Class-2.
+    #[serde(default = "default_device_substring", alias = "device_name_substring")]
+    pub device_substring: Option<String>,
+    /// Recording/playback sample rate. 48000 is recommended for USB-Audio-Class-2.
     #[serde(default = "default_sample_rate")]
     pub sample_rate_hz: u32,
+    /// Channel count used for handset capture and playback.
+    #[serde(default = "default_channels")]
+    pub channels: u16,
     /// Maximum recording duration before auto-stop, in seconds.
-    #[serde(default = "default_max_recording_seconds")]
-    pub max_recording_seconds: u32,
+    #[serde(
+        default = "default_max_recording_secs",
+        alias = "max_recording_seconds"
+    )]
+    pub max_recording_secs: u32,
     /// Where to write FLAC recordings before upload.
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "serde default must match the Option<String> field type"
+)]
+fn default_device_substring() -> Option<String> {
+    Some("Focusrite".to_string())
+}
 fn default_sample_rate() -> u32 {
     48_000
 }
-fn default_max_recording_seconds() -> u32 {
+fn default_channels() -> u16 {
+    1
+}
+fn default_max_recording_secs() -> u32 {
     60
 }
 fn default_recordings_dir() -> String {
@@ -119,9 +142,10 @@ fn default_recordings_dir() -> String {
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
-            device_name_substring: None,
+            device_substring: default_device_substring(),
             sample_rate_hz: default_sample_rate(),
-            max_recording_seconds: default_max_recording_seconds(),
+            channels: default_channels(),
+            max_recording_secs: default_max_recording_secs(),
             recordings_dir: default_recordings_dir(),
         }
     }

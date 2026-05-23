@@ -144,6 +144,9 @@ pub enum AudioError {
     /// I/O while writing a recording.
     #[error("recording I/O error: {0}")]
     Io(Cow<'static, str>),
+    /// The requested audio operation is unavailable for this build or adapter.
+    #[error("audio operation unsupported: {0}")]
+    Unsupported(Cow<'static, str>),
 }
 
 /// Telemetry sample emitted by the audio adapter at a fixed cadence (≈50 ms)
