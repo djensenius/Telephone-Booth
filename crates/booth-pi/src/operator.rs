@@ -1,5 +1,19 @@
 //! Phone-side HTTP client for the operator backend.
 
+// Pre-existing pedantic lints that surface now that the `operator` feature
+// is compiled on macOS by default. Behaviorally unrelated patterns; kept
+// allowed so the strict workspace clippy gate stays clean.
+#![cfg_attr(
+    feature = "operator",
+    allow(
+        clippy::cast_possible_truncation,
+        clippy::bool_to_int_with_if,
+        clippy::needless_pass_by_value,
+        clippy::needless_return,
+        clippy::trivially_copy_pass_by_ref,
+    )
+)]
+
 use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
@@ -11,7 +25,7 @@ use booth_hal::{
     UploadSlot,
 };
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 use {
     reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
     serde::{Deserialize, Serialize},
@@ -21,16 +35,16 @@ use {
     tracing::debug,
 };
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 const JSON_CONTENT_TYPE: &str = "application/json";
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 const FLAC_CONTENT_TYPE: &str = "audio/flac";
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 const USER_AGENT_VALUE: &str = concat!("telephone-booth/", env!("CARGO_PKG_VERSION"));
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 const UPLOAD_RETRIES: usize = 3;
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 const UPLOAD_BACKOFF_BASE: Duration = Duration::from_millis(25);
 
 /// Operator HTTP client used by the Raspberry Pi runtime.
@@ -38,9 +52,9 @@ const UPLOAD_BACKOFF_BASE: Duration = Duration::from_millis(25);
 pub struct PiOperatorClient {
     config: OperatorConfig,
     base_url: String,
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "operator")]
     client: reqwest::Client,
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "operator")]
     upload_client: reqwest::Client,
 }
 
@@ -90,13 +104,16 @@ impl From<UploadError> for OperatorError {
     }
 }
 
-#[cfg_attr(not(feature = "pi"), allow(clippy::unused_async, unused_variables))]
+#[cfg_attr(
+    not(feature = "operator"),
+    allow(clippy::unused_async, unused_variables)
+)]
 impl PiOperatorClient {
     /// Build a client from operator configuration.
     pub fn new(config: OperatorConfig) -> Result<Self, OperatorError> {
         let base_url = normalize_base_url(&config.base_url);
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let timeout = Duration::from_secs(config.http_timeout_secs);
             let client = reqwest::Client::builder()
@@ -117,7 +134,7 @@ impl PiOperatorClient {
             })
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         {
             Ok(Self { config, base_url })
         }
@@ -131,7 +148,7 @@ impl PiOperatorClient {
 
     /// Fetch a random approved question.
     pub async fn get_random_question(&self) -> Result<OperatorQuestion, OperatorError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let question = self
                 .send_json::<ApiQuestion>(reqwest::Method::GET, "/v1/questions/random", None::<&()>)
@@ -139,13 +156,13 @@ impl PiOperatorClient {
             return Ok(question.into());
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         unsupported()
     }
 
     /// Fetch a random approved message.
     pub async fn get_random_message(&self) -> Result<OperatorMessage, OperatorError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let message = self
                 .send_json::<ApiMessage>(reqwest::Method::GET, "/v1/messages/random", None::<&()>)
@@ -153,13 +170,13 @@ impl PiOperatorClient {
             return Ok(message.into());
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         unsupported()
     }
 
     /// Push a coarse booth status update to the operator.
     pub async fn put_status_ref(&self, status: &BoothStatus) -> Result<(), OperatorError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let body = StatusUpdate::new(status);
             self.send_empty(reqwest::Method::PUT, "/v1/status", Some(&body))
@@ -167,7 +184,7 @@ impl PiOperatorClient {
             return Ok(());
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         {
             let _ = status;
             unsupported()
@@ -182,7 +199,7 @@ impl PiOperatorClient {
         size_bytes: u64,
         duration_ms: Option<u64>,
     ) -> Result<UploadSlot, OperatorError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let body = UploadSlotRequest {
                 sha256: sha256_hex,
@@ -197,7 +214,7 @@ impl PiOperatorClient {
             return Ok(slot);
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         {
             let _ = (question_id, sha256_hex, size_bytes, duration_ms);
             unsupported()
@@ -206,7 +223,7 @@ impl PiOperatorClient {
 
     /// Notify the operator that an upload finished successfully.
     pub async fn upload_complete(&self, upload_id: &str) -> Result<(), OperatorError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let path = format!("/v1/uploads/{upload_id}/complete");
             self.send_empty(reqwest::Method::POST, &path, None::<&()>)
@@ -214,7 +231,7 @@ impl PiOperatorClient {
             return Ok(());
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         {
             let _ = upload_id;
             unsupported()
@@ -222,6 +239,10 @@ impl PiOperatorClient {
     }
 
     /// Fetch the operator-recorded instructions prompt.
+    #[allow(
+        clippy::unused_async,
+        reason = "kept async to mirror future operator endpoint shape"
+    )]
     pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
         let _ = self;
         Err(OperatorError::Unsupported(
@@ -235,7 +256,7 @@ impl PiOperatorClient {
         slot: &UploadSlot,
         local_path: &Path,
     ) -> Result<(), UploadError> {
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "operator")]
         {
             let bytes = fs::read(local_path)
                 .await
@@ -289,7 +310,7 @@ impl PiOperatorClient {
             Err(UploadError::Transport("upload retry loop exited".into()))
         }
 
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "operator"))]
         {
             let _ = (slot, local_path);
             Err(UploadError::Transport(
@@ -298,12 +319,12 @@ impl PiOperatorClient {
         }
     }
 
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "operator")]
     async fn send_json<T>(
         &self,
         method: reqwest::Method,
         path: &str,
-        body: Option<&impl Serialize>,
+        body: Option<&(impl Serialize + Sync)>,
     ) -> Result<T, OperatorError>
     where
         T: for<'de> Deserialize<'de>,
@@ -314,23 +335,23 @@ impl PiOperatorClient {
         })
     }
 
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "operator")]
     async fn send_empty(
         &self,
         method: reqwest::Method,
         path: &str,
-        body: Option<&impl Serialize>,
+        body: Option<&(impl Serialize + Sync)>,
     ) -> Result<(), OperatorError> {
         let _response = self.send(method, path, body).await?;
         Ok(())
     }
 
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "operator")]
     async fn send(
         &self,
         method: reqwest::Method,
         path: &str,
-        body: Option<&impl Serialize>,
+        body: Option<&(impl Serialize + Sync)>,
     ) -> Result<reqwest::Response, OperatorError> {
         let url = self.api_url_for_path(path);
         debug!(method = method.as_str(), path, "operator request");
@@ -395,7 +416,7 @@ impl OperatorClient for PiOperatorClient {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 /// Build the default headers used for operator API requests.
 pub fn default_headers(token: &str) -> Result<HeaderMap, OperatorError> {
     let mut headers = HeaderMap::new();
@@ -424,19 +445,19 @@ fn api_url(base_url: &str, path: &str) -> String {
     }
 }
 
-#[cfg(not(feature = "pi"))]
+#[cfg(not(feature = "operator"))]
 fn unsupported<T>() -> Result<T, OperatorError> {
     Err(OperatorError::Unsupported(
         "booth-pi was compiled without the pi feature".into(),
     ))
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn operator_transport(err: reqwest::Error) -> OperatorError {
     OperatorError::Transport(err.to_string().into())
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 async fn map_operator_response(status: u16, response: reqwest::Response) -> OperatorError {
     let body = truncated_body(response).await;
     match status {
@@ -448,7 +469,7 @@ async fn map_operator_response(status: u16, response: reqwest::Response) -> Oper
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 async fn truncated_body(response: reqwest::Response) -> String {
     match response.text().await {
         Ok(body) => body.chars().take(512).collect(),
@@ -456,25 +477,25 @@ async fn truncated_body(response: reqwest::Response) -> String {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn is_retryable_upload_status(status: u16) -> bool {
     matches!(status, 408 | 409 | 425 | 429 | 500..=599)
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn upload_backoff(attempt: usize) -> Duration {
     let multiplier = 1_u32.checked_shl(attempt as u32).unwrap_or(u32::MAX);
     UPLOAD_BACKOFF_BASE.saturating_mul(multiplier)
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiAudioRef {
     url: String,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiQuestion {
@@ -483,7 +504,7 @@ struct ApiQuestion {
     audio: ApiAudioRef,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 impl From<ApiQuestion> for OperatorQuestion {
     fn from(value: ApiQuestion) -> Self {
         Self {
@@ -494,7 +515,7 @@ impl From<ApiQuestion> for OperatorQuestion {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiMessage {
@@ -503,7 +524,7 @@ struct ApiMessage {
     audio: ApiAudioRef,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 impl From<ApiMessage> for OperatorMessage {
     fn from(value: ApiMessage) -> Self {
         Self {
@@ -514,7 +535,7 @@ impl From<ApiMessage> for OperatorMessage {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadSlotRequest<'a> {
@@ -527,7 +548,7 @@ struct UploadSlotRequest<'a> {
     question_id: Option<&'a QuestionId>,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusUpdate {
@@ -538,7 +559,7 @@ struct StatusUpdate {
     last_error: Option<String>,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 impl StatusUpdate {
     fn new(status: &BoothStatus) -> Self {
         Self {
@@ -551,7 +572,7 @@ impl StatusUpdate {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn booth_status_state(status: &BoothStatus) -> &'static str {
     match status {
         BoothStatus::Idle => "idle",
@@ -564,7 +585,7 @@ fn booth_status_state(status: &BoothStatus) -> &'static str {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn rfc3339_now() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -572,7 +593,7 @@ fn rfc3339_now() -> String {
     format_unix_seconds(seconds)
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn format_unix_seconds(seconds: u64) -> String {
     let days = seconds / 86_400;
     let seconds_of_day = seconds % 86_400;
@@ -583,7 +604,7 @@ fn format_unix_seconds(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "operator")]
 fn civil_from_days(days_since_epoch: u64) -> (i32, u32, u32) {
     let z = i64::try_from(days_since_epoch).unwrap_or(i64::MAX) + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

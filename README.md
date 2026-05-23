@@ -37,8 +37,15 @@ The original 2016 Node.js implementation lives on the `legacy-node` tag.
 mise install              # Rust 1.95.0 + just + cargo-nextest, etc.
 just setup
 just dev                  # runs against the mock HAL on your laptop
+just tui                  # interactive simulator TUI (mock GPIO + mock I/O)
 just check                # fmt + clippy + tests + docs lint (what CI runs)
 ```
+
+The interactive simulator (`just tui` or `cargo run -p booth-bin -- run --simulator`)
+mimics the rotary phone from your keyboard so you can exercise the full
+booth pipeline — state machine, audio, and operator HTTP client — without
+any hardware attached. See [`docs/simulator.md`](./docs/simulator.md) for
+the full key bindings and modes.
 
 To run on a real Pi with a Focusrite (or any USB-Audio-Class-2 device):
 

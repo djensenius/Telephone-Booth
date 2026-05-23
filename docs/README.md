@@ -15,6 +15,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 
 - [Packaging](packaging.md) — building the `.deb`, installing via systemd
 - [Operator API](operator-api.md) — registering with the operator backend, token rotation
+- [Simulator TUI](simulator.md) — interactive `--simulator` flag for local testing without a phone
 - [Tailscale](tailscale.md) — exposing the debug surface over your tailnet
 - [LAN fallback](lan-fallback.md) — self-signed certs + fingerprint pinning
 

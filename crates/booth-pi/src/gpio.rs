@@ -5,7 +5,7 @@ use booth_hal::{GpioEdge, GpioError, GpioPort, PinRole};
 
 use crate::GpioConfig;
 
-#[cfg(feature = "pi")]
+#[cfg(all(feature = "pi", target_os = "linux"))]
 mod imp {
     use std::time::{Duration, Instant};
 
@@ -268,18 +268,20 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "pi"))]
+#[cfg(not(all(feature = "pi", target_os = "linux")))]
 mod imp {
     use super::{GpioConfig, GpioEdge, GpioError, GpioPort, PinRole, async_trait};
 
-    /// Stub GPIO implementation used when the `pi` feature is disabled.
+    /// Stub GPIO implementation used when the `pi` feature is disabled or the
+    /// target is not Linux (rppal is Linux-only).
     pub struct PiGpioPort;
 
     impl PiGpioPort {
-        /// Return an unsupported error because real GPIO requires the `pi` feature.
+        /// Return an unsupported error because real GPIO requires the `pi`
+        /// feature on a Linux target.
         pub fn new(_config: GpioConfig) -> Result<Self, GpioError> {
             Err(GpioError::Unsupported(
-                "booth-pi gpio requires the `pi` feature".into(),
+                "booth-pi gpio requires the `pi` feature on a Linux target".into(),
             ))
         }
     }
@@ -288,13 +290,13 @@ mod imp {
     impl GpioPort for PiGpioPort {
         async fn next_edge(&mut self) -> Result<GpioEdge, GpioError> {
             Err(GpioError::Unsupported(
-                "booth-pi gpio requires the `pi` feature".into(),
+                "booth-pi gpio requires the `pi` feature on a Linux target".into(),
             ))
         }
 
         async fn snapshot(&self, _role: PinRole) -> Result<bool, GpioError> {
             Err(GpioError::Unsupported(
-                "booth-pi gpio requires the `pi` feature".into(),
+                "booth-pi gpio requires the `pi` feature on a Linux target".into(),
             ))
         }
     }

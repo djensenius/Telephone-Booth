@@ -34,6 +34,13 @@ enum Command {
         /// Use in-memory mock adapters instead of Raspberry Pi hardware adapters.
         #[arg(long)]
         mock: bool,
+        /// Launch the interactive TUI simulator that injects GPIO events from the
+        /// keyboard. Pair with `--mock` to also mock audio and the operator
+        /// client; without `--mock` the simulator drives the real cross-platform
+        /// audio + HTTP adapters.
+        #[cfg(feature = "simulator")]
+        #[arg(long)]
+        simulator: bool,
     },
     /// Print the effective merged config as TOML with tokens redacted.
     PrintConfig {
@@ -58,7 +65,6 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    install_tracing("info");
     match run_cli().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -71,26 +77,43 @@ async fn main() -> ExitCode {
 async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Run { config, mock } => {
+        Command::Run {
+            config,
+            mock,
+            #[cfg(feature = "simulator")]
+            simulator,
+        } => {
             let config = load_config(config.as_deref())?;
+            #[cfg(feature = "simulator")]
+            if simulator {
+                let (log_path, _guard) = install_simulator_tracing(&config.telemetry.journal_level);
+                return booth_bin::simulator::run_simulator(config, mock, log_path).await;
+            }
+            install_tracing(&config.telemetry.journal_level);
             run(config, mock).await
         }
         Command::PrintConfig { config } => {
+            install_tracing("warn");
             let config = load_config(config.as_deref())?;
             print!("{}", render_config_toml(&config)?);
             Ok(())
         }
         Command::Check { config } => {
+            install_tracing("info");
             let config = load_config(config.as_deref())?;
             check_runtime(&config).await
         }
         Command::Simulate { pulses } => {
+            install_tracing("info");
             for (event, state, effects) in simulate_pulses(pulses) {
                 println!("event={event:?} state={state:?} effects={effects:?}");
             }
             Ok(())
         }
-        Command::TailscaleStatus => print_tailscale_status(),
+        Command::TailscaleStatus => {
+            install_tracing("warn");
+            print_tailscale_status()
+        }
     }
 }
 
@@ -236,4 +259,44 @@ fn install_tracing(default_filter: &str) {
         .with(tracing_subscriber::fmt::layer().with_target(true))
         .with(booth_debug::log_layer());
     let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
+/// Install a file-only tracing subscriber for the simulator so log output does
+/// not corrupt the TUI. Returns the resolved log path and the worker guard
+/// (which must be held for the lifetime of the program to ensure flush).
+#[cfg(feature = "simulator")]
+fn install_simulator_tracing(
+    default_filter: &str,
+) -> (
+    Option<String>,
+    Option<tracing_appender::non_blocking::WorkerGuard>,
+) {
+    let path = std::env::var("BOOTH_SIM_LOG_PATH")
+        .unwrap_or_else(|_| "/tmp/telephone-booth-sim.log".to_string());
+    let path_buf = PathBuf::from(&path);
+    let parent = path_buf
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path_buf.file_name().map_or_else(
+        || "telephone-booth-sim.log".to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    );
+
+    let appender = tracing_appender::rolling::never(parent, &file_name);
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_ansi(false)
+                .with_writer(writer),
+        )
+        .with(booth_debug::log_layer());
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
+    (Some(path), Some(guard))
 }

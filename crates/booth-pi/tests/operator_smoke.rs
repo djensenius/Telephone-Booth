@@ -4,7 +4,7 @@
 
 //! Smoke tests for the Pi operator HTTP client.
 
-#![cfg(feature = "pi")]
+#![cfg(feature = "operator")]
 #![allow(
     clippy::expect_used,
     reason = "wiremock uses an expect builder method for request counts"

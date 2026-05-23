@@ -36,6 +36,12 @@ test:
 dev:
     cargo run -p booth-bin --features mock
 
+# Launch the interactive simulator TUI with full mock I/O (no audio/operator
+# hardware needed). Drop `--mock` to drive the real cross-platform audio +
+# HTTP adapters against a configured operator backend.
+tui:
+    cargo run -p booth-bin -- run --simulator --mock
+
 # Run on real Pi hardware (only on a Pi)
 run-pi:
     cargo run -p booth-bin --release --features pi

@@ -6,8 +6,22 @@
 //! Cargo build time while still letting the Pi build decode the exact assets it
 //! will play.
 
-#[cfg(feature = "pi")]
-use std::borrow::Cow;
+// These pedantic lints fire across cpal/symphonia/flacenc glue code that is
+// only compiled under the `audio` feature. The lints have been reviewed and
+// the patterns (e.g. `f32 as i32` after `clamp` to `i16::MIN..=i16::MAX`) are
+// intentional.
+#![cfg_attr(
+    feature = "audio",
+    allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::similar_names,
+        clippy::default_trait_access,
+        clippy::needless_pass_by_value,
+    )
+)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -65,7 +79,7 @@ pub fn has_flac_stream_marker(bytes: &[u8]) -> bool {
 pub struct PiAudioSink {
     config: AudioConfig,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "audio")]
     playback: Option<PlaybackTask>,
 }
 
@@ -85,28 +99,28 @@ impl PiAudioSink {
         Self {
             config,
             telemetry,
-            #[cfg(feature = "pi")]
+            #[cfg(feature = "audio")]
             playback: None,
         }
     }
 
-    #[cfg(not(feature = "pi"))]
+    #[cfg(not(feature = "audio"))]
     fn unsupported(&self) -> AudioError {
         let _ = (&self.config, &self.telemetry);
-        AudioError::Unsupported("booth-pi audio requires the `pi` Cargo feature".into())
+        AudioError::Unsupported("booth-pi audio requires the `audio` Cargo feature".into())
     }
 }
 
 #[async_trait]
 impl AudioSink for PiAudioSink {
     async fn play(&mut self, source: AudioRef) -> Result<(), AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             let _ = source;
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             self.stop().await?;
 
@@ -154,12 +168,12 @@ impl AudioSink for PiAudioSink {
     }
 
     async fn stop(&mut self) -> Result<(), AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             if let Some(task) = self.playback.take() {
                 task.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -170,12 +184,12 @@ impl AudioSink for PiAudioSink {
     }
 
     async fn wait_for_end(&mut self) -> Result<(), AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             if let Some(task) = self.playback.take() {
                 join_audio_task(task.handle).await?;
@@ -191,7 +205,7 @@ pub struct PiAudioSource {
     storage: Arc<dyn Storage>,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
     finished: HashMap<RecordingId, RecordingHandle>,
-    #[cfg(feature = "pi")]
+    #[cfg(feature = "audio")]
     recording: Option<RecordingTask>,
 }
 
@@ -218,7 +232,7 @@ impl PiAudioSource {
             storage,
             telemetry,
             finished: HashMap::new(),
-            #[cfg(feature = "pi")]
+            #[cfg(feature = "audio")]
             recording: None,
         }
     }
@@ -234,12 +248,12 @@ impl PiAudioSource {
         reason = "the pi implementation awaits the recording task; the host stub keeps the same API"
     )]
     pub async fn stop_recording(&mut self) -> Result<Option<RecordingHandle>, AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             let Some(task) = self.recording.take() else {
                 return Ok(None);
@@ -252,22 +266,22 @@ impl PiAudioSource {
         }
     }
 
-    #[cfg(not(feature = "pi"))]
+    #[cfg(not(feature = "audio"))]
     fn unsupported(&self) -> AudioError {
         let _ = (&self.config, &self.storage, &self.telemetry, &self.finished);
-        AudioError::Unsupported("booth-pi audio requires the `pi` Cargo feature".into())
+        AudioError::Unsupported("booth-pi audio requires the `audio` Cargo feature".into())
     }
 }
 
 #[async_trait]
 impl AudioSource for PiAudioSource {
     async fn start(&mut self) -> Result<RecordingId, AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             if self.recording.is_some() {
                 return Err(AudioError::Device("recording already in progress".into()));
@@ -293,13 +307,13 @@ impl AudioSource for PiAudioSource {
     }
 
     async fn path_of(&self, id: &RecordingId) -> Result<String, AudioError> {
-        #[cfg(not(feature = "pi"))]
+        #[cfg(not(feature = "audio"))]
         {
             let _ = id;
             Err(self.unsupported())
         }
 
-        #[cfg(feature = "pi")]
+        #[cfg(feature = "audio")]
         {
             if let Some(handle) = self.finished.get(id) {
                 return Ok(handle.path.clone());
@@ -322,31 +336,31 @@ impl AudioSource for PiAudioSource {
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 struct PlaybackTask {
     cancel: Arc<std::sync::atomic::AtomicBool>,
     handle: tokio::task::JoinHandle<Result<(), AudioError>>,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 struct RecordingTask {
     cancel: Arc<std::sync::atomic::AtomicBool>,
     handle: tokio::task::JoinHandle<Result<RecordingHandle, AudioError>>,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 struct PlayableAudio {
     samples: DecodedAudio,
     repeat: bool,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 struct DecodedAudio {
     samples: Vec<f32>,
     sample_rate_hz: u32,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 async fn join_audio_task(
     handle: tokio::task::JoinHandle<Result<(), AudioError>>,
 ) -> Result<(), AudioError> {
@@ -355,7 +369,7 @@ async fn join_audio_task(
         .map_err(|err| AudioError::Device(format!("audio playback task failed: {err}").into()))?
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 async fn join_recording_task(
     handle: tokio::task::JoinHandle<Result<RecordingHandle, AudioError>>,
 ) -> Result<RecordingHandle, AudioError> {
@@ -364,7 +378,7 @@ async fn join_recording_task(
         .map_err(|err| AudioError::Device(format!("audio recording task failed: {err}").into()))?
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 async fn persist_recording_handle(storage: &Arc<dyn Storage>, handle: &RecordingHandle) {
     let key = recording_path_key(&handle.sha256);
     if let Err(err) = storage.set(&key, handle.path.as_bytes()).await {
@@ -372,17 +386,17 @@ async fn persist_recording_handle(storage: &Arc<dyn Storage>, handle: &Recording
     }
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn recording_path_key(id: &str) -> String {
     format!("recording:{id}:path")
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn provisional_recording_id() -> String {
     format!("recording-{}", monotonic_ns())
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn monotonic_ns() -> u64 {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let nanos = START
@@ -392,7 +406,7 @@ fn monotonic_ns() -> u64 {
     u64::try_from(nanos).unwrap_or(u64::MAX)
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn decode_audio_bytes(bytes: &[u8]) -> Result<DecodedAudio, AudioError> {
     use std::io::{Cursor, ErrorKind};
 
@@ -480,7 +494,7 @@ fn decode_audio_bytes(bytes: &[u8]) -> Result<DecodedAudio, AudioError> {
     })
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn play_blocking(
     config: AudioConfig,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
@@ -490,7 +504,7 @@ fn play_blocking(
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
 
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::traits::{DeviceTrait, StreamTrait};
 
     let host = cpal::default_host();
     let device = select_output_device(&host, config.device_substring.as_deref())?;
@@ -509,7 +523,7 @@ fn play_blocking(
     let err_fn = |err| tracing::warn!(%err, "output audio stream error");
 
     let stream = match sample_format {
-        cpal::SampleFormat::F32 => build_output_stream::<f32>(
+        cpal::SampleFormat::F32 => build_output_stream::<f32, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -519,8 +533,9 @@ fn play_blocking(
             done_tx.clone(),
             telemetry,
             err_fn,
-        ),
-        cpal::SampleFormat::I16 => build_output_stream::<i16>(
+        )
+        .map_err(|err| AudioError::Device(format!("build output stream: {err}").into()))?,
+        cpal::SampleFormat::I16 => build_output_stream::<i16, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -530,8 +545,9 @@ fn play_blocking(
             done_tx.clone(),
             telemetry,
             err_fn,
-        ),
-        cpal::SampleFormat::U16 => build_output_stream::<u16>(
+        )
+        .map_err(|err| AudioError::Device(format!("build output stream: {err}").into()))?,
+        cpal::SampleFormat::U16 => build_output_stream::<u16, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -541,12 +557,14 @@ fn play_blocking(
             done_tx,
             telemetry,
             err_fn,
-        ),
-        other => Err(cpal::BuildStreamError::StreamConfigNotSupported {
-            description: Cow::Owned(format!("unsupported output sample format {other}")),
-        }),
-    }
-    .map_err(|err| AudioError::Device(format!("build output stream: {err}").into()))?;
+        )
+        .map_err(|err| AudioError::Device(format!("build output stream: {err}").into()))?,
+        other => {
+            return Err(AudioError::Device(
+                format!("unsupported output sample format {other}").into(),
+            ));
+        }
+    };
 
     stream
         .play()
@@ -564,7 +582,7 @@ fn play_blocking(
     Ok(())
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 #[allow(
     clippy::too_many_arguments,
     reason = "CPAL callback construction needs shared playback state"
@@ -584,6 +602,7 @@ where
     T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32>,
     E: FnMut(cpal::StreamError) + Send + 'static,
 {
+    use cpal::FromSample;
     use cpal::traits::DeviceTrait;
 
     let mut cursor = 0usize;
@@ -613,7 +632,7 @@ where
                     0.0
                 };
                 meter.observe(value);
-                *sample = T::from_sample(value.clamp(-1.0, 1.0));
+                *sample = <T as FromSample<f32>>::from_sample_(value.clamp(-1.0, 1.0));
             }
         },
         err_fn,
@@ -621,7 +640,7 @@ where
     )
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn record_blocking(
     config: AudioConfig,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
@@ -629,7 +648,7 @@ fn record_blocking(
 ) -> Result<RecordingHandle, AudioError> {
     use std::time::{Duration, Instant};
 
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::traits::{DeviceTrait, StreamTrait};
 
     let host = cpal::default_host();
     let device = select_input_device(&host, config.device_substring.as_deref())?;
@@ -650,7 +669,7 @@ fn record_blocking(
     let err_fn = |err| tracing::warn!(%err, "input audio stream error");
 
     let stream = match sample_format {
-        cpal::SampleFormat::F32 => build_input_stream::<f32>(
+        cpal::SampleFormat::F32 => build_input_stream::<f32, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -658,8 +677,9 @@ fn record_blocking(
             Arc::clone(&cancel),
             telemetry,
             err_fn,
-        ),
-        cpal::SampleFormat::I16 => build_input_stream::<i16>(
+        )
+        .map_err(|err| AudioError::Device(format!("build input stream: {err}").into()))?,
+        cpal::SampleFormat::I16 => build_input_stream::<i16, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -667,8 +687,9 @@ fn record_blocking(
             Arc::clone(&cancel),
             telemetry,
             err_fn,
-        ),
-        cpal::SampleFormat::U16 => build_input_stream::<u16>(
+        )
+        .map_err(|err| AudioError::Device(format!("build input stream: {err}").into()))?,
+        cpal::SampleFormat::U16 => build_input_stream::<u16, _>(
             &device,
             &stream_config,
             Arc::clone(&samples),
@@ -676,12 +697,14 @@ fn record_blocking(
             Arc::clone(&cancel),
             telemetry,
             err_fn,
-        ),
-        other => Err(cpal::BuildStreamError::StreamConfigNotSupported {
-            description: Cow::Owned(format!("unsupported input sample format {other}")),
-        }),
-    }
-    .map_err(|err| AudioError::Device(format!("build input stream: {err}").into()))?;
+        )
+        .map_err(|err| AudioError::Device(format!("build input stream: {err}").into()))?,
+        other => {
+            return Err(AudioError::Device(
+                format!("unsupported input sample format {other}").into(),
+            ));
+        }
+    };
 
     stream
         .play()
@@ -702,7 +725,7 @@ fn record_blocking(
     finalize_recording(&config, &samples)
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn build_input_stream<T, E>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -717,6 +740,7 @@ where
     f32: cpal::FromSample<T>,
     E: FnMut(cpal::StreamError) + Send + 'static,
 {
+    use cpal::FromSample;
     use cpal::traits::DeviceTrait;
 
     let mut meter = LevelMeter::new(
@@ -736,7 +760,7 @@ where
                 return;
             };
             for sample in data {
-                let value = f32::from_sample(*sample).clamp(-1.0, 1.0);
+                let value = <f32 as FromSample<T>>::from_sample_(*sample).clamp(-1.0, 1.0);
                 meter.observe(value);
                 let scaled = (value * f32::from(i16::MAX)).round();
                 sink.push(scaled.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i32);
@@ -751,21 +775,21 @@ where
     )
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn finalize_recording(
     config: &AudioConfig,
     samples: &[i32],
 ) -> Result<RecordingHandle, AudioError> {
     use flacenc::component::BitRepr;
     use flacenc::error::Verify;
-    use sha2::{Digest, Sha256};
-
     std::fs::create_dir_all(&config.recordings_dir).map_err(|err| {
         AudioError::Io(format!("create recordings dir {}: {err}", config.recordings_dir).into())
     })?;
     let encoder = flacenc::config::Encoder::default()
         .into_verified()
-        .map_err(|err| AudioError::Codec(format!("verify FLAC encoder config: {err}").into()))?;
+        .map_err(|(_, err)| {
+            AudioError::Codec(format!("verify FLAC encoder config: {err}").into())
+        })?;
     let source = flacenc::source::MemSource::from_samples(
         samples,
         usize::from(config.channels),
@@ -773,7 +797,7 @@ fn finalize_recording(
         config.sample_rate_hz as usize,
     );
     let stream = flacenc::encode_with_fixed_block_size(&encoder, source, encoder.block_size)
-        .map_err(|err| AudioError::Codec(format!("encode FLAC recording: {err}").into()))?;
+        .map_err(|err| AudioError::Codec(format!("encode FLAC recording: {err:?}").into()))?;
     let mut sink = flacenc::bitsink::ByteSink::new();
     stream
         .write(&mut sink)
@@ -787,10 +811,17 @@ fn finalize_recording(
     ));
     let final_path = std::path::Path::new(&config.recordings_dir).join(format!("{sha256}.flac"));
     std::fs::write(&temp_path, encoded).map_err(|err| {
-        AudioError::Io(format!("write temp recording {temp_path:?}: {err}").into())
+        AudioError::Io(format!("write temp recording {}: {err}", temp_path.display()).into())
     })?;
     std::fs::rename(&temp_path, &final_path).map_err(|err| {
-        AudioError::Io(format!("rename recording {temp_path:?} to {final_path:?}: {err}").into())
+        AudioError::Io(
+            format!(
+                "rename recording {} to {}: {err}",
+                temp_path.display(),
+                final_path.display()
+            )
+            .into(),
+        )
     })?;
     let size_bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     let duration_ms = u64::try_from(samples.len())
@@ -806,7 +837,7 @@ fn finalize_recording(
     })
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn hex_sha256(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
@@ -819,7 +850,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn select_output_device(
     host: &cpal::Host,
     substring: Option<&str>,
@@ -844,7 +875,7 @@ fn select_output_device(
         .ok_or_else(|| AudioError::NoDevice("no default output device".into()))
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 fn select_input_device(
     host: &cpal::Host,
     substring: Option<&str>,
@@ -869,7 +900,7 @@ fn select_input_device(
         .ok_or_else(|| AudioError::NoDevice("no default input device".into()))
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 struct LevelMeter {
     channel: booth_hal::AudioChannel,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
@@ -879,7 +910,7 @@ struct LevelMeter {
     peak: f32,
 }
 
-#[cfg(feature = "pi")]
+#[cfg(feature = "audio")]
 impl LevelMeter {
     fn new(
         channel: booth_hal::AudioChannel,
