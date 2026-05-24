@@ -83,6 +83,17 @@ assets/
 └── publish.yml   workflow_dispatch: builds release artefacts (.deb + tarballs)
 ```
 
+## Related repositories
+
+The Telephone Booth art installation spans several repos:
+
+| Repo | What it is |
+| --- | --- |
+| [`Telephone-Booth`](https://github.com/djensenius/Telephone-Booth) | Rust phone client running on a Pi inside the booth (this repo). |
+| [`Telephone-Booth-Operator`](https://github.com/djensenius/Telephone-Booth-Operator) | Hono + React operator console with Postgres, Authentik OIDC, and WebSocket. |
+| [`Telephone-Booth-Operator-Mobile`](https://github.com/djensenius/Telephone-Booth-Operator-Mobile) | Native Swift/SwiftUI operator app for iOS, macOS, watchOS, visionOS, and tvOS. |
+| [`Telephone-Booth-Transcription`](https://github.com/djensenius/Telephone-Booth-Transcription) | macOS app exposing an OpenAI-compatible local transcription and moderation API. |
+
 ## License
 
 [BSD-3-Clause](./LICENSE).
