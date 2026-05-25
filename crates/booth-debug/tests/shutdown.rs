@@ -1,9 +1,9 @@
 //! Verifies that the debug server releases bound ports after graceful shutdown.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
+#[path = "common/mod.rs"]
 mod common;
 
+use std::error::Error;
 use std::time::Duration;
 
 use booth_debug::DebugConfig;
@@ -12,12 +12,14 @@ use tokio::net::TcpListener;
 /// After signalling shutdown, the debug server should release its port
 /// so a new listener can rebind it immediately.
 #[tokio::test]
-async fn shutdown_releases_port() {
-    let server = common::spawn(DebugConfig::default())
-        .await
-        .expect("server should start");
+async fn shutdown_releases_port() -> Result<(), Box<dyn Error>> {
+    let server = common::spawn(DebugConfig::default()).await?;
 
-    let addr = server.base_url.strip_prefix("http://").unwrap().to_string();
+    let addr = server
+        .base_url
+        .strip_prefix("http://")
+        .ok_or("missing http:// prefix")?
+        .to_string();
 
     // The port should be in use while the server is running.
     let probe = TcpListener::bind(&addr).await;
@@ -34,4 +36,6 @@ async fn shutdown_releases_port() {
         "port should be released after shutdown, but got: {:?}",
         rebound.err()
     );
+
+    Ok(())
 }

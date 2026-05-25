@@ -526,8 +526,10 @@ async fn run_runtime(
         // Signal graceful shutdown so listener tasks stop accepting connections.
         let _ = handles.shutdown_tx.send(());
         // Give listeners a moment to drain, then abort if they haven't stopped.
+        let abort = handles.handle.abort_handle();
         let timeout = tokio::time::timeout(Duration::from_secs(5), handles.handle);
         if let Err(_elapsed) = timeout.await {
+            abort.abort();
             tracing::warn!("debug server did not shut down within timeout, aborting");
         }
     }
