@@ -519,7 +519,7 @@ async fn run_runtime(
                     let recording_id = entry.recording_id.clone();
                     let question_id = entry.question_id.clone().unwrap_or_default();
                     let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
-                    upload_recording(
+                    let success = upload_recording(
                         &*operator,
                         &path,
                         &event_tx,
@@ -531,10 +531,9 @@ async fn run_runtime(
                         bytes,
                     )
                     .await;
-                    // If upload succeeded the spool entry is removed inside
-                    // upload_recording via the spool reference. For recovery we
-                    // dequeue here on success (upload_recording sends UploadComplete).
-                    spool.dequeue(&recording_id).ok();
+                    if success {
+                        spool.dequeue(&recording_id).ok();
+                    }
                 });
             }
         }
@@ -819,7 +818,7 @@ async fn effect_task(
                 let bytes = recording_size(&*audio_source, &recording_id)
                     .await
                     .map_or(0, |(_, b)| b);
-                upload_recording(
+                let success = upload_recording(
                     &*operator,
                     &path,
                     &event_tx,
@@ -831,10 +830,11 @@ async fn effect_task(
                     bytes,
                 )
                 .await;
-                // Dequeue on success (upload_recording sends UploadComplete on
-                // success; we always dequeue here since failure will be
-                // re-discovered on restart via the spool scan).
-                upload_spool.dequeue(&recording_id).ok();
+                // Only dequeue on success; on failure the spool entry remains
+                // so it can be retried on next startup.
+                if success {
+                    upload_spool.dequeue(&recording_id).ok();
+                }
             }
             Effect::FetchRandomQuestion => {
                 fetch_random_question(
@@ -1004,7 +1004,7 @@ async fn upload_recording(
     session_id: Option<String>,
     started: Instant,
     bytes: u64,
-) {
+) -> bool {
     let result = async {
         let slot = retry_operator("POST /v1/uploads", bus, || {
             operator.init_upload(Some(&question_id))
@@ -1035,6 +1035,7 @@ async fn upload_recording(
                 });
             }
             let _ = event_tx.send(Event::UploadComplete).await;
+            true
         }
         Err(err) => {
             publish_operator_error(bus, "upload_recording", &err);
@@ -1051,6 +1052,7 @@ async fn upload_recording(
                     reason: err.to_string(),
                 })
                 .await;
+            false
         }
     }
 }

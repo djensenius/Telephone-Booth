@@ -70,19 +70,28 @@ impl Storage for FileStorage {
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
         let path = self.key_path(key);
         match tokio::fs::remove_file(&path).await {
-            Ok(()) | Err(_) => Ok(()),
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(StorageError::Io(
+                format!("delete {}: {err}", path.display()).into(),
+            )),
         }
     }
 }
 
 /// Percent-encode a key so it is safe as a filename.
 ///
-/// Encodes `/`, `\`, `:`, and `%` as `%XX`.
+/// Encodes `/`, `\`, `:`, `.`, and `%` as `%XX`.
+///
+/// Also handles the empty string by returning a safe placeholder.
 fn encode_key(key: &str) -> String {
+    if key.is_empty() {
+        return "%empty".to_string();
+    }
     let mut out = String::with_capacity(key.len());
     for ch in key.chars() {
         match ch {
-            '/' | '\\' | ':' | '%' | '\0' => {
+            '/' | '\\' | ':' | '%' | '\0' | '.' => {
                 for byte in ch.to_string().as_bytes() {
                     out.push('%');
                     let _ = write!(out, "{byte:02X}");
@@ -97,6 +106,9 @@ fn encode_key(key: &str) -> String {
 /// Decode a percent-encoded filename back to the original key.
 #[cfg(test)]
 fn decode_key(encoded: &str) -> String {
+    if encoded == "%empty" {
+        return String::new();
+    }
     let bytes = encoded.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -187,7 +199,16 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip() {
-        let keys = ["simple", "a/b/c", "recording:sha:path", "100%done", "a\\b"];
+        let keys = [
+            "simple",
+            "a/b/c",
+            "recording:sha:path",
+            "100%done",
+            "a\\b",
+            ".",
+            "..",
+            "",
+        ];
         for key in keys {
             let encoded = encode_key(key);
             let decoded = decode_key(&encoded);

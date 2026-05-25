@@ -45,7 +45,11 @@ impl PendingUploadSpool {
         let json = serde_json::to_vec(entry)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         std::fs::write(&temp_path, &json)?;
-        std::fs::rename(&temp_path, &final_path)?;
+        if let Err(err) = std::fs::rename(&temp_path, &final_path) {
+            // Best-effort cleanup of the temp file on rename failure.
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -53,7 +57,9 @@ impl PendingUploadSpool {
     pub fn dequeue(&self, recording_id: &str) -> std::io::Result<()> {
         let path = self.entry_path(recording_id);
         match std::fs::remove_file(&path) {
-            Ok(()) | Err(_) => Ok(()),
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
         }
     }
 
