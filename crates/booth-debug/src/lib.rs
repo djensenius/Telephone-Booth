@@ -75,7 +75,7 @@ pub struct DebugConfig {
     #[serde(default = "default_loopback")]
     pub loopback_bind: String,
     /// Bind address for the LAN-fallback TLS listener. Defaults to
-    /// `0.0.0.0:8443`.
+    /// `127.0.0.1:8443`.
     #[serde(default = "default_lan")]
     pub lan_bind: String,
     /// Whether to expose the loopback endpoint for `tailscale serve`.

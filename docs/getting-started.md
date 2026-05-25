@@ -37,9 +37,9 @@ cargo run -p booth-bin -- --print-config
 
 `--print-config` echoes the effective configuration with secrets redacted.
 Drop the flag to start the runtime; the debug HTTP server comes up on
-`127.0.0.1:8080` (Tailscale-serve target) and `0.0.0.0:8443` (LAN
-fallback). The debug token is generated on first run and printed once to
-stdout.
+`127.0.0.1:8080` (Tailscale-serve target) and `127.0.0.1:8443` (LAN
+fallback, disabled by default). The debug token is generated on first run
+and printed once to stdout.
 
 ## 4. Next steps
 
