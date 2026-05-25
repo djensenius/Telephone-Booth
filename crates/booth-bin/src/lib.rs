@@ -518,6 +518,7 @@ async fn run_runtime(
                     let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
                     let success = upload_recording(
                         &*operator,
+                        None,
                         &path,
                         &event_tx,
                         &bus,
@@ -825,6 +826,7 @@ async fn effect_task(
                     .map_or(0, |(_, b)| b);
                 let success = upload_recording(
                     &*operator,
+                    Some(&*audio_source),
                     &path,
                     &event_tx,
                     &bus,
@@ -1001,6 +1003,7 @@ async fn fetch_random_message(
 #[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
+    audio_source: Option<&dyn AudioSource>,
     path: &str,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
@@ -1039,7 +1042,9 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            if let Err(err) = audio_source.cleanup_recording(&recording_id).await {
+            if let Some(audio_source) = audio_source
+                && let Err(err) = audio_source.cleanup_recording(&recording_id).await
+            {
                 warn!(%recording_id, %err, "failed to clean up recording metadata");
             }
             let _ = event_tx.send(Event::UploadComplete).await;
