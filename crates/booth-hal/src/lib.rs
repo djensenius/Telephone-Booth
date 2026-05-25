@@ -206,6 +206,14 @@ pub trait AudioSource: Send + Sync {
     /// Path of a finished recording, by id.
     async fn path_of(&self, id: &RecordingId) -> Result<String, AudioError>;
 
+    /// Duration in milliseconds of a finished recording, if known.
+    ///
+    /// Adapters that cannot determine duration without re-decoding (e.g. when
+    /// recovering from a spool file) may return `None`.
+    async fn duration_of(&self, _id: &RecordingId) -> Option<u64> {
+        None
+    }
+
     /// Remove cached metadata for a recording that has been fully uploaded.
     ///
     /// Implementations that use durable storage with its own eviction policy
@@ -243,6 +251,21 @@ pub struct OperatorMessage {
     pub audio_sha256: Option<String>,
     /// Question this message answers (if any).
     pub question_id: Option<QuestionId>,
+}
+
+/// Metadata the client sends when reserving an upload slot.
+///
+/// Carries the recording's content-hash, size, and (when available) duration
+/// so the operator can populate blob metadata, run deduplication, and
+/// validate the upload without re-reading the FLAC stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadMetadata {
+    /// Lowercase hex SHA-256 of the recording bytes.
+    pub sha256_hex: String,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// Recording duration in milliseconds, if known.
+    pub duration_ms: Option<u64>,
 }
 
 /// Slot the operator allocates for a forthcoming upload.
@@ -322,9 +345,14 @@ pub trait OperatorClient: Send + Sync {
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError>;
 
     /// Reserve an upload slot for a recording answering `question_id`.
+    ///
+    /// `metadata` carries the recording's SHA-256, byte size, and duration so
+    /// the operator can populate blob metadata and run content-addressed
+    /// deduplication.
     async fn init_upload(
         &self,
         question_id: Option<&QuestionId>,
+        metadata: &UploadMetadata,
     ) -> Result<UploadSlot, OperatorError>;
 
     /// PUT the bytes of `local_path` to `slot.upload_url`.

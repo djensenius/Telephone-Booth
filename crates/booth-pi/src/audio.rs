@@ -338,6 +338,10 @@ impl AudioSource for PiAudioSource {
         }
     }
 
+    async fn duration_of(&self, id: &RecordingId) -> Option<u64> {
+        self.finished.lock().await.get(id).map(|h| h.duration_ms)
+    }
+
     async fn cleanup_recording(&self, id: &RecordingId) -> Result<(), AudioError> {
         #[cfg(not(feature = "audio"))]
         {
