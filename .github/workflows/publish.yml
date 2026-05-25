@@ -12,8 +12,7 @@ on:
         type: boolean
         default: true
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build-deb:
@@ -26,22 +25,22 @@ jobs:
           - aarch64-unknown-linux-gnu
           - armv7-unknown-linux-gnueabihf
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: publish-${{ matrix.target }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2
         with:
           tool: cross,cargo-deb
       - name: Cross-build release
         run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
       - name: Build .deb
         run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: telephone-booth-${{ matrix.target }}
           path: target/${{ matrix.target }}/debian/*.deb
@@ -56,12 +55,12 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo build -p booth-bin --release --target ${{ matrix.target }}
       - name: Pack tarball
         run: |
@@ -69,7 +68,7 @@ jobs:
           tar -C target/${{ matrix.target }}/release \
               -czf dist/telephone-booth-${{ matrix.target }}.tar.gz \
               telephone-booth
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: telephone-booth-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -77,9 +76,11 @@ jobs:
   release:
     needs: [build-deb, build-tarball]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
       - name: Flatten artifacts
@@ -87,7 +88,7 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.deb' -o -name '*.tar.gz' \) -exec cp {} release/ \;
           ls -lh release/
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ inputs.tag }}
           draft: ${{ inputs.draft }}
