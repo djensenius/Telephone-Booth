@@ -251,6 +251,9 @@ impl PiOperatorClient {
     }
 
     /// Upload a FLAC recording directly to a presigned blob URL.
+    ///
+    /// The file is streamed from disk on each attempt rather than buffered
+    /// entirely in memory, bounding memory usage during retries.
     pub async fn upload_recording(
         &self,
         slot: &UploadSlot,
@@ -258,9 +261,20 @@ impl PiOperatorClient {
     ) -> Result<(), UploadError> {
         #[cfg(feature = "operator")]
         {
-            let bytes = fs::read(local_path)
+            // Validate file size against the configured cap before streaming.
+            let meta = fs::metadata(local_path)
                 .await
                 .map_err(|err| UploadError::Io(err.to_string().into()))?;
+            let file_size = meta.len();
+            if file_size > self.config.max_upload_bytes {
+                return Err(UploadError::Io(
+                    format!(
+                        "recording is {file_size} bytes, exceeds upload cap of {} bytes",
+                        self.config.max_upload_bytes
+                    )
+                    .into(),
+                ));
+            }
 
             for attempt in 0..=UPLOAD_RETRIES {
                 debug!(
@@ -268,11 +282,20 @@ impl PiOperatorClient {
                     attempt = attempt + 1,
                     "uploading recording"
                 );
+
+                // Open the file fresh on each attempt so we stream from disk
+                // rather than cloning an in-memory buffer.
+                let file = fs::File::open(local_path)
+                    .await
+                    .map_err(|err| UploadError::Io(err.to_string().into()))?;
+                let stream = tokio_util::io::ReaderStream::new(file);
+                let body = reqwest::Body::wrap_stream(stream);
+
                 let response = self
                     .upload_client
                     .put(&slot.upload_url)
                     .header(CONTENT_TYPE, slot.content_type.as_str())
-                    .body(bytes.clone())
+                    .body(body)
                     .send()
                     .await;
 

@@ -405,6 +405,7 @@ dependencies = [
  "claxon",
  "cpal",
  "flacenc",
+ "futures-util",
  "heapless",
  "hound",
  "reqwest",
@@ -416,6 +417,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.24.0",
+ "tokio-util",
  "tracing",
  "wiremock",
 ]
