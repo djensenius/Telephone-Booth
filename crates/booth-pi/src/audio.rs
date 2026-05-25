@@ -845,10 +845,9 @@ fn finalize_recording(
         )
     })?;
     let size_bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
-    let duration_ms = u64::try_from(samples.len())
-        .unwrap_or(u64::MAX)
-        .saturating_mul(1_000)
-        / u64::from(config.sample_rate_hz.max(1));
+    let frames =
+        u64::try_from(samples.len()).unwrap_or(u64::MAX) / u64::from(config.channels.max(1));
+    let duration_ms = frames.saturating_mul(1_000) / u64::from(config.sample_rate_hz.max(1));
 
     Ok(RecordingHandle {
         sha256,
@@ -976,5 +975,54 @@ impl LevelMeter {
         self.observed = 0;
         self.sum_squares = 0.0;
         self.peak = 0.0;
+    }
+}
+
+#[cfg(all(test, feature = "audio"))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::AudioConfig;
+
+    fn config_with_channels(channels: u16) -> AudioConfig {
+        let dir = std::env::temp_dir().join(format!("booth-pi-test-{}", std::process::id()));
+        AudioConfig {
+            device_substring: None,
+            sample_rate_hz: 48_000,
+            channels,
+            max_recording_secs: 60,
+            recordings_dir: dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    #[test]
+    fn duration_mono_one_second() {
+        let config = config_with_channels(1);
+        // 48000 mono samples = 1 second
+        let samples: Vec<i32> = vec![0; 48_000];
+        let handle = finalize_recording(&config, &samples).expect("encode mono");
+        assert_eq!(handle.duration_ms, 1_000);
+        // Clean up
+        let _ = std::fs::remove_file(&handle.path);
+    }
+
+    #[test]
+    fn duration_stereo_one_second() {
+        let config = config_with_channels(2);
+        // 96000 interleaved stereo samples = 48000 frames = 1 second
+        let samples: Vec<i32> = vec![0; 96_000];
+        let handle = finalize_recording(&config, &samples).expect("encode stereo");
+        assert_eq!(handle.duration_ms, 1_000);
+        let _ = std::fs::remove_file(&handle.path);
+    }
+
+    #[test]
+    fn duration_zero_channels_returns_codec_error() {
+        // channels = 0 is nonsensical; the FLAC encoder rejects it before
+        // we reach the duration arithmetic, so no divide-by-zero can occur.
+        let config = config_with_channels(0);
+        let samples: Vec<i32> = vec![0; 48_000];
+        let err = finalize_recording(&config, &samples).unwrap_err();
+        assert!(matches!(err, AudioError::Codec(_)));
     }
 }
