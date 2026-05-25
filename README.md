@@ -61,6 +61,10 @@ scp target/aarch64-unknown-linux-gnu/debian/*.deb pi@booth:
 ssh pi@booth "sudo apt install ./telephone-booth_*_arm64.deb"
 ```
 
+For a complete from-scratch Pi setup (flashing the OS, configuring audio,
+Tailscale, wiring, and verification), see the
+[Raspberry Pi setup guide](./docs/raspberry-pi-setup.md).
+
 Full setup (wiring, config keys, Tailscale, debug-surface auth, packaging,
 porting to ESP32/Pico, runbook, ADRs) is in [`docs/`](./docs/README.md).
 
