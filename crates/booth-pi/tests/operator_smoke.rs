@@ -328,8 +328,11 @@ async fn upload_rejects_file_exceeding_max_upload_bytes() -> TestResult {
     let result = client.upload_recording(&slot, &recording).await;
     let _ = std::fs::remove_file(&recording);
 
-    assert!(matches!(result, Err(UploadError::Io(_))));
-    let err_msg = result.unwrap_err().to_string();
+    let err_msg = match result {
+        Err(UploadError::Io(err)) => err.to_string(),
+        Err(err) => panic!("expected I/O error for upload cap, got {err}"),
+        Ok(()) => panic!("expected upload to fail when recording exceeds max upload bytes"),
+    };
     assert!(
         err_msg.contains("exceeds upload cap"),
         "unexpected error: {err_msg}"
