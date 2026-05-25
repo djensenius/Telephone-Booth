@@ -824,12 +824,9 @@ fn finalize_recording(
         )
     })?;
     let size_bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
-    let frames = u64::try_from(samples.len())
-        .unwrap_or(u64::MAX)
-        / u64::from(config.channels.max(1));
-    let duration_ms = frames
-        .saturating_mul(1_000)
-        / u64::from(config.sample_rate_hz.max(1));
+    let frames =
+        u64::try_from(samples.len()).unwrap_or(u64::MAX) / u64::from(config.channels.max(1));
+    let duration_ms = frames.saturating_mul(1_000) / u64::from(config.sample_rate_hz.max(1));
 
     Ok(RecordingHandle {
         sha256,
@@ -967,10 +964,7 @@ mod tests {
     use crate::AudioConfig;
 
     fn config_with_channels(channels: u16) -> AudioConfig {
-        let dir = std::env::temp_dir().join(format!(
-            "booth-pi-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("booth-pi-test-{}", std::process::id()));
         AudioConfig {
             device_substring: None,
             sample_rate_hz: 48_000,
