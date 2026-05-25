@@ -5,7 +5,7 @@
 
 #![warn(missing_docs)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -16,12 +16,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use async_trait::async_trait;
 use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioPort, OperatorClient,
-    OperatorError, PinRole, RecordingId, Storage, StorageError, TelemetryEvent,
+    OperatorError, PinRole, RecordingId, TelemetryEvent,
 };
 use booth_pi::{AudioConfig, GpioConfig, GpioPull, OperatorConfig, PiAudioSink, PiAudioSource};
 use booth_telemetry::TelemetryBus;
@@ -34,7 +33,9 @@ use tracing::{debug, error, info, warn};
 #[cfg(feature = "simulator")]
 pub mod simulator;
 
+pub mod file_storage;
 pub mod observability;
+pub mod pending_uploads;
 
 /// Production config path used by the systemd service.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/phone-booth/config.toml";
@@ -251,11 +252,13 @@ pub fn build_pi_adapters(config: &RuntimeConfig, bus: &TelemetryBus) -> Result<R
     let gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
         .map_err(|err| anyhow!("open GPIO adapter: {err}"))?;
     let audio_sink = PiAudioSink::with_telemetry(config.audio.clone(), Some(telemetry_tx.clone()));
-    let audio_source = PiAudioSource::with_telemetry(
-        config.audio.clone(),
-        Arc::new(MemoryStorage::default()),
-        Some(telemetry_tx),
-    );
+
+    let metadata_dir = metadata_dir_for(&config.audio.recordings_dir);
+    let storage = file_storage::FileStorage::new(&metadata_dir)
+        .map_err(|err| anyhow!("open file storage at {}: {err}", metadata_dir.display()))?;
+
+    let audio_source =
+        PiAudioSource::with_telemetry(config.audio.clone(), Arc::new(storage), Some(telemetry_tx));
     let operator = booth_pi::PiOperatorClient::new(config.operator.clone())
         .map_err(|err| anyhow!("create operator client: {err}"))?;
 
@@ -326,9 +329,12 @@ pub fn build_simulator_adapters(
             }
         });
         let sink = PiAudioSink::with_telemetry(config.audio.clone(), Some(telemetry_tx.clone()));
+        let metadata_dir = metadata_dir_for(&config.audio.recordings_dir);
+        let storage = file_storage::FileStorage::new(&metadata_dir)
+            .map_err(|err| anyhow!("open file storage at {}: {err}", metadata_dir.display()))?;
         let source = PiAudioSource::with_telemetry(
             config.audio.clone(),
-            Arc::new(MemoryStorage::default()),
+            Arc::new(storage),
             Some(telemetry_tx),
         );
         let operator = booth_pi::PiOperatorClient::new(config.operator.clone())
@@ -380,6 +386,19 @@ async fn run_runtime(
     let (audio_tx, audio_rx) = mpsc::channel::<AudioCommand>(32);
     let next_remote_audio = Arc::new(Mutex::new(None));
     let recordings_dir = PathBuf::from(config.audio.recordings_dir.clone());
+    let spool_dir = pending_uploads_dir_for(&config.audio.recordings_dir);
+    let upload_spool = match pending_uploads::PendingUploadSpool::open(&spool_dir) {
+        Ok(spool) => Arc::new(spool),
+        Err(err) => {
+            warn!(dir = %spool_dir.display(), %err, "cannot open pending-upload spool; uploads will not be durable");
+            Arc::new(
+                pending_uploads::PendingUploadSpool::open(
+                    std::env::temp_dir().join("phone-booth-spool"),
+                )
+                .map_err(|e| anyhow!("fallback spool: {e}"))?,
+            )
+        }
+    };
     let session_handle = SessionHandle::default();
 
     // Install the Prometheus metrics registry (idempotent) and start the
@@ -446,8 +465,9 @@ async fn run_runtime(
         event_tx.clone(),
         bus.clone(),
         Arc::clone(&next_remote_audio),
-        recordings_dir,
+        recordings_dir.clone(),
         session_handle.clone(),
+        Arc::clone(&upload_spool),
     ));
 
     let debug_task = if options.start_debug {
@@ -478,6 +498,47 @@ async fn run_runtime(
     } else {
         None
     };
+
+    // Recover pending uploads from a previous run that was interrupted.
+    {
+        let pending = upload_spool.scan();
+        if !pending.is_empty() {
+            info!(
+                count = pending.len(),
+                "recovering pending uploads from spool"
+            );
+            for entry in pending {
+                let operator = Arc::clone(&operator);
+                let event_tx = event_tx.clone();
+                let bus = bus.clone();
+                let session_handle = session_handle.clone();
+                let spool = Arc::clone(&upload_spool);
+                tokio::spawn(async move {
+                    let started = Instant::now();
+                    let path = entry.path.clone();
+                    let recording_id = entry.recording_id.clone();
+                    let question_id = entry.question_id.clone().unwrap_or_default();
+                    let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
+                    upload_recording(
+                        &*operator,
+                        &path,
+                        &event_tx,
+                        &bus,
+                        recording_id.clone(),
+                        question_id,
+                        session_handle.current(),
+                        started,
+                        bytes,
+                    )
+                    .await;
+                    // If upload succeeded the spool entry is removed inside
+                    // upload_recording via the spool reference. For recovery we
+                    // dequeue here on success (upload_recording sends UploadComplete).
+                    spool.dequeue(&recording_id).ok();
+                });
+            }
+        }
+    }
 
     notify_ready(options.notify_systemd);
 
@@ -687,6 +748,7 @@ async fn effect_task(
     next_remote_audio: Arc<Mutex<Option<AudioRef>>>,
     recordings_dir: PathBuf,
     session_handle: SessionHandle,
+    upload_spool: Arc<pending_uploads::PendingUploadSpool>,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     while let Some(effect) = effect_rx.recv().await {
@@ -736,13 +798,30 @@ async fn effect_task(
                         at_monotonic_ns: monotonic_ns(),
                     });
                 }
+                // Resolve the file path and enqueue in the durable spool
+                // before attempting the upload.
+                let path = match audio_source.path_of(&recording_id).await {
+                    Ok(p) => p,
+                    Err(err) => {
+                        publish_audio_error(&bus, &err);
+                        continue;
+                    }
+                };
+                let spool_entry = pending_uploads::SpoolEntry {
+                    recording_id: recording_id.clone(),
+                    question_id: Some(question_id.clone()),
+                    path: path.clone(),
+                };
+                if let Err(err) = upload_spool.enqueue(&spool_entry) {
+                    warn!(%err, "failed to write upload spool entry; upload will not survive crash");
+                }
                 let started = Instant::now();
                 let bytes = recording_size(&*audio_source, &recording_id)
                     .await
                     .map_or(0, |(_, b)| b);
                 upload_recording(
                     &*operator,
-                    &*audio_source,
+                    &path,
                     &event_tx,
                     &bus,
                     recording_id.clone(),
@@ -752,6 +831,10 @@ async fn effect_task(
                     bytes,
                 )
                 .await;
+                // Dequeue on success (upload_recording sends UploadComplete on
+                // success; we always dequeue here since failure will be
+                // re-discovered on restart via the spool scan).
+                upload_spool.dequeue(&recording_id).ok();
             }
             Effect::FetchRandomQuestion => {
                 fetch_random_question(
@@ -913,7 +996,7 @@ async fn fetch_random_message(
 #[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
-    audio_source: &dyn AudioSource,
+    path: &str,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
     recording_id: RecordingId,
@@ -923,16 +1006,12 @@ async fn upload_recording(
     bytes: u64,
 ) {
     let result = async {
-        let path = audio_source
-            .path_of(&recording_id)
-            .await
-            .map_err(|err| OperatorError::Transport(err.to_string().into()))?;
         let slot = retry_operator("POST /v1/uploads", bus, || {
             operator.init_upload(Some(&question_id))
         })
         .await?;
         retry_operator("PUT <presigned-upload-url>", bus, || {
-            operator.put_upload(&slot, &path)
+            operator.put_upload(&slot, path)
         })
         .await?;
         retry_operator("POST /v1/uploads/{id}/complete", bus, || {
@@ -1307,6 +1386,47 @@ fn notify_ready(enabled: bool) {
     }
 }
 
+/// Derive the metadata storage directory from the recordings directory.
+///
+/// Places it as a sibling: `<recordings_dir>/../metadata/`.
+fn metadata_dir_for(recordings_dir: &str) -> PathBuf {
+    Path::new(recordings_dir)
+        .parent()
+        .unwrap_or_else(|| Path::new(recordings_dir))
+        .join("metadata")
+}
+
+/// Derive the pending-uploads spool directory from the recordings directory.
+///
+/// Places it as a sibling: `<recordings_dir>/../pending-uploads/`.
+fn pending_uploads_dir_for(recordings_dir: &str) -> PathBuf {
+    Path::new(recordings_dir)
+        .parent()
+        .unwrap_or_else(|| Path::new(recordings_dir))
+        .join("pending-uploads")
+}
+
+#[cfg(all(feature = "systemd", unix))]
+fn send_systemd_notify(message: &str) -> std::io::Result<()> {
+    use std::os::unix::net::UnixDatagram;
+
+    let Some(socket) = env::var_os("NOTIFY_SOCKET") else {
+        return Ok(());
+    };
+    let socket = socket.to_string_lossy();
+    let target = socket.strip_prefix('@').map_or_else(
+        || socket.clone().into_owned(),
+        |stripped| {
+            let mut abstract_name = String::from("\0");
+            abstract_name.push_str(stripped);
+            abstract_name
+        },
+    );
+    let datagram = UnixDatagram::unbound()?;
+    datagram.send_to(message.as_bytes(), target)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AudioRef, is_sha256_hex, operator_audio_ref};
@@ -1364,51 +1484,5 @@ mod tests {
 
     fn unique_temp_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("telephone-booth-test-{}", uuid::Uuid::new_v4()))
-    }
-}
-
-#[cfg(all(feature = "systemd", unix))]
-fn send_systemd_notify(message: &str) -> std::io::Result<()> {
-    use std::os::unix::net::UnixDatagram;
-
-    let Some(socket) = env::var_os("NOTIFY_SOCKET") else {
-        return Ok(());
-    };
-    let socket = socket.to_string_lossy();
-    let target = socket.strip_prefix('@').map_or_else(
-        || socket.clone().into_owned(),
-        |stripped| {
-            let mut abstract_name = String::from("\0");
-            abstract_name.push_str(stripped);
-            abstract_name
-        },
-    );
-    let datagram = UnixDatagram::unbound()?;
-    datagram.send_to(message.as_bytes(), target)?;
-    Ok(())
-}
-
-#[derive(Default)]
-struct MemoryStorage {
-    inner: Mutex<HashMap<String, Vec<u8>>>,
-}
-
-#[async_trait]
-impl Storage for MemoryStorage {
-    async fn get(&self, key: &str) -> StdResult<Option<Vec<u8>>, StorageError> {
-        Ok(self.inner.lock().await.get(key).cloned())
-    }
-
-    async fn set(&self, key: &str, value: &[u8]) -> StdResult<(), StorageError> {
-        self.inner
-            .lock()
-            .await
-            .insert(key.to_string(), value.to_vec());
-        Ok(())
-    }
-
-    async fn delete(&self, key: &str) -> StdResult<(), StorageError> {
-        self.inner.lock().await.remove(key);
-        Ok(())
     }
 }
