@@ -518,6 +518,7 @@ async fn run_runtime(
                     let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
                     let success = upload_recording(
                         &*operator,
+                        None,
                         &path,
                         &event_tx,
                         &bus,
@@ -526,6 +527,7 @@ async fn run_runtime(
                         session_handle.current(),
                         started,
                         bytes,
+                        None,
                     )
                     .await;
                     if success {
@@ -823,8 +825,10 @@ async fn effect_task(
                 let bytes = recording_size(&*audio_source, &recording_id)
                     .await
                     .map_or(0, |(_, b)| b);
+                let recording_duration_ms = audio_source.duration_of(&recording_id).await;
                 let success = upload_recording(
                     &*operator,
+                    Some(&*audio_source),
                     &path,
                     &event_tx,
                     &bus,
@@ -833,6 +837,7 @@ async fn effect_task(
                     session_id,
                     started,
                     bytes,
+                    recording_duration_ms,
                 )
                 .await;
                 // Only dequeue on success; on failure the spool entry remains
@@ -1001,6 +1006,7 @@ async fn fetch_random_message(
 #[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
+    audio_source: Option<&dyn AudioSource>,
     path: &str,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
@@ -1009,10 +1015,16 @@ async fn upload_recording(
     session_id: Option<String>,
     started: Instant,
     bytes: u64,
+    recording_duration_ms: Option<u64>,
 ) -> bool {
+    let metadata = booth_hal::UploadMetadata {
+        sha256_hex: recording_id.clone(),
+        size_bytes: bytes,
+        duration_ms: recording_duration_ms,
+    };
     let result = async {
         let slot = retry_operator("POST /v1/uploads", bus, || {
-            operator.init_upload(Some(&question_id))
+            operator.init_upload(Some(&question_id), &metadata)
         })
         .await?;
         retry_operator("PUT <presigned-upload-url>", bus, || {
@@ -1020,7 +1032,7 @@ async fn upload_recording(
         })
         .await?;
         retry_operator("POST /v1/uploads/{id}/complete", bus, || {
-            operator.complete_upload(&slot.id, &recording_id, 0)
+            operator.complete_upload(&slot.id, &recording_id, recording_duration_ms.unwrap_or(0))
         })
         .await?;
         Ok::<(), OperatorError>(())
@@ -1039,7 +1051,9 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            if let Err(err) = audio_source.cleanup_recording(&recording_id).await {
+            if let Some(source) = audio_source
+                && let Err(err) = source.cleanup_recording(&recording_id).await
+            {
                 warn!(%recording_id, %err, "failed to clean up recording metadata");
             }
             let _ = event_tx.send(Event::UploadComplete).await;
