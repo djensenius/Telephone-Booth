@@ -80,7 +80,6 @@ metrics-util = "0.18"
 
 # Async / runtime (only used by std adapters)
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"] }
 async-trait = "0.1"
 futures = "0.3"
 futures-util = "0.3"

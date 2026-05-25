@@ -20,7 +20,6 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true, optional = true }
-tokio-util = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -49,7 +48,7 @@ default = []
 # feature.
 audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest", "dep:futures-util"]
 # Cross-platform operator HTTP client.
-operator = ["dep:reqwest", "dep:tokio-util"]
+operator = ["dep:reqwest"]
 # Real Raspberry Pi build: cross-platform audio + operator plus rppal GPIO.
 pi = ["audio", "operator", "dep:rppal"]
 

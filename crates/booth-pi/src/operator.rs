@@ -27,7 +27,9 @@ use booth_hal::{
 
 #[cfg(feature = "operator")]
 use {
-    reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT},
+    reqwest::header::{
+        ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT,
+    },
     serde::{Deserialize, Serialize},
     std::time::{Duration, SystemTime, UNIX_EPOCH},
     tokio::fs,
@@ -288,13 +290,13 @@ impl PiOperatorClient {
                 let file = fs::File::open(local_path)
                     .await
                     .map_err(|err| UploadError::Io(err.to_string().into()))?;
-                let stream = tokio_util::io::ReaderStream::new(file);
-                let body = reqwest::Body::wrap_stream(stream);
+                let body = reqwest::Body::from(file);
 
                 let response = self
                     .upload_client
                     .put(&slot.upload_url)
                     .header(CONTENT_TYPE, slot.content_type.as_str())
+                    .header(CONTENT_LENGTH, file_size)
                     .body(body)
                     .send()
                     .await;
