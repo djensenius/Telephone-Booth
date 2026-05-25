@@ -49,6 +49,7 @@ Link it here, or explain why one isn't needed.
 ## Checklist
 
 - [ ] Commits do **not** include a `Co-authored-by: Copilot` trailer.
+- [ ] Copilot PR review completed and all actionable feedback is addressed.
 - [ ] Public items in `booth-core` / `booth-hal` have rustdoc.
 - [ ] Tests added or updated alongside behavior changes.
 - [ ] `docs/` updated if user-facing behavior changed.

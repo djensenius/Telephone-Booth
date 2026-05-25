@@ -379,6 +379,7 @@ async fn run_runtime(
     let (effect_tx, effect_rx) = mpsc::channel::<Effect>(EFFECT_CHANNEL);
     let (audio_tx, audio_rx) = mpsc::channel::<AudioCommand>(32);
     let next_remote_audio = Arc::new(Mutex::new(None));
+    let recordings_dir = PathBuf::from(config.audio.recordings_dir.clone());
     let session_handle = SessionHandle::default();
 
     // Install the Prometheus metrics registry (idempotent) and start the
@@ -445,6 +446,7 @@ async fn run_runtime(
         event_tx.clone(),
         bus.clone(),
         Arc::clone(&next_remote_audio),
+        recordings_dir,
         session_handle.clone(),
     ));
 
@@ -682,7 +684,8 @@ async fn effect_task(
     operator: Arc<dyn OperatorClient>,
     event_tx: mpsc::Sender<Event>,
     bus: TelemetryBus,
-    next_remote_audio: Arc<Mutex<Option<String>>>,
+    next_remote_audio: Arc<Mutex<Option<AudioRef>>>,
+    recordings_dir: PathBuf,
     session_handle: SessionHandle,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
@@ -751,10 +754,24 @@ async fn effect_task(
                 .await;
             }
             Effect::FetchRandomQuestion => {
-                fetch_random_question(&*operator, &event_tx, &bus, &next_remote_audio).await;
+                fetch_random_question(
+                    &*operator,
+                    &event_tx,
+                    &bus,
+                    &next_remote_audio,
+                    &recordings_dir,
+                )
+                .await;
             }
             Effect::FetchRandomMessage => {
-                fetch_random_message(&*operator, &event_tx, &bus, &next_remote_audio).await;
+                fetch_random_message(
+                    &*operator,
+                    &event_tx,
+                    &bus,
+                    &next_remote_audio,
+                    &recordings_dir,
+                )
+                .await;
             }
             Effect::PutStatus(status) => {
                 if let Err(err) =
@@ -792,24 +809,51 @@ async fn effect_task(
 
 async fn resolve_audio_ref(
     source: AudioRef,
-    next_remote_audio: &Arc<Mutex<Option<String>>>,
+    next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
 ) -> AudioRef {
     match source {
         AudioRef::RemoteUrl(url) if url.is_empty() => next_remote_audio
             .lock()
             .await
             .take()
-            .map(AudioRef::RemoteUrl)
             .unwrap_or(AudioRef::RemoteUrl(url)),
         other => other,
     }
+}
+
+fn operator_audio_ref(
+    audio_url: String,
+    audio_sha256: Option<&str>,
+    recordings_dir: &Path,
+) -> AudioRef {
+    if let Some(sha256) = audio_sha256
+        && is_sha256_hex(sha256)
+    {
+        let local_path = recordings_dir.join(format!("{sha256}.flac"));
+        if local_path.is_file() {
+            debug!(
+                path = %local_path.display(),
+                "using local operator audio instead of remote URL"
+            );
+            return AudioRef::LocalFile(local_path.to_string_lossy().into_owned());
+        }
+    }
+    AudioRef::RemoteUrl(audio_url)
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 async fn fetch_random_question(
     operator: &dyn OperatorClient,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
-    next_remote_audio: &Arc<Mutex<Option<String>>>,
+    next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
+    recordings_dir: &Path,
 ) {
     match retry_operator("GET /v1/questions/random", bus, || {
         operator.random_question()
@@ -817,7 +861,11 @@ async fn fetch_random_question(
     .await
     {
         Ok(question) => {
-            *next_remote_audio.lock().await = Some(question.audio_url);
+            *next_remote_audio.lock().await = Some(operator_audio_ref(
+                question.audio_url,
+                question.audio_sha256.as_deref(),
+                recordings_dir,
+            ));
             let _ = event_tx
                 .send(Event::QuestionReady {
                     question_id: question.id,
@@ -839,11 +887,16 @@ async fn fetch_random_message(
     operator: &dyn OperatorClient,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
-    next_remote_audio: &Arc<Mutex<Option<String>>>,
+    next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
+    recordings_dir: &Path,
 ) {
     match retry_operator("GET /v1/messages/random", bus, || operator.random_message()).await {
         Ok(message) => {
-            *next_remote_audio.lock().await = Some(message.audio_url);
+            *next_remote_audio.lock().await = Some(operator_audio_ref(
+                message.audio_url,
+                message.audio_sha256.as_deref(),
+                recordings_dir,
+            ));
             let _ = event_tx.send(Event::MessageReady).await;
         }
         Err(err) => {
@@ -1251,6 +1304,66 @@ fn notify_ready(enabled: bool) {
         if env::var_os("NOTIFY_SOCKET").is_some() {
             debug!("NOTIFY_SOCKET set but booth-bin was built without the systemd feature");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioRef, is_sha256_hex, operator_audio_ref};
+    use std::fs;
+
+    #[test]
+    fn operator_audio_ref_uses_local_sha_file_when_present() -> std::io::Result<()> {
+        let sha = "a".repeat(64);
+        let recordings_dir = unique_temp_dir();
+        fs::create_dir_all(&recordings_dir)?;
+        let local_file = recordings_dir.join(format!("{sha}.flac"));
+        fs::write(&local_file, b"flac")?;
+
+        let audio = operator_audio_ref(
+            "https://operator.example/audio.flac".to_string(),
+            Some(&sha),
+            &recordings_dir,
+        );
+
+        assert_eq!(
+            audio,
+            AudioRef::LocalFile(local_file.to_string_lossy().into_owned())
+        );
+        fs::remove_dir_all(recordings_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn operator_audio_ref_falls_back_to_remote_when_local_file_is_absent() {
+        let recordings_dir = unique_temp_dir();
+        let remote = "https://operator.example/audio.flac".to_string();
+
+        let audio = operator_audio_ref(remote.clone(), Some(&"b".repeat(64)), &recordings_dir);
+
+        assert_eq!(audio, AudioRef::RemoteUrl(remote));
+    }
+
+    #[test]
+    fn operator_audio_ref_falls_back_to_remote_when_sha_is_invalid() {
+        let recordings_dir = unique_temp_dir();
+        let remote = "https://operator.example/audio.flac".to_string();
+
+        let audio = operator_audio_ref(remote.clone(), Some("../not-a-sha"), &recordings_dir);
+
+        assert_eq!(audio, AudioRef::RemoteUrl(remote));
+    }
+
+    #[test]
+    fn sha_validation_accepts_lowercase_hex_only() {
+        assert!(is_sha256_hex(&"0".repeat(64)));
+        assert!(!is_sha256_hex(&"A".repeat(64)));
+        assert!(!is_sha256_hex(&"g".repeat(64)));
+        assert!(!is_sha256_hex(&"0".repeat(63)));
+    }
+
+    fn unique_temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("telephone-booth-test-{}", uuid::Uuid::new_v4()))
     }
 }
 
