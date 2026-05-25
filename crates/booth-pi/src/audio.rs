@@ -230,6 +230,19 @@ impl AudioSink for PiAudioSink {
                     }
                 }
                 AudioRef::LocalFile(path) => {
+                    let max_bytes = self.config.max_audio_download_bytes;
+                    let meta = std::fs::metadata(&path).map_err(|err| {
+                        AudioError::Source(format!("stat audio file {path}: {err}").into())
+                    })?;
+                    if meta.len() > max_bytes {
+                        return Err(AudioError::Source(
+                            format!(
+                                "local audio file {path} is {} bytes, exceeds cap of {max_bytes}",
+                                meta.len()
+                            )
+                            .into(),
+                        ));
+                    }
                     let bytes = std::fs::read(&path).map_err(|err| {
                         AudioError::Source(format!("read audio file {path}: {err}").into())
                     })?;
@@ -1152,6 +1165,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels,
             max_recording_secs: 60,
+            max_audio_download_bytes: 32 * 1024 * 1024,
             recordings_dir: dir.to_string_lossy().into_owned(),
         }
     }
@@ -1185,5 +1199,32 @@ mod tests {
         let samples: Vec<i32> = vec![0; 48_000];
         let err = finalize_recording(&config, &samples).unwrap_err();
         assert!(matches!(err, AudioError::Codec(_)));
+    }
+
+    #[tokio::test]
+    async fn local_file_rejects_over_limit() {
+        let dir = std::env::temp_dir().join(format!("booth-pi-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let oversized = dir.join("oversized.flac");
+        std::fs::write(&oversized, vec![0u8; 128]).unwrap();
+
+        let config = AudioConfig {
+            max_audio_download_bytes: 64, // 64 byte cap
+            ..AudioConfig::default()
+        };
+        let mut sink = PiAudioSink::new(config);
+        let result = sink
+            .play(AudioRef::LocalFile(
+                oversized.to_string_lossy().into_owned(),
+            ))
+            .await;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result.unwrap_err();
+        assert!(matches!(err, AudioError::Source(_)));
+        assert!(
+            err.to_string().contains("exceeds cap"),
+            "unexpected error: {err}"
+        );
     }
 }
