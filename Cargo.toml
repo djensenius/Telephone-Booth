@@ -115,3 +115,4 @@ directories = "5"
 insta = { version = "1", features = ["yaml"] }
 proptest = "1"
 tokio-test = "0.4"
+url = "2"

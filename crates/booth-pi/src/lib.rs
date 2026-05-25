@@ -29,7 +29,7 @@ pub use audio::{
 
 pub mod operator;
 
-pub use operator::{PiOperatorClient, UploadError};
+pub use operator::{PiOperatorClient, UploadError, validate_upload_url};
 
 pub mod gpio;
 
@@ -247,6 +247,12 @@ pub struct OperatorConfig {
     /// Maximum reconnect backoff for operator WebSocket consumers, in milliseconds.
     #[serde(default = "default_ws_reconnect_max_ms")]
     pub ws_reconnect_max_ms: u64,
+    /// Allowed storage hostnames for presigned upload URLs.
+    ///
+    /// When non-empty, upload URLs must have a host matching one of these entries.
+    /// When empty, any HTTPS host (that is not a private/link-local IP) is accepted.
+    #[serde(default)]
+    pub allowed_upload_hosts: Vec<String>,
 }
 
 fn default_operator_url() -> String {
@@ -274,6 +280,7 @@ impl Default for OperatorConfig {
             http_timeout_secs: default_http_timeout_secs(),
             ws_reconnect_initial_ms: default_ws_reconnect_initial_ms(),
             ws_reconnect_max_ms: default_ws_reconnect_max_ms(),
+            allowed_upload_hosts: Vec::new(),
         }
     }
 }
@@ -287,6 +294,7 @@ impl fmt::Debug for OperatorConfig {
             .field("http_timeout_secs", &self.http_timeout_secs)
             .field("ws_reconnect_initial_ms", &self.ws_reconnect_initial_ms)
             .field("ws_reconnect_max_ms", &self.ws_reconnect_max_ms)
+            .field("allowed_upload_hosts", &self.allowed_upload_hosts)
             .finish()
     }
 }

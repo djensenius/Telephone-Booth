@@ -7,7 +7,8 @@
 #![cfg(feature = "operator")]
 #![allow(
     clippy::expect_used,
-    reason = "wiremock uses an expect builder method for request counts"
+    clippy::unwrap_used,
+    reason = "wiremock uses an expect builder method for request counts; tests use unwrap for assertions"
 )]
 
 use std::error::Error;
@@ -30,6 +31,7 @@ fn config(base_url: String) -> OperatorConfig {
         http_timeout_secs: 2,
         ws_reconnect_initial_ms: 1,
         ws_reconnect_max_ms: 2,
+        allowed_upload_hosts: Vec::new(),
     }
 }
 
@@ -285,13 +287,12 @@ async fn maps_401_to_unauthorized() -> TestResult {
 }
 
 #[tokio::test]
-async fn upload_recording_retries_5xx_then_gives_up() -> TestResult {
+async fn upload_recording_rejects_http_localhost_url() -> TestResult {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/blob"))
-        .and(header("content-type", "audio/flac"))
-        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
-        .expect(4)
+        .respond_with(ResponseTemplate::new(503))
+        .expect(0) // validation rejects before any request is made
         .mount(&server)
         .await;
 
@@ -310,6 +311,105 @@ async fn upload_recording_retries_5xx_then_gives_up() -> TestResult {
     let result = client.upload_recording(&slot, &recording).await;
     let _ = std::fs::remove_file(&recording);
 
-    assert!(matches!(result, Err(UploadError::Http { status: 503, .. })));
+    // URL is http:// on localhost — rejected by validation before any network I/O
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Upload URL validation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_upload_url_accepts_valid_https() {
+    let hosts = vec!["myaccount.blob.core.windows.net".to_string()];
+    let result = booth_pi::validate_upload_url(
+        "https://myaccount.blob.core.windows.net/container/blob?sv=2021-08-06&sig=abc",
+        &hosts,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn validate_upload_url_rejects_http() {
+    let hosts: Vec<String> = vec![];
+    let result = booth_pi::validate_upload_url("http://storage.example.com/blob", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("HTTPS"), "error should mention HTTPS: {msg}");
+}
+
+#[test]
+fn validate_upload_url_rejects_non_https_scheme() {
+    let hosts: Vec<String> = vec![];
+    // file:// URLs have no host and a different scheme
+    let result = booth_pi::validate_upload_url("file:///etc/passwd", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+}
+
+#[test]
+fn validate_upload_url_rejects_private_ipv4() {
+    let hosts: Vec<String> = vec![];
+    for addr in &[
+        "https://10.0.0.1/upload",
+        "https://192.168.1.1/upload",
+        "https://172.16.0.1/upload",
+        "https://127.0.0.1/upload",
+        "https://169.254.1.1/upload",
+        "https://100.100.1.1/upload",
+    ] {
+        let result = booth_pi::validate_upload_url(addr, &hosts);
+        assert!(
+            matches!(result, Err(UploadError::InvalidUrl(_))),
+            "expected rejection for {addr}"
+        );
+    }
+}
+
+#[test]
+fn validate_upload_url_rejects_private_ipv6() {
+    let hosts: Vec<String> = vec![];
+    for addr in &[
+        "https://[::1]/upload",
+        "https://[fc00::1]/upload",
+        "https://[fe80::1]/upload",
+    ] {
+        let result = booth_pi::validate_upload_url(addr, &hosts);
+        assert!(
+            matches!(result, Err(UploadError::InvalidUrl(_))),
+            "expected rejection for {addr}"
+        );
+    }
+}
+
+#[test]
+fn validate_upload_url_rejects_localhost() {
+    let hosts: Vec<String> = vec![];
+    let result = booth_pi::validate_upload_url("https://localhost/upload", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+}
+
+#[test]
+fn validate_upload_url_rejects_unlisted_host() {
+    let hosts = vec!["allowed.blob.core.windows.net".to_string()];
+    let result = booth_pi::validate_upload_url("https://evil.attacker.com/exfil", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("not in the allowed hosts"), "error: {msg}");
+}
+
+#[test]
+fn validate_upload_url_allows_any_public_host_when_list_empty() {
+    let hosts: Vec<String> = vec![];
+    let result =
+        booth_pi::validate_upload_url("https://any-storage.example.com/blob?sig=abc", &hosts);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn validate_upload_url_host_check_is_case_insensitive() {
+    let hosts = vec!["MyAccount.blob.core.windows.net".to_string()];
+    let result =
+        booth_pi::validate_upload_url("https://myaccount.blob.core.windows.net/c/b?sv=x", &hosts);
+    assert!(result.is_ok());
 }

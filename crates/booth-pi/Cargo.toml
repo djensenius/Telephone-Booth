@@ -26,6 +26,7 @@ serde_json = { workspace = true }
 heapless = { workspace = true }
 metrics = { workspace = true }
 sha2 = { workspace = true }
+url = { workspace = true }
 
 # Cross-platform audio + decode/encode. Enabled by the `audio` feature so the
 # host TUI simulator on macOS / Linux can use them without the `pi` feature.
