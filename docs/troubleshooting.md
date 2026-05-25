@@ -62,9 +62,9 @@ certificate** and confirm the fingerprint from
 ## Recordings never finish uploading
 
 - Check `[debug]/audio` for the file's size and sha256.
-- Azure SAS URL may have expired. The slot's `expiresAt` is in the
-  upload-slot response; if your network is slow, you may need to bump
-  `AZURE_SAS_TTL_MINUTES` on the operator backend.
+- Azure SAS URLs expire per operator policy. The phone no longer receives an
+  `expiresAt` field, so check operator logs if slow networks leave blobs
+  uncompleted before the SAS expiry window.
 - Confirm the operator can reach Azure: from the operator container,
   `curl -I "<your blob endpoint>"`.
 

@@ -19,9 +19,17 @@ use booth_pi::{OperatorConfig, PiOperatorClient, UploadError};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde_json::json;
 use wiremock::matchers::{body_json, body_string_contains, header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+struct EmptyBody;
+
+impl Match for EmptyBody {
+    fn matches(&self, request: &Request) -> bool {
+        request.body.is_empty()
+    }
+}
 
 fn config(base_url: String) -> OperatorConfig {
     OperatorConfig {
@@ -214,20 +222,17 @@ async fn request_upload_slot_posts_metadata() -> TestResult {
     let (server, client) = client_with_server().await?;
     let sha = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     Mock::given(method("POST"))
-        .and(path("/v1/uploads"))
+        .and(path("/v1/messages"))
         .and(header("authorization", "Bearer test-token"))
         .and(body_json(json!({
             "sha256": sha,
-            "sizeBytes": 4,
-            "contentType": "audio/flac",
             "durationMs": 123,
             "questionId": "11111111-1111-1111-1111-111111111111"
         })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "id": "33333333-3333-3333-3333-333333333333",
             "uploadUrl": "http://blob.example/upload?sas=redacted",
-            "expiresAt": "2026-01-01T00:10:00Z",
-            "contentType": "audio/flac"
+            "blobName": "recordings/33333333-3333-3333-3333-333333333333.flac"
         })))
         .expect(1)
         .mount(&server)
@@ -239,8 +244,33 @@ async fn request_upload_slot_posts_metadata() -> TestResult {
         .await?;
     assert_eq!(slot.id, "33333333-3333-3333-3333-333333333333");
     assert_eq!(slot.upload_url, "http://blob.example/upload?sas=redacted");
-    assert_eq!(slot.expires_at, "2026-01-01T00:10:00Z");
-    assert_eq!(slot.content_type, "audio/flac");
+    assert_eq!(
+        slot.blob_name,
+        "recordings/33333333-3333-3333-3333-333333333333.flac"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_upload_slot_requires_duration() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let result = client
+        .request_upload_slot(
+            None,
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            4,
+            None,
+        )
+        .await;
+
+    assert!(matches!(result, Err(OperatorError::InvalidArgument(_))));
     Ok(())
 }
 
@@ -249,14 +279,15 @@ async fn upload_complete_confirms_slot() -> TestResult {
     let (server, client) = client_with_server().await?;
     Mock::given(method("POST"))
         .and(path(
-            "/v1/uploads/33333333-3333-3333-3333-333333333333/complete",
+            "/v1/messages/33333333-3333-3333-3333-333333333333/complete",
         ))
         .and(header("authorization", "Bearer test-token"))
-        .and(body_json(json!({
-            "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            "durationMs": 5000
+        .and(EmptyBody)
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "33333333-3333-3333-3333-333333333333",
+            "status": "received",
+            "receivedAt": "2026-01-01T00:00:00Z"
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(message_body()))
         .expect(1)
         .mount(&server)
         .await;
@@ -268,6 +299,47 @@ async fn upload_complete_confirms_slot() -> TestResult {
             5000,
         )
         .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn complete_maps_413_and_422_to_non_retryable_errors() -> TestResult {
+    for (status, body) in [
+        (
+            413,
+            json!({ "code": "audio_too_large", "maxBytes": 26_214_400 }).to_string(),
+        ),
+        (422, json!({ "code": "sha256_mismatch" }).to_string()),
+    ] {
+        let (server, client) = client_with_server().await?;
+        Mock::given(method("POST"))
+            .and(path(
+                "/v1/messages/33333333-3333-3333-3333-333333333333/complete",
+            ))
+            .and(EmptyBody)
+            .respond_with(ResponseTemplate::new(status).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = client
+            .upload_complete(
+                "33333333-3333-3333-3333-333333333333",
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                5000,
+            )
+            .await;
+
+        match (status, result) {
+            (413, Err(OperatorError::PayloadTooLarge { max_bytes, .. })) => {
+                assert_eq!(max_bytes, Some(26_214_400));
+            }
+            (422, Err(OperatorError::Unprocessable(message))) => {
+                assert!(message.contains("sha256_mismatch"));
+            }
+            (_, other) => panic!("unexpected result for {status}: {other:?}"),
+        }
+    }
     Ok(())
 }
 
@@ -305,8 +377,7 @@ async fn upload_recording_rejects_http_localhost_url() -> TestResult {
     let slot = booth_hal::UploadSlot {
         id: "33333333-3333-3333-3333-333333333333".to_string(),
         upload_url: format!("{}/blob", server.uri()),
-        expires_at: "2026-01-01T00:10:00Z".to_string(),
-        content_type: "audio/flac".to_string(),
+        blob_name: "recordings/33333333-3333-3333-3333-333333333333.flac".to_string(),
     };
     let result = client.upload_recording(&slot, &recording).await;
     let _ = std::fs::remove_file(&recording);
@@ -336,8 +407,7 @@ async fn put_recording_retries_5xx_then_gives_up() -> TestResult {
     let slot = booth_hal::UploadSlot {
         id: "33333333-3333-3333-3333-333333333333".to_string(),
         upload_url: format!("{}/blob", server.uri()),
-        expires_at: "2026-01-01T00:10:00Z".to_string(),
-        content_type: "audio/flac".to_string(),
+        blob_name: "recordings/33333333-3333-3333-3333-333333333333.flac".to_string(),
     };
     // Call put_recording directly to bypass URL validation (mock is HTTP on localhost)
     let result = client.put_recording(&slot, &recording).await;
@@ -461,8 +531,7 @@ async fn upload_rejects_file_exceeding_max_upload_bytes() -> TestResult {
     let slot = booth_hal::UploadSlot {
         id: "44444444-4444-4444-4444-444444444444".to_string(),
         upload_url: "https://storage.example.com/blob".to_string(),
-        expires_at: "2026-01-01T00:10:00Z".to_string(),
-        content_type: "audio/flac".to_string(),
+        blob_name: "recordings/44444444-4444-4444-4444-444444444444.flac".to_string(),
     };
     let result = client.upload_recording(&slot, &recording).await;
     let _ = std::fs::remove_file(&recording);

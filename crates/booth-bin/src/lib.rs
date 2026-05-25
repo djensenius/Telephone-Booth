@@ -22,7 +22,10 @@ use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioPort, OperatorClient,
     OperatorError, PinRole, RecordingId, TelemetryEvent,
 };
-use booth_pi::{AudioConfig, GpioConfig, GpioPull, OperatorConfig, PiAudioSink, PiAudioSource};
+use booth_pi::{
+    AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
+    PiAudioSink, PiAudioSource,
+};
 use booth_telemetry::TelemetryBus;
 use observability::{ObservabilityConfig, SessionHandle};
 use serde::{Deserialize, Serialize};
@@ -524,8 +527,11 @@ async fn run_runtime(
                     let started = Instant::now();
                     let path = entry.path.clone();
                     let recording_id = entry.recording_id.clone();
-                    let question_id = entry.question_id.clone().unwrap_or_default();
-                    let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
+                    let question_id = entry.question_id.clone();
+                    let bytes = match entry.size_bytes {
+                        Some(bytes) => bytes,
+                        None => tokio::fs::metadata(&path).await.map_or(0, |m| m.len()),
+                    };
                     let success = upload_recording(
                         &*operator,
                         None,
@@ -537,7 +543,7 @@ async fn run_runtime(
                         session_handle.current(),
                         started,
                         bytes,
-                        None,
+                        entry.duration_ms,
                     )
                     .await;
                     if success {
@@ -929,6 +935,8 @@ async fn effect_task(
                     recording_id: recording_id.clone(),
                     question_id: Some(question_id.clone()),
                     path: path.clone(),
+                    size_bytes: Some(bytes),
+                    duration_ms: recording_duration_ms,
                 };
                 if let Err(err) = upload_spool.enqueue(&spool_entry) {
                     warn!(%err, "failed to write upload spool entry; upload will not survive crash");
@@ -949,7 +957,7 @@ async fn effect_task(
                         &ev_tx,
                         &b,
                         recording_id.clone(),
-                        question_id,
+                        Some(question_id),
                         session_id,
                         started,
                         bytes,
@@ -1109,6 +1117,54 @@ async fn fetch_random_message(
     }
 }
 
+fn validate_upload_caps(
+    recording_id: &RecordingId,
+    bytes: u64,
+    recording_duration_ms: Option<u64>,
+) -> StdResult<(), OperatorError> {
+    let Some(duration_ms) = recording_duration_ms else {
+        warn!(%recording_id, "recording duration missing; refusing operator upload");
+        return Err(OperatorError::InvalidArgument(
+            "recording duration is required before upload".into(),
+        ));
+    };
+    if duration_ms == 0 {
+        warn!(%recording_id, "recording duration is zero; refusing operator upload");
+        return Err(OperatorError::InvalidArgument(
+            "recording duration must be greater than 0".into(),
+        ));
+    }
+    if duration_ms > MAX_UPLOAD_DURATION_MS {
+        warn!(
+            %recording_id,
+            duration_ms,
+            max_duration_ms = MAX_UPLOAD_DURATION_MS,
+            "recording duration exceeds operator cap; refusing upload"
+        );
+        return Err(OperatorError::InvalidArgument(
+            format!(
+                "recording duration {duration_ms}ms exceeds operator cap of {MAX_UPLOAD_DURATION_MS}ms"
+            )
+            .into(),
+        ));
+    }
+    if bytes > MAX_UPLOAD_BYTES {
+        warn!(
+            %recording_id,
+            bytes,
+            max_bytes = MAX_UPLOAD_BYTES,
+            "recording size exceeds operator cap; refusing upload"
+        );
+        return Err(OperatorError::PayloadTooLarge {
+            max_bytes: Some(MAX_UPLOAD_BYTES),
+            body: format!(
+                "recording size {bytes} bytes exceeds operator cap of {MAX_UPLOAD_BYTES} bytes"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
@@ -1117,27 +1173,28 @@ async fn upload_recording(
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
     recording_id: RecordingId,
-    question_id: booth_hal::QuestionId,
+    question_id: Option<booth_hal::QuestionId>,
     session_id: Option<String>,
     started: Instant,
     bytes: u64,
     recording_duration_ms: Option<u64>,
 ) -> bool {
-    let metadata = booth_hal::UploadMetadata {
-        sha256_hex: recording_id.clone(),
-        size_bytes: bytes,
-        duration_ms: recording_duration_ms,
-    };
     let result = async {
-        let slot = retry_operator("POST /v1/uploads", bus, || {
-            operator.init_upload(Some(&question_id), &metadata)
+        validate_upload_caps(&recording_id, bytes, recording_duration_ms)?;
+        let metadata = booth_hal::UploadMetadata {
+            sha256_hex: recording_id.clone(),
+            size_bytes: bytes,
+            duration_ms: recording_duration_ms,
+        };
+        let slot = retry_operator("POST /v1/messages", bus, || {
+            operator.init_upload(question_id.as_ref(), &metadata)
         })
         .await?;
         retry_operator("PUT <presigned-upload-url>", bus, || {
             operator.put_upload(&slot, path)
         })
         .await?;
-        retry_operator("POST /v1/uploads/{id}/complete", bus, || {
+        retry_operator("POST /v1/messages/{id}/complete", bus, || {
             operator.complete_upload(&slot.id, &recording_id, recording_duration_ms.unwrap_or(0))
         })
         .await?;
@@ -1232,7 +1289,9 @@ fn operator_status<T>(result: &StdResult<T, OperatorError>) -> u16 {
     match result {
         Ok(_) => 200,
         Err(OperatorError::Auth(_) | OperatorError::Unauthorized(_)) => 401,
-        Err(OperatorError::DuplicateRecording(_)) => 409,
+        Err(OperatorError::DuplicateRecording(_) | OperatorError::Conflict(_)) => 409,
+        Err(OperatorError::InvalidArgument(_) | OperatorError::Unprocessable(_)) => 422,
+        Err(OperatorError::PayloadTooLarge { .. }) => 413,
         Err(OperatorError::Protocol(_)) => 502,
         Err(OperatorError::Transport(_) | OperatorError::Unsupported(_)) => 503,
         Err(OperatorError::Server { status, .. }) => *status,
@@ -1616,8 +1675,21 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
     reason = "tests may panic on setup failure"
 )]
 mod tests {
-    use super::{AudioRef, RuntimeConfig, is_sha256_hex, operator_audio_ref, validate_config};
+    use super::{
+        AudioRef, RuntimeConfig, is_sha256_hex, operator_audio_ref, upload_recording,
+        validate_config,
+    };
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    use async_trait::async_trait;
+    use booth_hal::{
+        BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage,
+        OperatorQuestion, SystemSnapshot, TelemetryEvent, UploadSlot,
+    };
+    use booth_telemetry::TelemetryBus;
+    use tokio::sync::mpsc;
 
     #[test]
     fn operator_audio_ref_uses_local_sha_file_when_present() -> std::io::Result<()> {
@@ -1672,6 +1744,109 @@ mod tests {
 
     fn unique_temp_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("telephone-booth-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[derive(Default)]
+    struct CountingOperator {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OperatorClient for CountingOperator {
+        async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn init_upload(
+            &self,
+            _question_id: Option<&booth_hal::QuestionId>,
+            _metadata: &booth_hal::UploadMetadata,
+        ) -> Result<UploadSlot, OperatorError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(UploadSlot {
+                id: "slot-1".to_string(),
+                upload_url: "https://storage.example.com/blob".to_string(),
+                blob_name: "recordings/slot-1.flac".to_string(),
+            })
+        }
+
+        async fn put_upload(
+            &self,
+            _slot: &UploadSlot,
+            _local_path: &str,
+        ) -> Result<(), OperatorError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn complete_upload(
+            &self,
+            _slot_id: &str,
+            _sha256_hex: &str,
+            _duration_ms: u64,
+        ) -> Result<(), OperatorError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn put_status(&self, _status: BoothStatus) -> Result<(), OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn push_events_json(&self, _body: &str) -> Result<EventBatchAck, OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn put_system_snapshot(
+            &self,
+            _booth_id: &str,
+            _snapshot: &SystemSnapshot,
+        ) -> Result<(), OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_caps_refuse_before_operator_call() {
+        for (recording_id, bytes, duration_ms) in [
+            ("too-long", 1, Some(booth_pi::MAX_UPLOAD_DURATION_MS + 1)),
+            ("too-large", booth_pi::MAX_UPLOAD_BYTES + 1, Some(1_000)),
+        ] {
+            let operator = CountingOperator::default();
+            let (event_tx, mut event_rx) = mpsc::channel(4);
+            let bus = TelemetryBus::new(16);
+
+            let success = upload_recording(
+                &operator,
+                None,
+                "target/nonexistent.flac",
+                &event_tx,
+                &bus,
+                recording_id.to_string(),
+                Some("question-1".to_string()),
+                Some("session-1".to_string()),
+                Instant::now(),
+                bytes,
+                duration_ms,
+            )
+            .await;
+
+            assert!(!success);
+            assert_eq!(operator.calls.load(Ordering::Relaxed), 0);
+            assert!(matches!(
+                event_rx.recv().await,
+                Some(booth_core::Event::UploadFailed { .. })
+            ));
+            assert!(
+                bus.snapshot_since(None)
+                    .into_iter()
+                    .any(|record| { matches!(record.event, TelemetryEvent::UploadFailed { .. }) })
+            );
+        }
     }
 
     // --- validate_config tests ---

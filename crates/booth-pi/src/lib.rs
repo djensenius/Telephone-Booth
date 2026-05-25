@@ -169,6 +169,18 @@ impl GpioConfig {
     }
 }
 
+/// Maximum FLAC upload size accepted by the operator (25 MiB).
+///
+/// Mirrors the operator-side `MAX_AUDIO_BYTES` guard in
+/// `packages/api/src/lib/ai/config.ts`.
+pub const MAX_UPLOAD_BYTES: u64 = 26_214_400;
+
+/// Maximum recording duration accepted by `MessageCreate` (5 minutes).
+///
+/// Mirrors the operator-side `durationMs` schema in
+/// `packages/shared/src/index.ts`.
+pub const MAX_UPLOAD_DURATION_MS: u64 = 300_000;
+
 /// Audio configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
@@ -281,7 +293,7 @@ pub struct OperatorConfig {
     #[serde(default)]
     pub allowed_upload_hosts: Vec<String>,
     /// Maximum recording file size (bytes) accepted for upload. Files exceeding
-    /// this are rejected before reading to prevent OOM. Default: 64 MiB.
+    /// this are rejected before reading to prevent OOM. Default: 25 MiB.
     #[serde(default = "default_max_upload_bytes")]
     pub max_upload_bytes: u64,
 }
@@ -302,7 +314,7 @@ fn default_ws_reconnect_max_ms() -> u64 {
     30_000
 }
 fn default_max_upload_bytes() -> u64 {
-    64 * 1024 * 1024 // 64 MiB
+    MAX_UPLOAD_BYTES
 }
 
 /// 32 MiB — generous for FLAC audio but prevents memory exhaustion from a

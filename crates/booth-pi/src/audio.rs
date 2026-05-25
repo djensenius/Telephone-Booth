@@ -26,11 +26,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "audio")]
+use booth_hal::redact_url;
 use booth_hal::{
-    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage,
-    TelemetryEvent, redact_url,
+    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage, TelemetryEvent,
 };
 use tokio::sync::{Mutex, mpsc};
+#[cfg(feature = "audio")]
 use tracing::warn;
 
 use crate::url_policy::AudioFetchPolicy;

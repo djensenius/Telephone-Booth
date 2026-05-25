@@ -53,9 +53,9 @@ debug panel will show "Operator: unauthenticated".
 | `PUT  /v1/status`                    | Posts the current `BoothStatus` whenever it changes                              |
 | `GET  /v1/questions/random`          | After dialing **1**, fetch a random approved question to play                    |
 | `GET  /v1/messages/random`           | After dialing **2**, fetch a random approved message to play                     |
-| `POST /v1/uploads`                   | Request a presigned Azure Blob upload slot for a new recording                  |
+| `POST /v1/messages`                  | Create a message row and request a presigned Azure Blob upload URL              |
 | `PUT  <SAS URL>`                     | Upload the FLAC directly to Azure Blob Storage                                  |
-| `POST /v1/uploads/{id}/complete`     | Notify the API that the upload finished                                          |
+| `POST /v1/messages/{id}/complete`    | Ask the API to verify the uploaded blob and mark the message received           |
 | `WS   /v1/ws/status`                 | _(reverse direction)_ Operator UI subscribes to status; the booth pushes events  |
 
 The WebSocket is **operator-side only** — the phone client doesn't open
@@ -68,5 +68,7 @@ backend fan-outs to connected browsers.
 | ------ | ------------------------------------------------------------------ |
 | `401`  | API token wrong or revoked. Reissue from the operator UI.          |
 | `403`  | Token valid but lacks scope (shouldn't happen with current schema).|
-| `409`  | Upload `sha256` matches an existing recording — safe to ignore.     |
+| `409`  | Message `sha256` already exists or the completion blob is missing.  |
+| `413`  | Uploaded audio exceeds the 25 MiB operator cap.                     |
+| `422`  | Blob verification failed, usually missing/mismatched SHA metadata.  |
 | `5xx`  | Operator backend down. The client retries with exponential backoff. |

@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 
-use crate::{OperatorConfig, redacted_token};
+use crate::{MAX_UPLOAD_DURATION_MS, OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
     BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion,
@@ -102,10 +102,7 @@ impl From<UploadError> for OperatorError {
             UploadError::InvalidUrl(msg) => OperatorError::Transport(msg),
             UploadError::Io(err) | UploadError::Transport(err) => OperatorError::Transport(err),
             UploadError::DuplicateRecording(message) => OperatorError::DuplicateRecording(message),
-            UploadError::Http { status: 409, body } => {
-                OperatorError::DuplicateRecording(body.into())
-            }
-            UploadError::Http { status, body } => OperatorError::Server { status, body },
+            UploadError::Http { status, body } => map_operator_error_body(status, body),
         }
     }
 }
@@ -208,15 +205,15 @@ impl PiOperatorClient {
     ) -> Result<UploadSlot, OperatorError> {
         #[cfg(feature = "operator")]
         {
+            let _ = size_bytes;
+            let duration_ms = required_duration_ms(duration_ms)?;
             let body = UploadSlotRequest {
                 sha256: sha256_hex,
-                size_bytes,
-                content_type: FLAC_CONTENT_TYPE,
                 duration_ms,
                 question_id,
             };
             let slot = self
-                .send_json::<UploadSlot>(reqwest::Method::POST, "/v1/uploads", Some(&body))
+                .send_json::<UploadSlot>(reqwest::Method::POST, "/v1/messages", Some(&body))
                 .await?;
             return Ok(slot);
         }
@@ -237,18 +234,9 @@ impl PiOperatorClient {
     ) -> Result<(), OperatorError> {
         #[cfg(feature = "operator")]
         {
-            #[derive(serde::Serialize)]
-            #[serde(rename_all = "camelCase")]
-            struct CompleteBody<'a> {
-                sha256: &'a str,
-                duration_ms: u64,
-            }
-            let body = CompleteBody {
-                sha256: sha256_hex,
-                duration_ms,
-            };
-            let path = format!("/v1/uploads/{upload_id}/complete");
-            self.send_empty(reqwest::Method::POST, &path, Some(&body))
+            let _ = (sha256_hex, duration_ms);
+            let path = format!("/v1/messages/{upload_id}/complete");
+            self.send_empty(reqwest::Method::POST, &path, None::<&()>)
                 .await?;
             return Ok(());
         }
@@ -338,7 +326,7 @@ impl PiOperatorClient {
             let response = self
                 .upload_client
                 .put(&slot.upload_url)
-                .header(CONTENT_TYPE, slot.content_type.as_str())
+                .header(CONTENT_TYPE, FLAC_CONTENT_TYPE)
                 .header(CONTENT_LENGTH, file_size)
                 .body(body)
                 .send()
@@ -562,6 +550,22 @@ fn api_url(base_url: &str, path: &str) -> String {
     }
 }
 
+#[cfg(feature = "operator")]
+fn required_duration_ms(duration_ms: Option<u64>) -> Result<u64, OperatorError> {
+    match duration_ms {
+        Some(value @ 1..=MAX_UPLOAD_DURATION_MS) => Ok(value),
+        Some(0) => Err(OperatorError::InvalidArgument(
+            "duration_ms must be greater than 0".into(),
+        )),
+        Some(value) => Err(OperatorError::InvalidArgument(
+            format!("duration_ms {value} exceeds maximum {MAX_UPLOAD_DURATION_MS}").into(),
+        )),
+        None => Err(OperatorError::InvalidArgument(
+            "duration_ms is required by POST /v1/messages".into(),
+        )),
+    }
+}
+
 #[cfg(not(feature = "operator"))]
 fn unsupported<T>() -> Result<T, OperatorError> {
     Err(OperatorError::Unsupported(
@@ -577,13 +581,32 @@ fn operator_transport(err: reqwest::Error) -> OperatorError {
 #[cfg(feature = "operator")]
 async fn map_operator_response(status: u16, response: reqwest::Response) -> OperatorError {
     let body = truncated_body(response).await;
+    map_operator_error_body(status, body)
+}
+
+fn map_operator_error_body(status: u16, body: String) -> OperatorError {
     match status {
+        400 => OperatorError::InvalidArgument(body.into()),
         401 => OperatorError::Unauthorized(
             "operator token was rejected; rotate the configured API token".into(),
         ),
-        409 => OperatorError::DuplicateRecording(body.into()),
+        409 if body.contains("message_already_exists") => {
+            OperatorError::DuplicateRecording(body.into())
+        }
+        409 => OperatorError::Conflict(body.into()),
+        413 => OperatorError::PayloadTooLarge {
+            max_bytes: max_bytes_from_body(&body),
+            body,
+        },
+        422 => OperatorError::Unprocessable(body.into()),
         _ => OperatorError::Server { status, body },
     }
+}
+
+fn max_bytes_from_body(body: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("maxBytes").and_then(serde_json::Value::as_u64))
 }
 
 #[cfg(feature = "operator")]
@@ -663,10 +686,7 @@ impl From<ApiMessage> for OperatorMessage {
 #[serde(rename_all = "camelCase")]
 struct UploadSlotRequest<'a> {
     sha256: &'a str,
-    size_bytes: u64,
-    content_type: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
+    duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     question_id: Option<&'a QuestionId>,
 }

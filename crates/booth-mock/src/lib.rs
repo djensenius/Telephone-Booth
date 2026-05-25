@@ -250,7 +250,11 @@ impl AudioSource for MockAudioSource {
     }
 
     async fn path_of(&self, id: &RecordingId) -> Result<String, AudioError> {
-        Ok(format!("/tmp/mock/{id}.flac"))
+        Ok(format!("target/mock-recordings/{id}.flac"))
+    }
+
+    async fn duration_of(&self, _id: &RecordingId) -> Option<u64> {
+        Some(1_000)
     }
 }
 
@@ -389,11 +393,13 @@ fn elapsed_ms(started: Instant) -> u64 {
 fn status_of<T>(result: &Result<T, OperatorError>) -> u16 {
     match result {
         Ok(_) => 200,
-        Err(OperatorError::Auth(_)) => 401,
+        Err(OperatorError::Auth(_) | OperatorError::Unauthorized(_)) => 401,
+        Err(OperatorError::DuplicateRecording(_) | OperatorError::Conflict(_)) => 409,
+        Err(OperatorError::InvalidArgument(_) | OperatorError::Unprocessable(_)) => 422,
+        Err(OperatorError::PayloadTooLarge { .. }) => 413,
         Err(OperatorError::Server { status, .. }) => *status,
         Err(OperatorError::Protocol(_)) => 502,
-        Err(OperatorError::Transport(_)) => 503,
-        Err(_) => 500,
+        Err(OperatorError::Transport(_) | OperatorError::Unsupported(_)) => 503,
     }
 }
 
@@ -435,7 +441,7 @@ impl OperatorClient for MockOperatorClient {
         _question_id: Option<&booth_hal::QuestionId>,
         _metadata: &booth_hal::UploadMetadata,
     ) -> Result<UploadSlot, OperatorError> {
-        let (request_id, started) = self.begin_request("POST /mock/uploads");
+        let (request_id, started) = self.begin_request("POST /mock/messages");
         self.apply_latency().await;
         let result = {
             let mut s = self.inner.lock().await;
@@ -446,8 +452,7 @@ impl OperatorClient for MockOperatorClient {
                 "headers": [],
                 "id": slot_id,
                 "uploadUrl": "https://mock.invalid/upload",
-                "expiresAt": "2099-01-01T00:00:00Z",
-                "contentType": "audio/flac"
+                "blobName": format!("recordings/{slot_id}.flac")
             }))
             .map_err(|err| OperatorError::Protocol(format!("mock upload slot: {err}").into()))?;
             s.uploads.push(slot.clone());
@@ -472,7 +477,7 @@ impl OperatorClient for MockOperatorClient {
         _sha256_hex: &str,
         _duration_ms: u64,
     ) -> Result<(), OperatorError> {
-        let (request_id, started) = self.begin_request("POST /mock/uploads/complete");
+        let (request_id, started) = self.begin_request("POST /mock/messages/complete");
         let result = Ok(());
         self.finish_request(&request_id, started, &result);
         result
