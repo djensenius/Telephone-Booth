@@ -1323,7 +1323,7 @@ mod tests {
 
     #[allow(clippy::unwrap_used)]
     mod auth {
-        use super::super::{is_authorized, DebugConfig, DebugToken};
+        use super::super::{DebugConfig, DebugToken, is_authorized};
         use axum::http::HeaderMap;
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -1334,7 +1334,10 @@ mod tests {
                 allow_tokenless: false,
                 ..Default::default()
             };
-            let remote = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 1234));
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
             assert!(!is_authorized(&config, &HeaderMap::new(), remote));
         }
 
@@ -1345,7 +1348,10 @@ mod tests {
                 allow_tokenless: true,
                 ..Default::default()
             };
-            let remote = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 1234));
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
             assert!(is_authorized(&config, &HeaderMap::new(), remote));
         }
 
@@ -1358,7 +1364,10 @@ mod tests {
             };
             let mut headers = HeaderMap::new();
             headers.insert("authorization", "Bearer wrong-token".parse().unwrap());
-            let remote = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 1234));
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
             assert!(!is_authorized(&config, &headers, remote));
         }
 
@@ -1374,7 +1383,10 @@ mod tests {
                 "authorization",
                 "Bearer correct-token-value".parse().unwrap(),
             );
-            let remote = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 1234));
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
             assert!(is_authorized(&config, &headers, remote));
         }
 
@@ -1393,7 +1405,7 @@ mod tests {
 
     #[allow(clippy::unwrap_used)]
     mod startup_validation {
-        use super::super::{serve_with_handles, DebugConfig, DebugError, DebugToken};
+        use super::super::{DebugConfig, DebugError, DebugToken, serve_with_handles};
         use booth_telemetry::TelemetryBus;
         use tokio::sync::mpsc;
 
