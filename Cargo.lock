@@ -407,6 +407,7 @@ dependencies = [
  "flacenc",
  "heapless",
  "hound",
+ "metrics",
  "reqwest",
  "rppal",
  "serde",

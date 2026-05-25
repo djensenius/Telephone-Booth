@@ -433,6 +433,7 @@ impl OperatorClient for MockOperatorClient {
     async fn init_upload(
         &self,
         _question_id: Option<&booth_hal::QuestionId>,
+        _metadata: &booth_hal::UploadMetadata,
     ) -> Result<UploadSlot, OperatorError> {
         let (request_id, started) = self.begin_request("POST /mock/uploads");
         self.apply_latency().await;

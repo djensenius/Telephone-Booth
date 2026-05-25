@@ -250,13 +250,21 @@ async fn upload_complete_confirms_slot() -> TestResult {
             "/v1/uploads/33333333-3333-3333-3333-333333333333/complete",
         ))
         .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            "durationMs": 5000
+        })))
         .respond_with(ResponseTemplate::new(200).set_body_json(message_body()))
         .expect(1)
         .mount(&server)
         .await;
 
     client
-        .upload_complete("33333333-3333-3333-3333-333333333333")
+        .upload_complete(
+            "33333333-3333-3333-3333-333333333333",
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            5000,
+        )
         .await?;
     Ok(())
 }

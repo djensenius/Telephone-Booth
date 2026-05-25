@@ -9,9 +9,10 @@
 //!
 //! The server binds two transports when enabled: plaintext loopback HTTP for
 //! `tailscale serve` (`127.0.0.1:8080`) and self-signed TLS on the LAN fallback
-//! (`0.0.0.0:8443`). The LAN certificate is generated at process startup and
-//! its SHA-256 fingerprint is available to loopback clients for operator-side
-//! pinning.
+//! (defaults to `127.0.0.1:8443`, configurable to `0.0.0.0:8443` with a strong
+//! token). The LAN listener is disabled by default and requires explicit opt-in.
+//! The LAN certificate is generated at process startup and its SHA-256
+//! fingerprint is available to loopback clients for operator-side pinning.
 
 #![warn(missing_docs)]
 
@@ -74,14 +75,15 @@ pub struct DebugConfig {
     #[serde(default = "default_loopback")]
     pub loopback_bind: String,
     /// Bind address for the LAN-fallback TLS listener. Defaults to
-    /// `0.0.0.0:8443`.
+    /// `127.0.0.1:8443`.
     #[serde(default = "default_lan")]
     pub lan_bind: String,
     /// Whether to expose the loopback endpoint for `tailscale serve`.
     #[serde(default = "default_true")]
     pub tailscale_enabled: bool,
-    /// Whether to expose the LAN-fallback HTTPS endpoint.
-    #[serde(default = "default_true")]
+    /// Whether to expose the LAN-fallback HTTPS endpoint. Defaults to
+    /// disabled; operators must opt in explicitly.
+    #[serde(default)]
     pub lan_enabled: bool,
     /// Whether `POST /v1/simulate/*` control endpoints are available.
     #[serde(default)]
@@ -108,7 +110,7 @@ fn default_loopback() -> String {
 }
 
 fn default_lan() -> String {
-    "0.0.0.0:8443".into()
+    "127.0.0.1:8443".into()
 }
 
 fn default_true() -> bool {
@@ -125,7 +127,7 @@ impl Default for DebugConfig {
             loopback_bind: default_loopback(),
             lan_bind: default_lan(),
             tailscale_enabled: true,
-            lan_enabled: true,
+            lan_enabled: false,
             allow_controls: false,
             ring_buffer_capacity: default_ring(),
             token: None,
@@ -206,7 +208,7 @@ impl Default for DebugConfigRedacted {
     fn default() -> Self {
         Self {
             tailscale_enabled: true,
-            lan_enabled: true,
+            lan_enabled: false,
             allow_controls: false,
             ring_buffer_capacity: default_ring(),
             operator_origin: None,
@@ -251,6 +253,9 @@ pub enum DebugError {
     /// TLS certificate or key generation/load failed.
     #[error("tls error: {0}")]
     Tls(String),
+    /// LAN listener configured with a non-loopback bind but missing or weak token.
+    #[error("insecure lan bind: {0}")]
+    InsecureLanBind(String),
 }
 
 /// Commands that the debug surface can send to the phone runtime.
@@ -435,6 +440,7 @@ pub async fn serve_with_handles(
     let loopback_addr = listener_addr(loopback_listener.as_ref())?;
 
     let lan_listener = if config.lan_enabled {
+        validate_lan_security(&config)?;
         let listener = TcpListener::bind(&config.lan_bind)
             .await
             .map_err(|err| DebugError::Bind(format!("{}: {err}", config.lan_bind)))?;
@@ -508,6 +514,39 @@ where
         .map(axum::serve::Listener::local_addr)
         .transpose()
         .map_err(|err| DebugError::Bind(err.to_string()))
+}
+
+/// Minimum token length required for non-loopback LAN binds.
+const MIN_LAN_TOKEN_LENGTH: usize = 16;
+
+/// Reject non-loopback LAN bind addresses when the configured token is
+/// missing or too short to be considered secure.
+fn validate_lan_security(config: &DebugConfig) -> Result<(), DebugError> {
+    let addr: SocketAddr = config
+        .lan_bind
+        .parse()
+        .map_err(|err| DebugError::Bind(format!("invalid lan_bind address: {err}")))?;
+
+    if addr.ip().is_loopback() {
+        return Ok(());
+    }
+
+    // Any non-loopback address (including 0.0.0.0) requires a strong token.
+    match &config.token {
+        None => Err(DebugError::InsecureLanBind(
+            "LAN listener binds to a non-loopback address but no debug token is configured; \
+             set [debug].token to a value of at least 16 characters"
+                .to_string(),
+        )),
+        Some(token) if token.0.len() < MIN_LAN_TOKEN_LENGTH => {
+            Err(DebugError::InsecureLanBind(format!(
+                "LAN listener binds to a non-loopback address but the debug token is too short \
+                 ({} chars); use at least {MIN_LAN_TOKEN_LENGTH} characters",
+                token.0.len(),
+            )))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 fn build_router(state: AppState) -> Router {

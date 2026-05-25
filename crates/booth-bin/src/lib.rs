@@ -511,7 +511,6 @@ async fn run_runtime(
                 let bus = bus.clone();
                 let session_handle = session_handle.clone();
                 let spool = Arc::clone(&upload_spool);
-                let audio_src = Arc::clone(&audio_source);
                 tokio::spawn(async move {
                     let started = Instant::now();
                     let path = entry.path.clone();
@@ -520,6 +519,7 @@ async fn run_runtime(
                     let bytes = tokio::fs::metadata(&path).await.map_or(0, |m| m.len());
                     let success = upload_recording(
                         &*operator,
+                        None,
                         &path,
                         &event_tx,
                         &bus,
@@ -528,7 +528,7 @@ async fn run_runtime(
                         session_handle.current(),
                         started,
                         bytes,
-                        &audio_src,
+                        None,
                     )
                     .await;
                     if success {
@@ -863,15 +863,20 @@ async fn effect_task(
                 }
                 // Resolve path and enqueue in spool synchronously so it's
                 // durable before we hand off to the background task.
-                let path = {
+                let (path, bytes, recording_duration_ms) = {
                     let src = audio_source.lock().await;
-                    match src.path_of(&recording_id).await {
+                    let p = match src.path_of(&recording_id).await {
                         Ok(p) => p,
                         Err(err) => {
                             publish_audio_error(&bus, &err);
                             continue;
                         }
-                    }
+                    };
+                    let b = recording_size(&**src, &recording_id)
+                        .await
+                        .map_or(0, |(_, b)| b);
+                    let dur = src.duration_of(&recording_id).await;
+                    (p, b, dur)
                 };
                 let spool_entry = pending_uploads::SpoolEntry {
                     recording_id: recording_id.clone(),
@@ -881,12 +886,6 @@ async fn effect_task(
                 if let Err(err) = upload_spool.enqueue(&spool_entry) {
                     warn!(%err, "failed to write upload spool entry; upload will not survive crash");
                 }
-                let bytes = {
-                    let src = audio_source.lock().await;
-                    recording_size(&**src, &recording_id)
-                        .await
-                        .map_or(0, |(_, b)| b)
-                };
 
                 let op = Arc::clone(&operator);
                 let ev_tx = event_tx.clone();
@@ -895,8 +894,10 @@ async fn effect_task(
                 let audio_src = Arc::clone(&audio_source);
                 operator_tasks.spawn(async move {
                     let started = Instant::now();
+                    let src = audio_src.lock().await;
                     let success = upload_recording(
                         &*op,
+                        Some(&**src),
                         &path,
                         &ev_tx,
                         &b,
@@ -905,7 +906,7 @@ async fn effect_task(
                         session_id,
                         started,
                         bytes,
-                        &audio_src,
+                        recording_duration_ms,
                     )
                     .await;
                     if success {
@@ -1063,6 +1064,7 @@ async fn fetch_random_message(
 #[allow(clippy::too_many_arguments)]
 async fn upload_recording(
     operator: &dyn OperatorClient,
+    audio_source: Option<&dyn AudioSource>,
     path: &str,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
@@ -1071,11 +1073,16 @@ async fn upload_recording(
     session_id: Option<String>,
     started: Instant,
     bytes: u64,
-    audio_source: &Arc<Mutex<Box<dyn AudioSource>>>,
+    recording_duration_ms: Option<u64>,
 ) -> bool {
+    let metadata = booth_hal::UploadMetadata {
+        sha256_hex: recording_id.clone(),
+        size_bytes: bytes,
+        duration_ms: recording_duration_ms,
+    };
     let result = async {
         let slot = retry_operator("POST /v1/uploads", bus, || {
-            operator.init_upload(Some(&question_id))
+            operator.init_upload(Some(&question_id), &metadata)
         })
         .await?;
         retry_operator("PUT <presigned-upload-url>", bus, || {
@@ -1083,7 +1090,7 @@ async fn upload_recording(
         })
         .await?;
         retry_operator("POST /v1/uploads/{id}/complete", bus, || {
-            operator.complete_upload(&slot.id, &recording_id, 0)
+            operator.complete_upload(&slot.id, &recording_id, recording_duration_ms.unwrap_or(0))
         })
         .await?;
         Ok::<(), OperatorError>(())
@@ -1102,11 +1109,8 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            if let Err(err) = audio_source
-                .lock()
-                .await
-                .cleanup_recording(&recording_id)
-                .await
+            if let Some(source) = audio_source
+                && let Err(err) = source.cleanup_recording(&recording_id).await
             {
                 warn!(%recording_id, %err, "failed to clean up recording metadata");
             }
