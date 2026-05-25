@@ -21,11 +21,13 @@ use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+pub mod url_policy;
 
 pub use audio::{
     PiAudioSink, PiAudioSource, RecordingHandle, device_name_matches, embedded_tone_bytes,
     has_flac_stream_marker,
 };
+pub use url_policy::{AudioFetchPolicy, UrlPolicyError};
 
 pub mod operator;
 
@@ -255,6 +257,23 @@ pub struct OperatorConfig {
     /// Maximum reconnect backoff for operator WebSocket consumers, in milliseconds.
     #[serde(default = "default_ws_reconnect_max_ms")]
     pub ws_reconnect_max_ms: u64,
+    /// Hosts allowed for remote audio downloads. When non-empty, only URLs
+    /// whose host matches one of these entries (case-insensitive) will be
+    /// fetched. An empty list permits any public host.
+    #[serde(default)]
+    pub allowed_audio_hosts: Vec<String>,
+    /// Maximum response body size in bytes for remote audio downloads.
+    /// Defaults to 32 MiB.
+    #[serde(default = "default_max_audio_body_bytes")]
+    pub max_audio_body_bytes: u64,
+    /// Allow fetching audio from private/link-local/loopback addresses.
+    /// Should only be enabled for local development.
+    #[serde(default)]
+    pub allow_private_audio_hosts: bool,
+    /// Allow plain HTTP (non-TLS) for audio fetches. Defaults to `false`;
+    /// enable only for trusted local networks during development.
+    #[serde(default)]
+    pub allow_http_audio: bool,
     /// Allowed storage hostnames for presigned upload URLs.
     ///
     /// When non-empty, upload URLs must have a host matching one of these entries.
@@ -286,6 +305,12 @@ fn default_max_upload_bytes() -> u64 {
     64 * 1024 * 1024 // 64 MiB
 }
 
+/// 32 MiB — generous for FLAC audio but prevents memory exhaustion from a
+/// malicious server.
+fn default_max_audio_body_bytes() -> u64 {
+    32 * 1024 * 1024
+}
+
 impl Default for OperatorConfig {
     fn default() -> Self {
         Self {
@@ -295,6 +320,10 @@ impl Default for OperatorConfig {
             http_timeout_secs: default_http_timeout_secs(),
             ws_reconnect_initial_ms: default_ws_reconnect_initial_ms(),
             ws_reconnect_max_ms: default_ws_reconnect_max_ms(),
+            allowed_audio_hosts: Vec::new(),
+            max_audio_body_bytes: default_max_audio_body_bytes(),
+            allow_private_audio_hosts: false,
+            allow_http_audio: false,
             allowed_upload_hosts: Vec::new(),
             max_upload_bytes: default_max_upload_bytes(),
         }
@@ -310,6 +339,10 @@ impl fmt::Debug for OperatorConfig {
             .field("http_timeout_secs", &self.http_timeout_secs)
             .field("ws_reconnect_initial_ms", &self.ws_reconnect_initial_ms)
             .field("ws_reconnect_max_ms", &self.ws_reconnect_max_ms)
+            .field("allowed_audio_hosts", &self.allowed_audio_hosts)
+            .field("max_audio_body_bytes", &self.max_audio_body_bytes)
+            .field("allow_private_audio_hosts", &self.allow_private_audio_hosts)
+            .field("allow_http_audio", &self.allow_http_audio)
             .field("allowed_upload_hosts", &self.allowed_upload_hosts)
             .field("max_upload_bytes", &self.max_upload_bytes)
             .finish()

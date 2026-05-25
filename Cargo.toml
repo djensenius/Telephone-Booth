@@ -67,10 +67,10 @@ clap = { version = "4", features = ["derive"] }
 heapless = "0.8"
 arrayvec = "0.7"
 sha2 = "0.10"
+url = "2"
 parking_lot = "0.12"
 subtle = "2.6"
 time = { version = "0.3", features = ["formatting"] }
-url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # Metrics / system stats

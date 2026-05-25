@@ -31,8 +31,10 @@ use booth_hal::{
     TelemetryEvent, redact_url,
 };
 use tokio::sync::{Mutex, mpsc};
+use tracing::warn;
 
-use crate::AudioConfig;
+use crate::url_policy::AudioFetchPolicy;
+use crate::{AudioConfig, OperatorConfig};
 
 const DIAL_TONE_FLAC: &[u8] = include_bytes!("../assets/dial-tone.flac");
 const BEEP_FLAC: &[u8] = include_bytes!("../assets/beep.flac");
@@ -80,15 +82,22 @@ pub fn has_flac_stream_marker(bytes: &[u8]) -> bool {
 pub struct PiAudioSink {
     config: AudioConfig,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
+    /// URL validation policy for remote audio fetches.
+    fetch_policy: AudioFetchPolicy,
+    /// Maximum response body size in bytes for remote audio downloads.
+    max_body_bytes: u64,
+    /// Pre-built HTTP client for audio fetches (same-origin redirect policy).
+    #[cfg(feature = "audio")]
+    http_client: reqwest::Client,
     #[cfg(feature = "audio")]
     playback: Option<PlaybackTask>,
 }
 
 impl PiAudioSink {
-    /// Create a sink without audio-level telemetry.
+    /// Create a sink without audio-level telemetry, using default fetch policy.
     #[must_use]
     pub fn new(config: AudioConfig) -> Self {
-        Self::with_telemetry(config, None)
+        Self::with_telemetry_and_policy(config, None, &OperatorConfig::default())
     }
 
     /// Create a sink that optionally publishes audio-level telemetry.
@@ -97,9 +106,31 @@ impl PiAudioSink {
         config: AudioConfig,
         telemetry: Option<mpsc::Sender<TelemetryEvent>>,
     ) -> Self {
+        Self::with_telemetry_and_policy(config, telemetry, &OperatorConfig::default())
+    }
+
+    /// Create a sink with telemetry and an explicit operator config for the
+    /// audio fetch policy.
+    #[must_use]
+    pub fn with_telemetry_and_policy(
+        config: AudioConfig,
+        telemetry: Option<mpsc::Sender<TelemetryEvent>>,
+        operator_config: &OperatorConfig,
+    ) -> Self {
+        let fetch_policy = AudioFetchPolicy {
+            allow_http: operator_config.allow_http_audio,
+            allowed_hosts: operator_config.allowed_audio_hosts.clone(),
+            allow_private_hosts: operator_config.allow_private_audio_hosts,
+        };
+        let max_body_bytes = operator_config.max_audio_body_bytes;
+
         Self {
             config,
             telemetry,
+            fetch_policy,
+            max_body_bytes,
+            #[cfg(feature = "audio")]
+            http_client: build_audio_http_client(operator_config),
             #[cfg(feature = "audio")]
             playback: None,
         }
@@ -107,9 +138,38 @@ impl PiAudioSink {
 
     #[cfg(not(feature = "audio"))]
     fn unsupported(&self) -> AudioError {
-        let _ = (&self.config, &self.telemetry);
+        let _ = (
+            &self.config,
+            &self.telemetry,
+            &self.fetch_policy,
+            &self.max_body_bytes,
+        );
         AudioError::Unsupported("booth-pi audio requires the `audio` Cargo feature".into())
     }
+}
+
+/// Build a dedicated HTTP client for audio fetches with hardened settings.
+///
+/// # Panics
+///
+/// Panics if the TLS backend cannot be initialized. This uses rustls (compiled
+/// in via `reqwest/rustls-tls`), so initialization failure indicates a broken
+/// build rather than a recoverable runtime condition.
+#[cfg(feature = "audio")]
+fn build_audio_http_client(operator_config: &OperatorConfig) -> reqwest::Client {
+    use std::time::Duration;
+
+    let timeout = Duration::from_secs(operator_config.http_timeout_secs);
+
+    // Redirect policy is security-critical: SSRF bypass via redirect.
+    // This builder cannot silently fall back to a permissive client.
+    #[allow(clippy::expect_used)] // Infallible with rustls; panic is correct for broken build.
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("HTTP client build failed — TLS backend (rustls) could not initialize")
 }
 
 #[async_trait]
@@ -130,61 +190,72 @@ impl AudioSink for PiAudioSink {
                     samples: decode_audio_bytes(embedded_tone_bytes(tone)?)?,
                     repeat: tone == BuiltinTone::DialTone,
                 },
-                AudioRef::RemoteUrl(url) => {
-                    use futures_util::StreamExt as _;
-
+                AudioRef::RemoteUrl(url, expected_sha256) => {
                     let safe_url = redact_url(&url);
-                    let response = reqwest::get(&url).await.map_err(|err| {
+
+                    // Validate URL against fetch policy (scheme, host allowlist, private IPs)
+                    let parsed_url = self.fetch_policy.validate(&url).map_err(|err| {
+                        AudioError::Source(
+                            format!("audio URL policy rejected {safe_url}: {err}").into(),
+                        )
+                    })?;
+
+                    // DNS-based SSRF check: resolve the hostname and verify all
+                    // addresses are public before connecting.
+                    if let Some(host) = parsed_url.host_str() {
+                        let port = parsed_url.port_or_known_default().unwrap_or(443);
+                        let lookup_target = format!("{host}:{port}");
+                        if let Ok(addrs) = tokio::net::lookup_host(&lookup_target).await {
+                            for addr in addrs {
+                                self.fetch_policy
+                                    .check_resolved_ip(addr.ip())
+                                    .map_err(|err| {
+                                        AudioError::Source(
+                                            format!(
+                                                "audio URL DNS check rejected {safe_url}: {err}"
+                                            )
+                                            .into(),
+                                        )
+                                    })?;
+                            }
+                        }
+                    }
+
+                    let response = self.http_client.get(&url).send().await.map_err(|err| {
                         AudioError::Source(
                             format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
                         )
                     })?;
+
+                    // Reject redirects — our client has Policy::none() so a
+                    // 3xx response won't be followed. Treat it as an error.
+                    if response.status().is_redirection() {
+                        return Err(AudioError::Source(
+                            format!(
+                                "fetch {safe_url}: server returned redirect {} which is blocked",
+                                response.status()
+                            )
+                            .into(),
+                        ));
+                    }
+
                     let response = response.error_for_status().map_err(|err| {
                         AudioError::Source(
                             format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
                         )
                     })?;
 
-                    // Reject responses that advertise a body larger than the
-                    // configured cap before buffering anything.
-                    let max_bytes = self.config.max_audio_download_bytes;
-                    if let Some(len) = response.content_length().filter(|&l| l > max_bytes) {
-                        return Err(AudioError::Source(
-                            format!(
-                                "remote audio from {safe_url} is {len} bytes, exceeds cap of {max_bytes}"
-                            )
-                            .into(),
-                        ));
-                    }
+                    // Stream the body with a size cap
+                    let bytes =
+                        read_body_with_limit(response, self.max_body_bytes, &safe_url).await?;
 
-                    // Stream the body in chunks with a running size check so
-                    // that responses without a Content-Length header are still
-                    // bounded.
-                    let mut buf = Vec::new();
-                    let mut stream = response.bytes_stream();
-                    while let Some(chunk) = stream.next().await {
-                        let chunk = chunk.map_err(|err| {
-                            AudioError::Source(
-                                format!(
-                                    "read response body from {safe_url}: {}",
-                                    redact_url(&err.to_string())
-                                )
-                                .into(),
-                            )
-                        })?;
-                        if (buf.len() as u64) + (chunk.len() as u64) > max_bytes {
-                            return Err(AudioError::Source(
-                                format!(
-                                    "remote audio from {safe_url} exceeds cap of {max_bytes} bytes"
-                                )
-                                .into(),
-                            ));
-                        }
-                        buf.extend_from_slice(&chunk);
+                    // SHA-256 verification when the operator supplied a hash
+                    if let Some(ref expected) = expected_sha256 {
+                        verify_sha256(&bytes, expected, &safe_url)?;
                     }
 
                     PlayableAudio {
-                        samples: decode_audio_bytes(&buf)?,
+                        samples: decode_audio_bytes(&bytes)?,
                         repeat: false,
                     }
                 }
@@ -434,6 +505,78 @@ struct RecordingTask {
 struct PlayableAudio {
     samples: DecodedAudio,
     repeat: bool,
+}
+
+/// Read a response body with a byte-count limit to prevent memory exhaustion.
+#[cfg(feature = "audio")]
+async fn read_body_with_limit(
+    response: reqwest::Response,
+    max_bytes: u64,
+    safe_url: &str,
+) -> Result<Vec<u8>, AudioError> {
+    use futures_util::StreamExt;
+
+    // Check Content-Length first for an early exit
+    if let Some(content_length) = response.content_length()
+        && content_length > max_bytes
+    {
+        return Err(AudioError::Source(
+            format!(
+                "audio from {safe_url} declares Content-Length {content_length} bytes \
+                 which exceeds the {max_bytes}-byte limit"
+            )
+            .into(),
+        ));
+    }
+
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    let max = max_bytes as usize;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| {
+            AudioError::Source(
+                format!(
+                    "read response body from {safe_url}: {}",
+                    redact_url(&err.to_string())
+                )
+                .into(),
+            )
+        })?;
+        if body.len() + chunk.len() > max {
+            return Err(AudioError::Source(
+                format!("audio from {safe_url} exceeds the {max_bytes}-byte body limit").into(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
+}
+
+/// Verify downloaded bytes against an expected SHA-256 hex digest.
+#[cfg(feature = "audio")]
+fn verify_sha256(bytes: &[u8], expected_hex: &str, safe_url: &str) -> Result<(), AudioError> {
+    let actual = hex_sha256(bytes);
+    let expected_lower = expected_hex.to_ascii_lowercase();
+
+    if actual != expected_lower {
+        warn!(
+            url = %safe_url,
+            expected = %expected_lower,
+            actual = %actual,
+            "SHA-256 mismatch for downloaded audio — rejecting"
+        );
+        return Err(AudioError::Source(
+            format!(
+                "SHA-256 mismatch for audio from {safe_url}: \
+                 expected {expected_lower}, got {actual}"
+            )
+            .into(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "audio")]

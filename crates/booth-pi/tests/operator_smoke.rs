@@ -31,8 +31,7 @@ fn config(base_url: String) -> OperatorConfig {
         http_timeout_secs: 2,
         ws_reconnect_initial_ms: 1,
         ws_reconnect_max_ms: 2,
-        allowed_upload_hosts: Vec::new(),
-        max_upload_bytes: 64 * 1024 * 1024,
+        ..OperatorConfig::default()
     }
 }
 
