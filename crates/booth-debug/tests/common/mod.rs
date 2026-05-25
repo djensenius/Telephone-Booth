@@ -47,6 +47,10 @@ pub async fn spawn_with_metrics(
     config.lan_enabled = false;
     config.tailscale_enabled = true;
     config.ring_buffer_capacity = 32;
+    // Tests run locally; allow tokenless unless the test explicitly sets a token.
+    if config.token.is_none() {
+        config.allow_tokenless = true;
+    }
 
     let bus = TelemetryBus::new(config.ring_buffer_capacity);
     let (tx, rx) = mpsc::channel(32);

@@ -117,13 +117,27 @@ impl PendingUploadSpool {
 }
 
 fn monotonic_ns() -> u64 {
-    use std::time::Instant;
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::Instant,
+    };
 
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    static LAST: AtomicU64 = AtomicU64::new(0);
+
     let epoch = EPOCH.get_or_init(Instant::now);
-    #[allow(clippy::cast_possible_truncation)]
-    let ns = epoch.elapsed().as_nanos() as u64;
-    ns
+    let elapsed = u64::try_from(epoch.elapsed().as_nanos()).unwrap_or(u64::MAX);
+
+    loop {
+        let last = LAST.load(Ordering::Relaxed);
+        let next = elapsed.max(last.saturating_add(1));
+        if LAST
+            .compare_exchange(last, next, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return next;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,8 +146,7 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("spool-test-{}-{}", std::process::id(), monotonic_ns()));
+        let dir = std::env::temp_dir().join(format!("spool-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).ok();
         dir
     }
@@ -184,5 +197,13 @@ mod tests {
         assert!(found.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn monotonic_ns_is_strictly_increasing() {
+        let first = monotonic_ns();
+        let second = monotonic_ns();
+
+        assert!(second > first);
     }
 }
