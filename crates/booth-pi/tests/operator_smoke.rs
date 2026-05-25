@@ -30,6 +30,7 @@ fn config(base_url: String) -> OperatorConfig {
         http_timeout_secs: 2,
         ws_reconnect_initial_ms: 1,
         ws_reconnect_max_ms: 2,
+        max_upload_bytes: 64 * 1024 * 1024,
     }
 }
 
@@ -311,5 +312,38 @@ async fn upload_recording_retries_5xx_then_gives_up() -> TestResult {
     let _ = std::fs::remove_file(&recording);
 
     assert!(matches!(result, Err(UploadError::Http { status: 503, .. })));
+    Ok(())
+}
+
+#[tokio::test]
+async fn upload_rejects_file_exceeding_max_upload_bytes() -> TestResult {
+    let server = MockServer::start().await;
+    let mut cfg = config(server.uri());
+    cfg.max_upload_bytes = 10; // 10 byte cap
+
+    let client = PiOperatorClient::new(cfg)?;
+    let dir = std::env::current_dir()?.join("target/operator-smoke");
+    std::fs::create_dir_all(&dir)?;
+    let recording = dir.join(format!("upload-cap-{}.flac", std::process::id()));
+    std::fs::write(&recording, b"this is more than ten bytes of data")?;
+
+    let slot = booth_hal::UploadSlot {
+        id: "44444444-4444-4444-4444-444444444444".to_string(),
+        upload_url: format!("{}/blob", server.uri()),
+        expires_at: "2026-01-01T00:10:00Z".to_string(),
+        content_type: "audio/flac".to_string(),
+    };
+    let result = client.upload_recording(&slot, &recording).await;
+    let _ = std::fs::remove_file(&recording);
+
+    let err_msg = match result {
+        Err(UploadError::Io(err)) => err.to_string(),
+        Err(err) => panic!("expected I/O error for upload cap, got {err}"),
+        Ok(()) => panic!("expected upload to fail when recording exceeds max upload bytes"),
+    };
+    assert!(
+        err_msg.contains("exceeds upload cap"),
+        "unexpected error: {err_msg}"
+    );
     Ok(())
 }

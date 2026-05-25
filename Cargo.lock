@@ -405,6 +405,7 @@ dependencies = [
  "claxon",
  "cpal",
  "flacenc",
+ "futures-util",
  "heapless",
  "hound",
  "metrics",

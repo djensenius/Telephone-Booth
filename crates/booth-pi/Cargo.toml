@@ -20,6 +20,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -46,7 +47,7 @@ default = []
 # Cross-platform audio playback + capture + FLAC handling. Pulls reqwest so
 # remote-URL playback (operator audio) keeps working without the `operator`
 # feature.
-audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest"]
+audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest", "dep:futures-util"]
 # Cross-platform operator HTTP client.
 operator = ["dep:reqwest"]
 # Real Raspberry Pi build: cross-platform audio + operator plus rppal GPIO.
