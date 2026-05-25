@@ -828,3 +828,118 @@ impl fmt::Display for BoothStatus {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// URL redaction
+// ---------------------------------------------------------------------------
+
+/// Redact sensitive parts of a URL (query string, fragment, userinfo) so it is
+/// safe to include in error messages, telemetry, and debug logs.
+///
+/// Preserves `scheme://host/path` for diagnostics. When a query string or
+/// fragment is present the returned string ends with `?<redacted>`. Userinfo
+/// (`user:pass@`) is stripped entirely.
+///
+/// If the input does not look like a URL (no `://`), it is returned unchanged.
+pub fn redact_url(url: &str) -> Cow<'_, str> {
+    // Fast path: no scheme separator means it's not a URL we need to redact.
+    let Some(scheme_end) = url.find("://") else {
+        return Cow::Borrowed(url);
+    };
+
+    let authority_start = scheme_end + 3;
+    let after_scheme = &url[authority_start..];
+
+    // Strip userinfo (everything before the first unbracketed `@` that
+    // precedes the path separator).
+    let (authority_and_rest, userinfo_present) = {
+        // Find path start (`/`) to scope the `@` search to authority only.
+        let path_start = after_scheme.find('/').unwrap_or(after_scheme.len());
+        let authority_portion = &after_scheme[..path_start];
+        authority_portion
+            .rfind('@')
+            .map_or((after_scheme, false), |at_pos| {
+                (&after_scheme[at_pos + 1..], true)
+            })
+    };
+
+    // Find the first `?` or `#` — everything from there onward is sensitive.
+    let has_query_or_fragment =
+        authority_and_rest.contains('?') || authority_and_rest.contains('#');
+
+    if !has_query_or_fragment && !userinfo_present {
+        return Cow::Borrowed(url);
+    }
+
+    // Rebuild: scheme + "://" + (authority+path without query/fragment)
+    let scheme = &url[..scheme_end];
+    let clean_end = authority_and_rest
+        .find('?')
+        .or_else(|| authority_and_rest.find('#'))
+        .unwrap_or(authority_and_rest.len());
+    let clean_part = &authority_and_rest[..clean_end];
+
+    let mut redacted = String::with_capacity(scheme.len() + 3 + clean_part.len() + 11);
+    redacted.push_str(scheme);
+    redacted.push_str("://");
+    redacted.push_str(clean_part);
+    if has_query_or_fragment {
+        redacted.push_str("?<redacted>");
+    }
+    Cow::Owned(redacted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_query_string() {
+        let url = "https://storage.example.com/audio/clip.flac?sig=secret&se=2024-01-01";
+        assert_eq!(
+            redact_url(url),
+            "https://storage.example.com/audio/clip.flac?<redacted>"
+        );
+    }
+
+    #[test]
+    fn strips_fragment() {
+        let url = "https://cdn.example.com/path#token=abc123";
+        assert_eq!(redact_url(url), "https://cdn.example.com/path?<redacted>");
+    }
+
+    #[test]
+    fn strips_userinfo() {
+        let url = "https://user:password@host.example.com/resource";
+        assert_eq!(redact_url(url), "https://host.example.com/resource");
+    }
+
+    #[test]
+    fn strips_userinfo_and_query() {
+        let url = "https://user:pass@host.example.com/path?key=val";
+        assert_eq!(redact_url(url), "https://host.example.com/path?<redacted>");
+    }
+
+    #[test]
+    fn preserves_clean_url() {
+        let url = "https://api.example.com/v1/questions/random";
+        assert_eq!(redact_url(url), url);
+    }
+
+    #[test]
+    fn preserves_non_url_string() {
+        let input = "not a url at all";
+        assert_eq!(redact_url(input), input);
+    }
+
+    #[test]
+    fn handles_empty_string() {
+        assert_eq!(redact_url(""), "");
+    }
+
+    #[test]
+    fn preserves_path_only_url_no_query() {
+        let url = "http://localhost:8080/v1/audio/tone.flac";
+        assert_eq!(redact_url(url), url);
+    }
+}

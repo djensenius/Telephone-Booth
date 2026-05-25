@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use booth_hal::{
-    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage, TelemetryEvent,
+    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage,
+    TelemetryEvent, redact_url,
 };
 use tokio::sync::{Mutex, mpsc};
 
@@ -130,14 +131,16 @@ impl AudioSink for PiAudioSink {
                     repeat: tone == BuiltinTone::DialTone,
                 },
                 AudioRef::RemoteUrl(url) => {
-                    let response = reqwest::get(&url)
-                        .await
-                        .map_err(|err| AudioError::Source(format!("fetch {url}: {err}").into()))?;
-                    let response = response
-                        .error_for_status()
-                        .map_err(|err| AudioError::Source(format!("fetch {url}: {err}").into()))?;
+                    let response = reqwest::get(&url).await.map_err(|err| {
+                        AudioError::Source(format!("fetch {}: {err}", redact_url(&url)).into())
+                    })?;
+                    let response = response.error_for_status().map_err(|err| {
+                        AudioError::Source(format!("fetch {}: {err}", redact_url(&url)).into())
+                    })?;
                     let bytes = response.bytes().await.map_err(|err| {
-                        AudioError::Source(format!("read response body from {url}: {err}").into())
+                        AudioError::Source(
+                            format!("read response body from {}: {err}", redact_url(&url)).into(),
+                        )
                     })?;
                     PlayableAudio {
                         samples: decode_audio_bytes(&bytes)?,

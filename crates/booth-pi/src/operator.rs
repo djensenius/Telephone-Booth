@@ -22,7 +22,7 @@ use crate::{OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
     BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion,
-    QuestionId, SystemSnapshot, UploadSlot,
+    QuestionId, SystemSnapshot, UploadSlot, redact_url,
 };
 
 #[cfg(feature = "operator")]
@@ -297,9 +297,10 @@ impl PiOperatorClient {
                         }
                     }
                     Err(err) => {
-                        debug!(error = %err, "upload transport failure");
+                        let msg = redact_url(&err.to_string()).into_owned();
+                        debug!(error = %msg, "upload transport failure");
                         if attempt == UPLOAD_RETRIES {
-                            return Err(UploadError::Transport(err.to_string().into()));
+                            return Err(UploadError::Transport(msg.into()));
                         }
                     }
                 }
@@ -511,7 +512,7 @@ fn unsupported<T>() -> Result<T, OperatorError> {
 
 #[cfg(feature = "operator")]
 fn operator_transport(err: reqwest::Error) -> OperatorError {
-    OperatorError::Transport(err.to_string().into())
+    OperatorError::Transport(redact_url(&err.to_string()).into_owned().into())
 }
 
 #[cfg(feature = "operator")]
@@ -530,7 +531,10 @@ async fn map_operator_response(status: u16, response: reqwest::Response) -> Oper
 async fn truncated_body(response: reqwest::Response) -> String {
     match response.text().await {
         Ok(body) => body.chars().take(512).collect(),
-        Err(err) => format!("<failed to read response body: {err}>"),
+        Err(err) => format!(
+            "<failed to read response body: {}>",
+            redact_url(&err.to_string())
+        ),
     }
 }
 
