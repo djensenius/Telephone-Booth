@@ -18,6 +18,12 @@ pub struct SpoolEntry {
     pub question_id: Option<String>,
     /// Absolute path to the FLAC file on disk.
     pub path: String,
+    /// Recording file size in bytes, when known at enqueue time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Recording duration in milliseconds, when known at enqueue time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// A handle to the pending-uploads spool directory.
@@ -159,6 +165,8 @@ mod tests {
             recording_id: "abc123".to_string(),
             question_id: Some("q42".to_string()),
             path: "/var/lib/phone-booth/recordings/abc123.flac".to_string(),
+            size_bytes: Some(123),
+            duration_ms: Some(1_000),
         };
         spool.enqueue(&entry).unwrap();
 
@@ -176,7 +184,9 @@ mod tests {
         let entry = SpoolEntry {
             recording_id: "def456".to_string(),
             question_id: None,
-            path: "/tmp/def456.flac".to_string(),
+            path: "/var/lib/phone-booth/recordings/def456.flac".to_string(),
+            size_bytes: None,
+            duration_ms: None,
         };
         spool.enqueue(&entry).unwrap();
         spool.dequeue("def456").unwrap();

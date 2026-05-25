@@ -259,9 +259,11 @@ pub struct OperatorMessage {
 
 /// Metadata the client sends when reserving an upload slot.
 ///
-/// Carries the recording's content-hash, size, and (when available) duration
-/// so the operator can populate blob metadata, run deduplication, and
-/// validate the upload without re-reading the FLAC stream.
+/// Carries the recording's content-hash, size, and (when available) duration.
+///
+/// The current `/v1/messages` create call sends only the hash and duration;
+/// size stays local for phone-side caps because the operator reads blob length
+/// when the upload is completed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadMetadata {
     /// Lowercase hex SHA-256 of the recording bytes.
@@ -272,18 +274,16 @@ pub struct UploadMetadata {
     pub duration_ms: Option<u64>,
 }
 
-/// Slot the operator allocates for a forthcoming upload.
+/// Slot the operator allocates for a forthcoming message upload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadSlot {
-    /// Opaque slot id; pass back to `complete_upload`.
+    /// Opaque message id; pass back to `complete_upload`.
     pub id: String,
     /// Presigned URL (Azure SAS) the client PUTs the recording to.
     pub upload_url: String,
-    /// RFC3339 timestamp at which the presigned URL expires.
-    pub expires_at: String,
-    /// MIME type the blob store expects for the upload.
-    pub content_type: String,
+    /// Operator-side blob name reserved for the recording.
+    pub blob_name: String,
 }
 
 /// Coarse status broadcast from the phone client to the operator.
@@ -321,6 +321,23 @@ pub enum OperatorError {
     /// The operator already has this recording; safe to treat as success.
     #[error("duplicate recording: {0}")]
     DuplicateRecording(Cow<'static, str>),
+    /// The request is invalid and should not be retried without changing inputs.
+    #[error("operator invalid argument: {0}")]
+    InvalidArgument(Cow<'static, str>),
+    /// The operator rejected the request because it conflicts with current state.
+    #[error("operator conflict: {0}")]
+    Conflict(Cow<'static, str>),
+    /// The uploaded audio exceeds the operator's accepted size cap.
+    #[error("operator payload too large: {body}")]
+    PayloadTooLarge {
+        /// Maximum byte count accepted by the operator, when reported.
+        max_bytes: Option<u64>,
+        /// Truncated response body for diagnostics.
+        body: String,
+    },
+    /// The operator rejected the completed upload during validation.
+    #[error("operator validation error: {0}")]
+    Unprocessable(Cow<'static, str>),
     /// This adapter was compiled without support for the requested operation.
     #[error("operator operation unsupported: {0}")]
     Unsupported(Cow<'static, str>),

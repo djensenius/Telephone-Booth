@@ -82,6 +82,14 @@ vmagent's job. See [`observability.md`](observability.md#packaging)
 for the vmagent unit and the `BOOTH_VM_REMOTE_WRITE_URL` env var that
 lives in `/etc/phone-booth/vmagent.env`.
 
+### Upload caps
+
+Before contacting the operator, the phone refuses recordings that exceed the
+operator's hard limits: `booth_pi::MAX_UPLOAD_BYTES` is `26_214_400` (25 MiB)
+and `booth_pi::MAX_UPLOAD_DURATION_MS` is `300_000` (5 minutes). Rejected
+recordings stay on disk and in the pending-upload spool for operator-visible
+triage instead of being discarded.
+
 ## Environment variables
 
 The runtime currently supports explicit overrides for deployment-sensitive
