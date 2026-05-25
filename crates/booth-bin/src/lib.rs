@@ -5,7 +5,7 @@
 
 #![warn(missing_docs)]
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -747,6 +747,24 @@ fn publish_audio_error(bus: &TelemetryBus, err: &AudioError) {
 /// Maximum number of concurrent operator/network tasks allowed in flight.
 const OPERATOR_CONCURRENCY: usize = 4;
 
+fn log_operator_task_result(result: Result<(), tokio::task::JoinError>, message: &str) {
+    if let Err(err) = result
+        && !err.is_cancelled()
+    {
+        warn!(%err, "{message}");
+    }
+}
+
+fn is_operator_effect(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::UploadRecording { .. }
+            | Effect::FetchRandomQuestion
+            | Effect::FetchRandomMessage
+            | Effect::PutStatus(_)
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn effect_task(
     mut effect_rx: mpsc::Receiver<Effect>,
@@ -762,27 +780,47 @@ async fn effect_task(
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    let mut pending_operator_effects = VecDeque::new();
+    let mut effect_rx_closed = false;
 
     loop {
-        // Reap completed operator tasks without blocking, then wait for the
-        // next effect. If we're at the concurrency limit, drain one operator
-        // task before accepting more work.
-        if operator_tasks.len() >= OPERATOR_CONCURRENCY {
-            // Back-pressure: wait for at least one operator task to finish.
-            let _ = operator_tasks.join_next().await;
-        }
-
         // Drain any already-finished operator tasks so the set stays tidy.
         while let Some(result) = operator_tasks.try_join_next() {
-            if let Err(err) = result
-                && !err.is_cancelled()
-            {
-                warn!(%err, "operator background task panicked");
-            }
+            log_operator_task_result(result, "operator background task panicked");
         }
 
-        let Some(effect) = effect_rx.recv().await else {
-            break;
+        let effect = if operator_tasks.len() < OPERATOR_CONCURRENCY {
+            if let Some(effect) = pending_operator_effects.pop_front() {
+                effect
+            } else if effect_rx_closed {
+                break;
+            } else {
+                match effect_rx.recv().await {
+                    Some(effect) => effect,
+                    None => break,
+                }
+            }
+        } else {
+            tokio::select! {
+                result = operator_tasks.join_next() => {
+                    if let Some(result) = result {
+                        log_operator_task_result(result, "operator background task panicked");
+                    }
+                    continue;
+                }
+                received = effect_rx.recv(), if !effect_rx_closed => {
+                    if let Some(effect) = received {
+                        if is_operator_effect(&effect) {
+                            pending_operator_effects.push_back(effect);
+                            continue;
+                        }
+                        effect
+                    } else {
+                        effect_rx_closed = true;
+                        continue;
+                    }
+                }
+            }
         };
 
         match effect {
