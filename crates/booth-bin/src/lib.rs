@@ -955,6 +955,9 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
+            if let Err(err) = audio_source.cleanup_recording(&recording_id).await {
+                warn!(%recording_id, %err, "failed to clean up recording metadata");
+            }
             let _ = event_tx.send(Event::UploadComplete).await;
         }
         Err(err) => {

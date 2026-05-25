@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage, TelemetryEvent,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 use crate::AudioConfig;
 
@@ -204,7 +204,7 @@ pub struct PiAudioSource {
     config: AudioConfig,
     storage: Arc<dyn Storage>,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
-    finished: HashMap<RecordingId, RecordingHandle>,
+    finished: Arc<Mutex<HashMap<RecordingId, RecordingHandle>>>,
     #[cfg(feature = "audio")]
     recording: Option<RecordingTask>,
 }
@@ -231,7 +231,7 @@ impl PiAudioSource {
             config,
             storage,
             telemetry,
-            finished: HashMap::new(),
+            finished: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "audio")]
             recording: None,
         }
@@ -261,7 +261,10 @@ impl PiAudioSource {
             task.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
             let handle = join_recording_task(task.handle).await?;
             persist_recording_handle(&self.storage, &handle).await;
-            self.finished.insert(handle.sha256.clone(), handle.clone());
+            self.finished
+                .lock()
+                .await
+                .insert(handle.sha256.clone(), handle.clone());
             Ok(Some(handle))
         }
     }
@@ -315,7 +318,7 @@ impl AudioSource for PiAudioSource {
 
         #[cfg(feature = "audio")]
         {
-            if let Some(handle) = self.finished.get(id) {
+            if let Some(handle) = self.finished.lock().await.get(id) {
                 return Ok(handle.path.clone());
             }
             let key = recording_path_key(id);
@@ -332,6 +335,24 @@ impl AudioSource for PiAudioSource {
                     format!("recording path metadata for {id} is not utf-8: {err}").into(),
                 )
             })
+        }
+    }
+
+    async fn cleanup_recording(&self, id: &RecordingId) -> Result<(), AudioError> {
+        #[cfg(not(feature = "audio"))]
+        {
+            let _ = id;
+            Ok(())
+        }
+
+        #[cfg(feature = "audio")]
+        {
+            self.finished.lock().await.remove(id);
+            let key = recording_path_key(id);
+            self.storage.delete(&key).await.map_err(|err| {
+                AudioError::Io(format!("delete recording path metadata {key}: {err}").into())
+            })?;
+            Ok(())
         }
     }
 }
