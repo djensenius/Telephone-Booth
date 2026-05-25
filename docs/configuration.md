@@ -51,6 +51,7 @@ loopback_bind        = "127.0.0.1:8080"
 allow_controls       = false
 ring_buffer_capacity = 4096
 loopback_skip_auth   = false
+allow_tokenless      = false
 # Set the bearer token with BOOTH_DEBUG_TOKEN or BOOTH_DEBUG_TOKEN_FILE.
 
 [telemetry]
@@ -112,6 +113,12 @@ Two secrets are never written to the journal:
 
 - `operator.token` — phone-client API token.
 - debug bearer token — supplied via `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
+
+The debug surface **fails closed**: if no bearer token is configured and
+`allow_tokenless` is not explicitly set to `true`, the debug listeners refuse
+to start. This prevents accidental exposure due to a missing env file or
+provisioning error. Set `allow_tokenless = true` in the `[debug]` section only
+for local development where network exposure is not a concern.
 
 For secrets, the direct env var wins over its `*_FILE` partner. File values are
 trimmed for trailing newlines so they work with systemd credentials and
