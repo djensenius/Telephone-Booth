@@ -1057,7 +1057,7 @@ enum AudioCommand {
 }
 
 /// Upper bound for `max_recording_secs` validated at startup.
-const MAX_RECORDING_CEILING: u32 = 600;
+const MAX_RECORDING_SECS_CEILING: u32 = 600;
 
 fn validate_config(config: &RuntimeConfig) -> Result<()> {
     if config.operator.base_url.trim().is_empty() {
@@ -1079,7 +1079,7 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     }
     if config.operator.ws_reconnect_max_ms < config.operator.ws_reconnect_initial_ms {
         bail!(
-            "operator.ws_reconnect_max_ms ({}) must be >= ws_reconnect_initial_ms ({})",
+            "operator.ws_reconnect_max_ms ({}) must be >= operator.ws_reconnect_initial_ms ({})",
             config.operator.ws_reconnect_max_ms,
             config.operator.ws_reconnect_initial_ms
         );
@@ -1089,11 +1089,11 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     if config.audio.max_recording_secs == 0 {
         bail!("audio.max_recording_secs must be greater than 0");
     }
-    if config.audio.max_recording_secs > MAX_RECORDING_CEILING {
+    if config.audio.max_recording_secs > MAX_RECORDING_SECS_CEILING {
         bail!(
             "audio.max_recording_secs ({}) exceeds maximum allowed ({})",
             config.audio.max_recording_secs,
-            MAX_RECORDING_CEILING
+            MAX_RECORDING_SECS_CEILING
         );
     }
 
@@ -1110,7 +1110,7 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     }
     if fwd.buffer_max < fwd.batch_max {
         bail!(
-            "observability.operator_forward.buffer_max ({}) must be >= batch_max ({})",
+            "observability.operator_forward.buffer_max ({}) must be >= observability.operator_forward.batch_max ({})",
             fwd.buffer_max,
             fwd.batch_max
         );
