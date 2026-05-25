@@ -186,6 +186,10 @@ pub struct AudioConfig {
         alias = "max_recording_seconds"
     )]
     pub max_recording_secs: u32,
+    /// Maximum bytes to download/read for audio playback. Files exceeding this
+    /// limit are rejected before decode to prevent OOM. Default: 32 MiB.
+    #[serde(default = "default_max_audio_download_bytes")]
+    pub max_audio_download_bytes: u64,
     /// Where to write FLAC recordings before upload.
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
@@ -207,6 +211,9 @@ fn default_channels() -> u16 {
 fn default_max_recording_secs() -> u32 {
     60
 }
+fn default_max_audio_download_bytes() -> u64 {
+    32 * 1024 * 1024 // 32 MiB
+}
 fn default_recordings_dir() -> String {
     "/var/lib/phone-booth/recordings".to_string()
 }
@@ -218,6 +225,7 @@ impl Default for AudioConfig {
             sample_rate_hz: default_sample_rate(),
             channels: default_channels(),
             max_recording_secs: default_max_recording_secs(),
+            max_audio_download_bytes: default_max_audio_download_bytes(),
             recordings_dir: default_recordings_dir(),
         }
     }
@@ -253,6 +261,10 @@ pub struct OperatorConfig {
     /// When empty, any HTTPS host (that is not a private/link-local IP) is accepted.
     #[serde(default)]
     pub allowed_upload_hosts: Vec<String>,
+    /// Maximum recording file size (bytes) accepted for upload. Files exceeding
+    /// this are rejected before reading to prevent OOM. Default: 64 MiB.
+    #[serde(default = "default_max_upload_bytes")]
+    pub max_upload_bytes: u64,
 }
 
 fn default_operator_url() -> String {
@@ -270,6 +282,9 @@ fn default_ws_reconnect_initial_ms() -> u64 {
 fn default_ws_reconnect_max_ms() -> u64 {
     30_000
 }
+fn default_max_upload_bytes() -> u64 {
+    64 * 1024 * 1024 // 64 MiB
+}
 
 impl Default for OperatorConfig {
     fn default() -> Self {
@@ -281,6 +296,7 @@ impl Default for OperatorConfig {
             ws_reconnect_initial_ms: default_ws_reconnect_initial_ms(),
             ws_reconnect_max_ms: default_ws_reconnect_max_ms(),
             allowed_upload_hosts: Vec::new(),
+            max_upload_bytes: default_max_upload_bytes(),
         }
     }
 }
@@ -295,6 +311,7 @@ impl fmt::Debug for OperatorConfig {
             .field("ws_reconnect_initial_ms", &self.ws_reconnect_initial_ms)
             .field("ws_reconnect_max_ms", &self.ws_reconnect_max_ms)
             .field("allowed_upload_hosts", &self.allowed_upload_hosts)
+            .field("max_upload_bytes", &self.max_upload_bytes)
             .finish()
     }
 }
