@@ -205,6 +205,14 @@ pub trait AudioSource: Send + Sync {
 
     /// Path of a finished recording, by id.
     async fn path_of(&self, id: &RecordingId) -> Result<String, AudioError>;
+
+    /// Remove cached metadata for a recording that has been fully uploaded.
+    ///
+    /// Implementations that use durable storage with its own eviction policy
+    /// may leave the default no-op in place.
+    async fn cleanup_recording(&self, _id: &RecordingId) -> Result<(), AudioError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
