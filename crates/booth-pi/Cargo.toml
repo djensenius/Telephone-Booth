@@ -24,6 +24,7 @@ tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 heapless = { workspace = true }
+metrics = { workspace = true }
 sha2 = { workspace = true }
 
 # Cross-platform audio + decode/encode. Enabled by the `audio` feature so the
