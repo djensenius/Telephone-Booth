@@ -49,7 +49,7 @@ mod imp {
                 rotary_read: open_input(&gpio, &config, PinRole::RotaryRead)?,
             };
 
-            let (tx, rx) = mpsc::channel(usize::from(config.channel_capacity));
+            let (tx, rx) = mpsc::channel(usize::from(config.channel_capacity).max(1));
             let started_at = Instant::now();
             let debounce_tasks = vec![
                 configure_interrupt(&mut pins.hook, PinRole::Hook, &config, &handle, tx.clone())?,
@@ -151,6 +151,11 @@ mod imp {
         let task = handle.spawn(debounce_edges(role, raw_rx, tx, debounce, Instant::now()));
         let invert = config.inverted(role);
         let bcm = config.bcm_for(role);
+        let role_label: &'static str = match role {
+            PinRole::Hook => "Hook",
+            PinRole::RotaryPulse => "RotaryPulse",
+            PinRole::RotaryRead => "RotaryRead",
+        };
 
         pin.set_async_interrupt(Trigger::Both, None, move |event| {
             if let Some(level) = event_level(event, invert) {
@@ -168,7 +173,7 @@ mod imp {
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         metrics::counter!(
                             "booth_gpio_interrupts_dropped_total",
-                            "role" => format!("{role:?}"),
+                            "role" => role_label,
                         )
                         .increment(1);
                         warn!(?role, bcm, "gpio raw channel full; dropping interrupt");
