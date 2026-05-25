@@ -450,7 +450,7 @@ async fn run_runtime(
         session_handle.clone(),
     ));
 
-    let debug_task = if options.start_debug {
+    let debug_handles = if options.start_debug {
         let mut debug_config = config.debug.clone();
         if let Some(token) = config.debug_token.clone() {
             debug_config.token = Some(DebugToken(token));
@@ -463,18 +463,15 @@ async fn run_runtime(
                 let render: booth_debug::MetricsRender = Arc::new(move || handle.render());
                 render
             });
-        Some(tokio::spawn(async move {
-            if let Err(err) = booth_debug::serve_with_handles(
-                debug_config,
-                debug_bus,
-                debug_cmd_tx,
-                metrics_render,
-            )
+        match booth_debug::serve_with_handles(debug_config, debug_bus, debug_cmd_tx, metrics_render)
             .await
-            {
-                error!(%err, "debug surface stopped");
+        {
+            Ok(handles) => Some(handles),
+            Err(err) => {
+                error!(%err, "debug surface failed to start");
+                None
             }
-        }))
+        }
     } else {
         None
     };
@@ -525,8 +522,14 @@ async fn run_runtime(
     for task in observability_tasks {
         task.abort();
     }
-    if let Some(task) = debug_task {
-        task.abort();
+    if let Some(handles) = debug_handles {
+        // Signal graceful shutdown so listener tasks stop accepting connections.
+        let _ = handles.shutdown_tx.send(());
+        // Give listeners a moment to drain, then abort if they haven't stopped.
+        let timeout = tokio::time::timeout(Duration::from_secs(5), handles.handle);
+        if let Err(_elapsed) = timeout.await {
+            tracing::warn!("debug server did not shut down within timeout, aborting");
+        }
     }
 
     Ok(state)

@@ -13,12 +13,25 @@ pub struct TestServer {
     pub base_url: String,
     pub bus: TelemetryBus,
     pub rx: mpsc::Receiver<RuntimeCommand>,
-    handles: ServeHandles,
+    handles: Option<ServeHandles>,
+}
+
+impl TestServer {
+    /// Signal graceful shutdown and consume the server, returning
+    /// once all listener tasks have completed.
+    pub async fn shutdown(mut self) {
+        if let Some(handles) = self.handles.take() {
+            let _ = handles.shutdown_tx.send(());
+            let _ = handles.handle.await;
+        }
+    }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.handles.handle.abort();
+        if let Some(handles) = self.handles.as_ref() {
+            handles.handle.abort();
+        }
     }
 }
 
@@ -45,7 +58,7 @@ pub async fn spawn_with_metrics(
         base_url: format!("http://{addr}"),
         bus,
         rx,
-        handles,
+        handles: Some(handles),
     })
 }
 

@@ -37,6 +37,7 @@ use booth_hal::{
     AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, PinRole, SystemSnapshot,
     TelemetryEvent,
 };
+use futures_util::FutureExt;
 use parking_lot::Mutex;
 use rcgen::CertifiedKey;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -364,6 +365,10 @@ pub struct ServeHandles {
     pub lan_addr: Option<SocketAddr>,
     /// SHA-256 fingerprint of the generated LAN certificate.
     pub cert_fingerprint: String,
+    /// Sender that signals graceful shutdown of all listener tasks.
+    /// Dropping or sending on this channel causes each axum listener to
+    /// stop accepting new connections and drain in-flight requests.
+    pub shutdown_tx: oneshot::Sender<()>,
 }
 
 /// Renderer that produces Prometheus text exposition for the loopback
@@ -443,20 +448,37 @@ pub async fn serve_with_handles(
         return Err(DebugError::Bind("no debug listeners enabled".to_string()));
     }
 
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
     let handle = tokio::spawn(async move {
+        // Convert the oneshot into a shared future so both listeners can
+        // observe the same shutdown signal.
+        let shutdown = async move {
+            let _ = shutdown_rx.await;
+        };
+        let shutdown = shutdown.shared();
+
         let mut tasks = Vec::new();
         if let Some(listener) = loopback_listener {
             let service = loopback_router.into_make_service_with_connect_info::<DebugConnectInfo>();
+            let signal = shutdown.clone();
             tasks.push(tokio::spawn(async move {
-                if let Err(err) = axum::serve(listener, service).await {
+                if let Err(err) = axum::serve(listener, service)
+                    .with_graceful_shutdown(signal)
+                    .await
+                {
                     tracing::error!(error = %err, "loopback debug server stopped");
                 }
             }));
         }
         if let Some(listener) = lan_listener {
             let service = lan_router.into_make_service_with_connect_info::<DebugConnectInfo>();
+            let signal = shutdown.clone();
             tasks.push(tokio::spawn(async move {
-                if let Err(err) = axum::serve(listener, service).await {
+                if let Err(err) = axum::serve(listener, service)
+                    .with_graceful_shutdown(signal)
+                    .await
+                {
                     tracing::error!(error = %err, "lan debug server stopped");
                 }
             }));
@@ -474,6 +496,7 @@ pub async fn serve_with_handles(
         loopback_addr,
         lan_addr,
         cert_fingerprint: fingerprint,
+        shutdown_tx,
     })
 }
 
