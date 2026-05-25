@@ -5,7 +5,7 @@
 
 #![warn(missing_docs)]
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -457,10 +457,11 @@ async fn run_runtime(
         event_tx.clone(),
         bus.clone(),
     ));
+    let audio_source: Arc<Mutex<Box<dyn AudioSource>>> = Arc::new(Mutex::new(audio_source));
     let effect_task = tokio::spawn(effect_task(
         effect_rx,
         audio_tx.clone(),
-        audio_source,
+        Arc::clone(&audio_source),
         Arc::clone(&operator),
         event_tx.clone(),
         bus.clone(),
@@ -743,11 +744,32 @@ fn publish_audio_error(bus: &TelemetryBus, err: &AudioError) {
     warn!(%err, "audio adapter error");
 }
 
+/// Maximum number of concurrent operator/network tasks allowed in flight.
+const OPERATOR_CONCURRENCY: usize = 4;
+
+fn log_operator_task_result(result: Result<(), tokio::task::JoinError>, message: &str) {
+    if let Err(err) = result
+        && !err.is_cancelled()
+    {
+        warn!(%err, "{message}");
+    }
+}
+
+fn is_operator_effect(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::UploadRecording { .. }
+            | Effect::FetchRandomQuestion
+            | Effect::FetchRandomMessage
+            | Effect::PutStatus(_)
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn effect_task(
     mut effect_rx: mpsc::Receiver<Effect>,
     audio_tx: mpsc::Sender<AudioCommand>,
-    mut audio_source: Box<dyn AudioSource>,
+    audio_source: Arc<Mutex<Box<dyn AudioSource>>>,
     operator: Arc<dyn OperatorClient>,
     event_tx: mpsc::Sender<Event>,
     bus: TelemetryBus,
@@ -757,8 +779,52 @@ async fn effect_task(
     upload_spool: Arc<pending_uploads::PendingUploadSpool>,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
-    while let Some(effect) = effect_rx.recv().await {
+    let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    let mut pending_operator_effects = VecDeque::new();
+    let mut effect_rx_closed = false;
+
+    loop {
+        // Drain any already-finished operator tasks so the set stays tidy.
+        while let Some(result) = operator_tasks.try_join_next() {
+            log_operator_task_result(result, "operator background task panicked");
+        }
+
+        let effect = if operator_tasks.len() < OPERATOR_CONCURRENCY {
+            if let Some(effect) = pending_operator_effects.pop_front() {
+                effect
+            } else if effect_rx_closed {
+                break;
+            } else {
+                match effect_rx.recv().await {
+                    Some(effect) => effect,
+                    None => break,
+                }
+            }
+        } else {
+            tokio::select! {
+                result = operator_tasks.join_next() => {
+                    if let Some(result) = result {
+                        log_operator_task_result(result, "operator background task panicked");
+                    }
+                    continue;
+                }
+                received = effect_rx.recv(), if !effect_rx_closed => {
+                    if let Some(effect) = received {
+                        if is_operator_effect(&effect) {
+                            pending_operator_effects.push_back(effect);
+                            continue;
+                        }
+                        effect
+                    } else {
+                        effect_rx_closed = true;
+                        continue;
+                    }
+                }
+            }
+        };
+
         match effect {
+            // --- Critical path: executed inline, never blocked by network ---
             Effect::Play(source) => {
                 let source = resolve_audio_ref(source, &next_remote_audio).await;
                 let _ = audio_tx.send(AudioCommand::Play(source)).await;
@@ -767,110 +833,33 @@ async fn effect_task(
                 let _ = audio_tx.send(AudioCommand::Stop).await;
             }
             Effect::StartRecording => {
-                if let Err(err) = audio_source.start().await {
+                let mut src = audio_source.lock().await;
+                if let Err(err) = src.start().await {
                     publish_audio_error(&bus, &err);
                 }
             }
-            Effect::StopRecording => match audio_source.stop().await {
-                Ok(Some(recording_id)) => {
-                    if let Some(session_id) = session_handle.current() {
-                        let (duration_ms, bytes) = recording_size(&*audio_source, &recording_id)
-                            .await
-                            .unwrap_or((0, 0));
-                        bus.publish(TelemetryEvent::RecordingStopped {
-                            id: recording_id.clone(),
-                            session_id,
-                            duration_ms,
-                            bytes,
-                            at_monotonic_ns: monotonic_ns(),
-                        });
+            Effect::StopRecording => {
+                let mut src = audio_source.lock().await;
+                match src.stop().await {
+                    Ok(Some(recording_id)) => {
+                        if let Some(session_id) = session_handle.current() {
+                            let (duration_ms, bytes) = recording_size(&**src, &recording_id)
+                                .await
+                                .unwrap_or((0, 0));
+                            bus.publish(TelemetryEvent::RecordingStopped {
+                                id: recording_id.clone(),
+                                session_id,
+                                duration_ms,
+                                bytes,
+                                at_monotonic_ns: monotonic_ns(),
+                            });
+                        }
+                        let _ = event_tx
+                            .send(Event::RecordingFinished { recording_id })
+                            .await;
                     }
-                    let _ = event_tx
-                        .send(Event::RecordingFinished { recording_id })
-                        .await;
-                }
-                Ok(None) => {}
-                Err(err) => publish_audio_error(&bus, &err),
-            },
-            Effect::UploadRecording {
-                recording_id,
-                question_id,
-            } => {
-                let session_id = session_handle.current();
-                if let Some(sid) = session_id.clone() {
-                    bus.publish(TelemetryEvent::UploadStarted {
-                        recording_id: recording_id.clone(),
-                        session_id: sid,
-                        at_monotonic_ns: monotonic_ns(),
-                    });
-                }
-                // Resolve the file path and enqueue in the durable spool
-                // before attempting the upload.
-                let path = match audio_source.path_of(&recording_id).await {
-                    Ok(p) => p,
-                    Err(err) => {
-                        publish_audio_error(&bus, &err);
-                        continue;
-                    }
-                };
-                let spool_entry = pending_uploads::SpoolEntry {
-                    recording_id: recording_id.clone(),
-                    question_id: Some(question_id.clone()),
-                    path: path.clone(),
-                };
-                if let Err(err) = upload_spool.enqueue(&spool_entry) {
-                    warn!(%err, "failed to write upload spool entry; upload will not survive crash");
-                }
-                let started = Instant::now();
-                let bytes = recording_size(&*audio_source, &recording_id)
-                    .await
-                    .map_or(0, |(_, b)| b);
-                let recording_duration_ms = audio_source.duration_of(&recording_id).await;
-                let success = upload_recording(
-                    &*operator,
-                    Some(&*audio_source),
-                    &path,
-                    &event_tx,
-                    &bus,
-                    recording_id.clone(),
-                    question_id,
-                    session_id,
-                    started,
-                    bytes,
-                    recording_duration_ms,
-                )
-                .await;
-                // Only dequeue on success; on failure the spool entry remains
-                // so it can be retried on next startup.
-                if success {
-                    upload_spool.dequeue(&recording_id).ok();
-                }
-            }
-            Effect::FetchRandomQuestion => {
-                fetch_random_question(
-                    &*operator,
-                    &event_tx,
-                    &bus,
-                    &next_remote_audio,
-                    &recordings_dir,
-                )
-                .await;
-            }
-            Effect::FetchRandomMessage => {
-                fetch_random_message(
-                    &*operator,
-                    &event_tx,
-                    &bus,
-                    &next_remote_audio,
-                    &recordings_dir,
-                )
-                .await;
-            }
-            Effect::PutStatus(status) => {
-                if let Err(err) =
-                    retry_operator("PUT /v1/status", &bus, || operator.put_status(status)).await
-                {
-                    publish_operator_error(&bus, "put_status", &err);
+                    Ok(None) => {}
+                    Err(err) => publish_audio_error(&bus, &err),
                 }
             }
             Effect::ArmPulseTimeout => {
@@ -896,6 +885,113 @@ async fn effect_task(
                     message,
                 });
             }
+
+            // --- Operator path: spawned so network I/O cannot block critical effects ---
+            Effect::UploadRecording {
+                recording_id,
+                question_id,
+            } => {
+                let session_id = session_handle.current();
+                if let Some(sid) = session_id.clone() {
+                    bus.publish(TelemetryEvent::UploadStarted {
+                        recording_id: recording_id.clone(),
+                        session_id: sid,
+                        at_monotonic_ns: monotonic_ns(),
+                    });
+                }
+                // Resolve path and enqueue in spool synchronously so it's
+                // durable before we hand off to the background task.
+                let (path, bytes, recording_duration_ms) = {
+                    let src = audio_source.lock().await;
+                    let p = match src.path_of(&recording_id).await {
+                        Ok(p) => p,
+                        Err(err) => {
+                            publish_audio_error(&bus, &err);
+                            continue;
+                        }
+                    };
+                    let b = recording_size(&**src, &recording_id)
+                        .await
+                        .map_or(0, |(_, b)| b);
+                    let dur = src.duration_of(&recording_id).await;
+                    (p, b, dur)
+                };
+                let spool_entry = pending_uploads::SpoolEntry {
+                    recording_id: recording_id.clone(),
+                    question_id: Some(question_id.clone()),
+                    path: path.clone(),
+                };
+                if let Err(err) = upload_spool.enqueue(&spool_entry) {
+                    warn!(%err, "failed to write upload spool entry; upload will not survive crash");
+                }
+
+                let op = Arc::clone(&operator);
+                let ev_tx = event_tx.clone();
+                let b = bus.clone();
+                let spool = Arc::clone(&upload_spool);
+                let audio_src = Arc::clone(&audio_source);
+                operator_tasks.spawn(async move {
+                    let started = Instant::now();
+                    let src = audio_src.lock().await;
+                    let success = upload_recording(
+                        &*op,
+                        Some(&**src),
+                        &path,
+                        &ev_tx,
+                        &b,
+                        recording_id.clone(),
+                        question_id,
+                        session_id,
+                        started,
+                        bytes,
+                        recording_duration_ms,
+                    )
+                    .await;
+                    if success {
+                        spool.dequeue(&recording_id).ok();
+                    }
+                });
+            }
+            Effect::FetchRandomQuestion => {
+                let op = Arc::clone(&operator);
+                let ev_tx = event_tx.clone();
+                let b = bus.clone();
+                let nra = Arc::clone(&next_remote_audio);
+                let rd = recordings_dir.clone();
+                operator_tasks.spawn(async move {
+                    fetch_random_question(&*op, &ev_tx, &b, &nra, &rd).await;
+                });
+            }
+            Effect::FetchRandomMessage => {
+                let op = Arc::clone(&operator);
+                let ev_tx = event_tx.clone();
+                let b = bus.clone();
+                let nra = Arc::clone(&next_remote_audio);
+                let rd = recordings_dir.clone();
+                operator_tasks.spawn(async move {
+                    fetch_random_message(&*op, &ev_tx, &b, &nra, &rd).await;
+                });
+            }
+            Effect::PutStatus(status) => {
+                let op = Arc::clone(&operator);
+                let b = bus.clone();
+                operator_tasks.spawn(async move {
+                    if let Err(err) =
+                        retry_operator("PUT /v1/status", &b, || op.put_status(status)).await
+                    {
+                        publish_operator_error(&b, "put_status", &err);
+                    }
+                });
+            }
+        }
+    }
+
+    // Drain remaining operator tasks on shutdown.
+    while let Some(result) = operator_tasks.join_next().await {
+        if let Err(err) = result
+            && !err.is_cancelled()
+        {
+            warn!(%err, "operator background task panicked during shutdown");
         }
     }
 }

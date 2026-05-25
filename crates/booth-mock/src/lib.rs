@@ -312,6 +312,9 @@ pub struct MockOperatorState {
     pub event_batches: Vec<String>,
     /// Live system snapshots received, with their booth_id label.
     pub system_snapshots: Vec<(String, SystemSnapshot)>,
+    /// Artificial latency injected before each operator response.
+    /// Useful for testing that slow network calls don't block critical effects.
+    pub latency: Option<Duration>,
 }
 
 impl MockOperatorClient {
@@ -348,6 +351,13 @@ impl MockOperatorClient {
             });
         }
         (request_id, Instant::now())
+    }
+
+    async fn apply_latency(&self) {
+        let latency = self.inner.lock().await.latency;
+        if let Some(d) = latency {
+            tokio::time::sleep(d).await;
+        }
     }
 
     fn finish_request<T>(
@@ -391,6 +401,7 @@ fn status_of<T>(result: &Result<T, OperatorError>) -> u16 {
 impl OperatorClient for MockOperatorClient {
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
         let (request_id, started) = self.begin_request("GET /mock/random-question");
+        self.apply_latency().await;
         let result = {
             let mut s = self.inner.lock().await;
             s.fail_questions.take().map_or_else(
@@ -408,6 +419,7 @@ impl OperatorClient for MockOperatorClient {
 
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
         let (request_id, started) = self.begin_request("GET /mock/random-message");
+        self.apply_latency().await;
         let result = {
             let mut s = self.inner.lock().await;
             s.messages
@@ -424,6 +436,7 @@ impl OperatorClient for MockOperatorClient {
         _metadata: &booth_hal::UploadMetadata,
     ) -> Result<UploadSlot, OperatorError> {
         let (request_id, started) = self.begin_request("POST /mock/uploads");
+        self.apply_latency().await;
         let result = {
             let mut s = self.inner.lock().await;
             let slot_id = format!("slot-{}", s.uploads.len() + 1);
@@ -446,6 +459,7 @@ impl OperatorClient for MockOperatorClient {
 
     async fn put_upload(&self, _slot: &UploadSlot, _local_path: &str) -> Result<(), OperatorError> {
         let (request_id, started) = self.begin_request("PUT /mock/upload");
+        self.apply_latency().await;
         tokio::time::sleep(Duration::from_millis(1)).await;
         let result = Ok(());
         self.finish_request(&request_id, started, &result);
