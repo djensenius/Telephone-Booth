@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use booth_hal::{
-    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage, TelemetryEvent,
+    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, RecordingId, Storage,
+    TelemetryEvent, redact_url,
 };
 use tokio::sync::{Mutex, mpsc};
 
@@ -132,12 +133,17 @@ impl AudioSink for PiAudioSink {
                 AudioRef::RemoteUrl(url) => {
                     use futures_util::StreamExt as _;
 
-                    let response = reqwest::get(&url)
-                        .await
-                        .map_err(|err| AudioError::Source(format!("fetch {url}: {err}").into()))?;
-                    let response = response
-                        .error_for_status()
-                        .map_err(|err| AudioError::Source(format!("fetch {url}: {err}").into()))?;
+                    let safe_url = redact_url(&url);
+                    let response = reqwest::get(&url).await.map_err(|err| {
+                        AudioError::Source(
+                            format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
+                        )
+                    })?;
+                    let response = response.error_for_status().map_err(|err| {
+                        AudioError::Source(
+                            format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
+                        )
+                    })?;
 
                     // Reject responses that advertise a body larger than the
                     // configured cap before buffering anything.
@@ -145,7 +151,7 @@ impl AudioSink for PiAudioSink {
                     if let Some(len) = response.content_length().filter(|&l| l > max_bytes) {
                         return Err(AudioError::Source(
                             format!(
-                                "remote audio from {url} is {len} bytes, exceeds cap of {max_bytes}"
+                                "remote audio from {safe_url} is {len} bytes, exceeds cap of {max_bytes}"
                             )
                             .into(),
                         ));
@@ -159,13 +165,19 @@ impl AudioSink for PiAudioSink {
                     while let Some(chunk) = stream.next().await {
                         let chunk = chunk.map_err(|err| {
                             AudioError::Source(
-                                format!("read response body from {url}: {err}").into(),
+                                format!(
+                                    "read response body from {safe_url}: {}",
+                                    redact_url(&err.to_string())
+                                )
+                                .into(),
                             )
                         })?;
                         if (buf.len() as u64) + (chunk.len() as u64) > max_bytes {
                             return Err(AudioError::Source(
-                                format!("remote audio from {url} exceeds cap of {max_bytes} bytes")
-                                    .into(),
+                                format!(
+                                    "remote audio from {safe_url} exceeds cap of {max_bytes} bytes"
+                                )
+                                .into(),
                             ));
                         }
                         buf.extend_from_slice(&chunk);
@@ -381,6 +393,10 @@ impl AudioSource for PiAudioSource {
                 )
             })
         }
+    }
+
+    async fn duration_of(&self, id: &RecordingId) -> Option<u64> {
+        self.finished.lock().await.get(id).map(|h| h.duration_ms)
     }
 
     async fn cleanup_recording(&self, id: &RecordingId) -> Result<(), AudioError> {

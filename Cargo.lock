@@ -408,6 +408,7 @@ dependencies = [
  "futures-util",
  "heapless",
  "hound",
+ "metrics",
  "reqwest",
  "rppal",
  "serde",

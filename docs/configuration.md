@@ -45,8 +45,8 @@ ws_reconnect_max_ms     = 30000
 
 [debug]
 tailscale_enabled    = true
-lan_enabled          = true
-lan_bind             = "0.0.0.0:8443"
+lan_enabled          = false
+lan_bind             = "127.0.0.1:8443"
 loopback_bind        = "127.0.0.1:8080"
 allow_controls       = false
 ring_buffer_capacity = 4096
