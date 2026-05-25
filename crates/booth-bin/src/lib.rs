@@ -1064,6 +1064,9 @@ enum AudioCommand {
     Shutdown,
 }
 
+/// Upper bound for `max_recording_secs` validated at startup.
+const MAX_RECORDING_SECS_CEILING: u32 = 600;
+
 fn validate_config(config: &RuntimeConfig) -> Result<()> {
     if config.operator.base_url.trim().is_empty() {
         bail!("operator.base_url must not be empty");
@@ -1073,6 +1076,55 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     }
     if config.audio.sample_rate_hz == 0 {
         bail!("audio.sample_rate_hz must be at least 1");
+    }
+
+    // --- Operator timeout / backoff bounds ---
+    if config.operator.http_timeout_secs == 0 {
+        bail!("operator.http_timeout_secs must be greater than 0");
+    }
+    if config.operator.ws_reconnect_initial_ms == 0 {
+        bail!("operator.ws_reconnect_initial_ms must be greater than 0");
+    }
+    if config.operator.ws_reconnect_max_ms < config.operator.ws_reconnect_initial_ms {
+        bail!(
+            "operator.ws_reconnect_max_ms ({}) must be >= operator.ws_reconnect_initial_ms ({})",
+            config.operator.ws_reconnect_max_ms,
+            config.operator.ws_reconnect_initial_ms
+        );
+    }
+
+    // --- Audio recording duration ---
+    if config.audio.max_recording_secs == 0 {
+        bail!("audio.max_recording_secs must be greater than 0");
+    }
+    if config.audio.max_recording_secs > MAX_RECORDING_SECS_CEILING {
+        bail!(
+            "audio.max_recording_secs ({}) exceeds maximum allowed ({})",
+            config.audio.max_recording_secs,
+            MAX_RECORDING_SECS_CEILING
+        );
+    }
+
+    // --- Observability interval / buffer bounds ---
+    if config.observability.sample_interval_ms == 0 {
+        bail!("observability.sample_interval_ms must be greater than 0");
+    }
+    let fwd = &config.observability.operator_forward;
+    if fwd.batch_max == 0 {
+        bail!("observability.operator_forward.batch_max must be greater than 0");
+    }
+    if fwd.flush_interval_ms == 0 {
+        bail!("observability.operator_forward.flush_interval_ms must be greater than 0");
+    }
+    if fwd.buffer_max < fwd.batch_max {
+        bail!(
+            "observability.operator_forward.buffer_max ({}) must be >= observability.operator_forward.batch_max ({})",
+            fwd.buffer_max,
+            fwd.batch_max
+        );
+    }
+    if fwd.system_push_interval_ms == 0 {
+        bail!("observability.operator_forward.system_push_interval_ms must be greater than 0");
     }
 
     let pins = [
@@ -1316,8 +1368,13 @@ fn notify_ready(enabled: bool) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "tests may panic on setup failure"
+)]
 mod tests {
-    use super::{AudioRef, is_sha256_hex, operator_audio_ref};
+    use super::{AudioRef, RuntimeConfig, is_sha256_hex, operator_audio_ref, validate_config};
     use std::fs;
 
     #[test]
@@ -1372,6 +1429,122 @@ mod tests {
 
     fn unique_temp_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("telephone-booth-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    // --- validate_config tests ---
+
+    #[test]
+    fn default_config_passes_validation() {
+        let config = RuntimeConfig::default();
+        validate_config(&config).expect("default config should be valid");
+    }
+
+    #[test]
+    fn rejects_zero_http_timeout() {
+        let mut config = RuntimeConfig::default();
+        config.operator.http_timeout_secs = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("http_timeout_secs"));
+    }
+
+    #[test]
+    fn rejects_zero_ws_reconnect_initial() {
+        let mut config = RuntimeConfig::default();
+        config.operator.ws_reconnect_initial_ms = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("ws_reconnect_initial_ms"));
+    }
+
+    #[test]
+    fn rejects_inverted_ws_reconnect_bounds() {
+        let mut config = RuntimeConfig::default();
+        config.operator.ws_reconnect_initial_ms = 5_000;
+        config.operator.ws_reconnect_max_ms = 1_000;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("ws_reconnect_max_ms"));
+    }
+
+    #[test]
+    fn accepts_equal_ws_reconnect_bounds() {
+        let mut config = RuntimeConfig::default();
+        config.operator.ws_reconnect_initial_ms = 2_000;
+        config.operator.ws_reconnect_max_ms = 2_000;
+        validate_config(&config).expect("equal bounds should be valid");
+    }
+
+    #[test]
+    fn rejects_zero_max_recording_secs() {
+        let mut config = RuntimeConfig::default();
+        config.audio.max_recording_secs = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("max_recording_secs"));
+    }
+
+    #[test]
+    fn rejects_excessive_max_recording_secs() {
+        let mut config = RuntimeConfig::default();
+        config.audio.max_recording_secs = 601;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("max_recording_secs"));
+    }
+
+    #[test]
+    fn accepts_max_recording_at_ceiling() {
+        let mut config = RuntimeConfig::default();
+        config.audio.max_recording_secs = 600;
+        validate_config(&config).expect("600s should be valid");
+    }
+
+    #[test]
+    fn rejects_zero_sample_interval() {
+        let mut config = RuntimeConfig::default();
+        config.observability.sample_interval_ms = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("sample_interval_ms"));
+    }
+
+    #[test]
+    fn rejects_zero_batch_max() {
+        let mut config = RuntimeConfig::default();
+        config.observability.operator_forward.batch_max = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("batch_max"));
+    }
+
+    #[test]
+    fn rejects_zero_flush_interval() {
+        let mut config = RuntimeConfig::default();
+        config.observability.operator_forward.flush_interval_ms = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("flush_interval_ms"));
+    }
+
+    #[test]
+    fn rejects_buffer_max_less_than_batch_max() {
+        let mut config = RuntimeConfig::default();
+        config.observability.operator_forward.batch_max = 100;
+        config.observability.operator_forward.buffer_max = 50;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("buffer_max"));
+    }
+
+    #[test]
+    fn accepts_buffer_max_equal_to_batch_max() {
+        let mut config = RuntimeConfig::default();
+        config.observability.operator_forward.batch_max = 100;
+        config.observability.operator_forward.buffer_max = 100;
+        validate_config(&config).expect("equal buffer/batch should be valid");
+    }
+
+    #[test]
+    fn rejects_zero_system_push_interval() {
+        let mut config = RuntimeConfig::default();
+        config
+            .observability
+            .operator_forward
+            .system_push_interval_ms = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("system_push_interval_ms"));
     }
 }
 
