@@ -8,6 +8,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 ## For first-time setup
 
 - [Getting started](getting-started.md) — clone → mise install → `just dev`
+- [Raspberry Pi setup](raspberry-pi-setup.md) — from-scratch Pi provisioning (OS, audio, Tailscale, deploy, wiring)
 - [Hardware](hardware.md) — wiring the rotary phone + GPIO pinout
 - [Configuration](configuration.md) — every config key, its default, env-var equivalent
 
