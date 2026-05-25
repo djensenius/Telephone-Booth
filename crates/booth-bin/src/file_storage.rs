@@ -148,10 +148,21 @@ impl FileStorage {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("file-storage-test-{}", monotonic_ns()));
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/file-storage-tests");
+        let dir = root.join(format!(
+            "pid-{}-{}-{}",
+            std::process::id(),
+            monotonic_ns(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).ok();
         dir
     }
