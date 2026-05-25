@@ -526,6 +526,7 @@ async fn run_runtime(
                         session_handle.current(),
                         started,
                         bytes,
+                        None,
                     )
                     .await;
                     if success {
@@ -833,6 +834,7 @@ async fn effect_task(
                     session_id,
                     started,
                     bytes,
+                    Some(&*audio_source),
                 )
                 .await;
                 // Only dequeue on success; on failure the spool entry remains
@@ -1009,6 +1011,7 @@ async fn upload_recording(
     session_id: Option<String>,
     started: Instant,
     bytes: u64,
+    audio_source: Option<&dyn AudioSource>,
 ) -> bool {
     let result = async {
         let slot = retry_operator("POST /v1/uploads", bus, || {
@@ -1039,7 +1042,9 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            if let Err(err) = audio_source.cleanup_recording(&recording_id).await {
+            if let Some(source) = audio_source
+                && let Err(err) = source.cleanup_recording(&recording_id).await
+            {
                 warn!(%recording_id, %err, "failed to clean up recording metadata");
             }
             let _ = event_tx.send(Event::UploadComplete).await;
