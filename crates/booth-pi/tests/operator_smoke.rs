@@ -317,6 +317,37 @@ async fn upload_recording_rejects_http_localhost_url() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn put_recording_retries_5xx_then_gives_up() -> TestResult {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/blob"))
+        .and(header("content-type", "audio/flac"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
+        .expect(4) // initial attempt + 3 retries
+        .mount(&server)
+        .await;
+
+    let client = PiOperatorClient::new(config(server.uri()))?;
+    let dir = std::env::current_dir()?.join("target/operator-smoke");
+    std::fs::create_dir_all(&dir)?;
+    let recording = dir.join(format!("upload-retry-{}.flac", std::process::id()));
+    std::fs::write(&recording, b"flac-data")?;
+
+    let slot = booth_hal::UploadSlot {
+        id: "33333333-3333-3333-3333-333333333333".to_string(),
+        upload_url: format!("{}/blob", server.uri()),
+        expires_at: "2026-01-01T00:10:00Z".to_string(),
+        content_type: "audio/flac".to_string(),
+    };
+    // Call put_recording directly to bypass URL validation (mock is HTTP on localhost)
+    let result = client.put_recording(&slot, &recording).await;
+    let _ = std::fs::remove_file(&recording);
+
+    assert!(matches!(result, Err(UploadError::Http { status: 503, .. })));
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Upload URL validation tests
 // ---------------------------------------------------------------------------

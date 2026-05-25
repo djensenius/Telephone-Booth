@@ -284,78 +284,7 @@ impl PiOperatorClient {
         #[cfg(feature = "operator")]
         {
             validate_upload_url(&slot.upload_url, &self.config.allowed_upload_hosts)?;
-
-            // Validate file size against the configured cap before streaming.
-            let meta = fs::metadata(local_path)
-                .await
-                .map_err(|err| UploadError::Io(err.to_string().into()))?;
-            let file_size = meta.len();
-            if file_size > self.config.max_upload_bytes {
-                return Err(UploadError::Io(
-                    format!(
-                        "recording is {file_size} bytes, exceeds upload cap of {} bytes",
-                        self.config.max_upload_bytes
-                    )
-                    .into(),
-                ));
-            }
-
-            for attempt in 0..=UPLOAD_RETRIES {
-                debug!(
-                    route = "PUT <presigned-upload-url>",
-                    attempt = attempt + 1,
-                    "uploading recording"
-                );
-
-                // Open the file fresh on each attempt so we stream from disk
-                // rather than cloning an in-memory buffer.
-                let file = fs::File::open(local_path)
-                    .await
-                    .map_err(|err| UploadError::Io(err.to_string().into()))?;
-                let body = reqwest::Body::from(file);
-
-                let response = self
-                    .upload_client
-                    .put(&slot.upload_url)
-                    .header(CONTENT_TYPE, slot.content_type.as_str())
-                    .header(CONTENT_LENGTH, file_size)
-                    .body(body)
-                    .send()
-                    .await;
-
-                match response {
-                    Ok(response) if response.status().is_success() => {
-                        debug!(status = response.status().as_u16(), "upload accepted");
-                        return Ok(());
-                    }
-                    Ok(response) => {
-                        let status = response.status();
-                        let body = truncated_body(response).await;
-                        debug!(status = status.as_u16(), "upload rejected");
-                        if status.as_u16() == 409 && attempt == UPLOAD_RETRIES {
-                            return Err(UploadError::DuplicateRecording(body.into()));
-                        }
-                        if !is_retryable_upload_status(status.as_u16()) || attempt == UPLOAD_RETRIES
-                        {
-                            return Err(UploadError::Http {
-                                status: status.as_u16(),
-                                body,
-                            });
-                        }
-                    }
-                    Err(err) => {
-                        let msg = redact_url(&err.to_string()).into_owned();
-                        debug!(error = %msg, "upload transport failure");
-                        if attempt == UPLOAD_RETRIES {
-                            return Err(UploadError::Transport(msg.into()));
-                        }
-                    }
-                }
-
-                sleep(upload_backoff(attempt)).await;
-            }
-
-            Err(UploadError::Transport("upload retry loop exited".into()))
+            self.put_recording(slot, local_path).await
         }
 
         #[cfg(not(feature = "operator"))]
@@ -365,6 +294,88 @@ impl PiOperatorClient {
                 "booth-pi was compiled without the operator feature".into(),
             ))
         }
+    }
+
+    /// Inner upload implementation: validates file size and retries on
+    /// transient failures. Separated from [`Self::upload_recording`] so the
+    /// retry logic can be exercised in tests without URL validation blocking
+    /// HTTP-only mock servers.
+    #[cfg(feature = "operator")]
+    pub async fn put_recording(
+        &self,
+        slot: &UploadSlot,
+        local_path: &Path,
+    ) -> Result<(), UploadError> {
+        // Validate file size against the configured cap before streaming.
+        let meta = fs::metadata(local_path)
+            .await
+            .map_err(|err| UploadError::Io(err.to_string().into()))?;
+        let file_size = meta.len();
+        if file_size > self.config.max_upload_bytes {
+            return Err(UploadError::Io(
+                format!(
+                    "recording is {file_size} bytes, exceeds upload cap of {} bytes",
+                    self.config.max_upload_bytes
+                )
+                .into(),
+            ));
+        }
+
+        for attempt in 0..=UPLOAD_RETRIES {
+            debug!(
+                route = "PUT <presigned-upload-url>",
+                attempt = attempt + 1,
+                "uploading recording"
+            );
+
+            // Open the file fresh on each attempt so we stream from disk
+            // rather than cloning an in-memory buffer.
+            let file = fs::File::open(local_path)
+                .await
+                .map_err(|err| UploadError::Io(err.to_string().into()))?;
+            let body = reqwest::Body::from(file);
+
+            let response = self
+                .upload_client
+                .put(&slot.upload_url)
+                .header(CONTENT_TYPE, slot.content_type.as_str())
+                .header(CONTENT_LENGTH, file_size)
+                .body(body)
+                .send()
+                .await;
+
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    debug!(status = response.status().as_u16(), "upload accepted");
+                    return Ok(());
+                }
+                Ok(response) => {
+                    let status = response.status();
+                    let body = truncated_body(response).await;
+                    debug!(status = status.as_u16(), "upload rejected");
+                    if status.as_u16() == 409 && attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::DuplicateRecording(body.into()));
+                    }
+                    if !is_retryable_upload_status(status.as_u16()) || attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::Http {
+                            status: status.as_u16(),
+                            body,
+                        });
+                    }
+                }
+                Err(err) => {
+                    let msg = redact_url(&err.to_string()).into_owned();
+                    debug!(error = %msg, "upload transport failure");
+                    if attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::Transport(msg.into()));
+                    }
+                }
+            }
+
+            sleep(upload_backoff(attempt)).await;
+        }
+
+        Err(UploadError::Transport("upload retry loop exited".into()))
     }
 
     #[cfg(feature = "operator")]

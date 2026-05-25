@@ -70,6 +70,7 @@ sha2 = "0.10"
 parking_lot = "0.12"
 subtle = "2.6"
 time = { version = "0.3", features = ["formatting"] }
+url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # Metrics / system stats
@@ -115,4 +116,3 @@ directories = "5"
 insta = { version = "1", features = ["yaml"] }
 proptest = "1"
 tokio-test = "0.4"
-url = "2"
