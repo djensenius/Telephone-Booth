@@ -113,7 +113,11 @@ pub enum AudioRef {
     /// Locally cached file (absolute path or platform-relative).
     LocalFile(String),
     /// HTTP(S) URL fetched from the operator backend or its blob store.
-    RemoteUrl(String),
+    ///
+    /// The optional second field carries the expected SHA-256 hex digest of the
+    /// audio bytes. When present, the adapter must verify the downloaded content
+    /// before playback.
+    RemoteUrl(String, Option<String>),
 }
 
 /// Built-in audio tones embedded in the binary so the booth can produce them

@@ -213,7 +213,8 @@ pub async fn check_runtime(config: &RuntimeConfig) -> Result<()> {
     let _operator = booth_pi::PiOperatorClient::new(config.operator.clone())
         .map_err(|err| anyhow!("operator config invalid: {err}"))?;
 
-    let mut sink = PiAudioSink::new(config.audio.clone());
+    let mut sink =
+        PiAudioSink::with_telemetry_and_policy(config.audio.clone(), None, &config.operator);
     sink.stop()
         .await
         .map_err(|err| anyhow!("audio device check failed: {err}"))?;
@@ -251,7 +252,11 @@ pub fn build_pi_adapters(config: &RuntimeConfig, bus: &TelemetryBus) -> Result<R
 
     let gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
         .map_err(|err| anyhow!("open GPIO adapter: {err}"))?;
-    let audio_sink = PiAudioSink::with_telemetry(config.audio.clone(), Some(telemetry_tx.clone()));
+    let audio_sink = PiAudioSink::with_telemetry_and_policy(
+        config.audio.clone(),
+        Some(telemetry_tx.clone()),
+        &config.operator,
+    );
 
     let metadata_dir = metadata_dir_for(&config.audio.recordings_dir);
     let storage = file_storage::FileStorage::new(&metadata_dir)
@@ -328,7 +333,11 @@ pub fn build_simulator_adapters(
                 telemetry_bus.publish(event);
             }
         });
-        let sink = PiAudioSink::with_telemetry(config.audio.clone(), Some(telemetry_tx.clone()));
+        let sink = PiAudioSink::with_telemetry_and_policy(
+            config.audio.clone(),
+            Some(telemetry_tx.clone()),
+            &config.operator,
+        );
         let metadata_dir = metadata_dir_for(&config.audio.recordings_dir);
         let storage = file_storage::FileStorage::new(&metadata_dir)
             .map_err(|err| anyhow!("open file storage at {}: {err}", metadata_dir.display()))?;
@@ -1001,11 +1010,9 @@ async fn resolve_audio_ref(
     next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
 ) -> AudioRef {
     match source {
-        AudioRef::RemoteUrl(url) if url.is_empty() => next_remote_audio
-            .lock()
-            .await
-            .take()
-            .unwrap_or(AudioRef::RemoteUrl(url)),
+        AudioRef::RemoteUrl(ref url, _) if url.is_empty() => {
+            next_remote_audio.lock().await.take().unwrap_or(source)
+        }
         other => other,
     }
 }
@@ -1027,7 +1034,7 @@ fn operator_audio_ref(
             return AudioRef::LocalFile(local_path.to_string_lossy().into_owned());
         }
     }
-    AudioRef::RemoteUrl(audio_url)
+    AudioRef::RemoteUrl(audio_url, audio_sha256.map(String::from))
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -1635,10 +1642,11 @@ mod tests {
     fn operator_audio_ref_falls_back_to_remote_when_local_file_is_absent() {
         let recordings_dir = unique_temp_dir();
         let remote = "https://operator.example/audio.flac".to_string();
+        let sha = "b".repeat(64);
 
-        let audio = operator_audio_ref(remote.clone(), Some(&"b".repeat(64)), &recordings_dir);
+        let audio = operator_audio_ref(remote.clone(), Some(&sha), &recordings_dir);
 
-        assert_eq!(audio, AudioRef::RemoteUrl(remote));
+        assert_eq!(audio, AudioRef::RemoteUrl(remote, Some(sha)));
     }
 
     #[test]
@@ -1648,7 +1656,10 @@ mod tests {
 
         let audio = operator_audio_ref(remote.clone(), Some("../not-a-sha"), &recordings_dir);
 
-        assert_eq!(audio, AudioRef::RemoteUrl(remote));
+        assert_eq!(
+            audio,
+            AudioRef::RemoteUrl(remote, Some("../not-a-sha".to_string()))
+        );
     }
 
     #[test]

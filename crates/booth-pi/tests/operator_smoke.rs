@@ -30,6 +30,7 @@ fn config(base_url: String) -> OperatorConfig {
         http_timeout_secs: 2,
         ws_reconnect_initial_ms: 1,
         ws_reconnect_max_ms: 2,
+        ..OperatorConfig::default()
     }
 }
 

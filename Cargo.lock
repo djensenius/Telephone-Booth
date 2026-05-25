@@ -405,6 +405,7 @@ dependencies = [
  "claxon",
  "cpal",
  "flacenc",
+ "futures-util",
  "heapless",
  "hound",
  "metrics",
@@ -418,6 +419,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tracing",
+ "url",
  "wiremock",
 ]
 

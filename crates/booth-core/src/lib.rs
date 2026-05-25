@@ -362,7 +362,7 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 question_id: question_id.clone(),
             },
             vec![
-                Effect::Play(AudioRef::RemoteUrl(String::new())), // runtime fills in URL
+                Effect::Play(AudioRef::RemoteUrl(String::new(), None)), // runtime fills in URL
                 Effect::PutStatus(BoothStatus::PlayingQuestion),
                 Effect::Log {
                     message: alloc::format!("question ready: {question_id}"),
@@ -383,7 +383,7 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
         (S::DialTone, E::MessageReady) => (
             S::PlayingMessage,
             vec![
-                Effect::Play(AudioRef::RemoteUrl(String::new())),
+                Effect::Play(AudioRef::RemoteUrl(String::new(), None)),
                 Effect::PutStatus(BoothStatus::PlayingMessage),
             ],
         ),
