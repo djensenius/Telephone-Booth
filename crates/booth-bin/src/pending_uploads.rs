@@ -132,7 +132,8 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("spool-test-{}", monotonic_ns()));
+        let dir = std::env::temp_dir()
+            .join(format!("spool-test-{}-{}", std::process::id(), monotonic_ns()));
         std::fs::create_dir_all(&dir).ok();
         dir
     }
