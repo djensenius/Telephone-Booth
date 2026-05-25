@@ -204,7 +204,7 @@ pub struct PiAudioSource {
     config: AudioConfig,
     storage: Arc<dyn Storage>,
     telemetry: Option<mpsc::Sender<TelemetryEvent>>,
-    finished: Arc<Mutex<HashMap<RecordingId, RecordingHandle>>>,
+    finished: Mutex<HashMap<RecordingId, RecordingHandle>>,
     #[cfg(feature = "audio")]
     recording: Option<RecordingTask>,
 }
@@ -231,7 +231,7 @@ impl PiAudioSource {
             config,
             storage,
             telemetry,
-            finished: Arc::new(Mutex::new(HashMap::new())),
+            finished: Mutex::new(HashMap::new()),
             #[cfg(feature = "audio")]
             recording: None,
         }
