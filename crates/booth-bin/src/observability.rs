@@ -552,6 +552,11 @@ fn should_forward(event: &TelemetryEvent) -> bool {
         TelemetryEvent::AudioLevel(_) | TelemetryEvent::GpioEdge(_) => false,
         // System samples have their own dedicated PUT /v1/system route.
         TelemetryEvent::SystemSample { .. } => false,
+        // Synthetic call markers are already forwarded directly via
+        // wire_for_synthetic when they are produced by the SessionTracker.
+        // Suppress them here so they are not forwarded a second time when
+        // republished to the bus.
+        TelemetryEvent::CallStarted { .. } | TelemetryEvent::CallEnded { .. } => false,
         _ => true,
     }
 }
@@ -708,6 +713,21 @@ mod tests {
             at_monotonic_ns: 0,
         });
         assert!(!should_forward(&evt));
+    }
+
+    #[test]
+    fn synthetic_call_events_are_skipped_by_forwarder() {
+        let started = TelemetryEvent::CallStarted {
+            session_id: "sess-1".to_string(),
+            at_monotonic_ns: 1,
+        };
+        let ended = TelemetryEvent::CallEnded {
+            session_id: "sess-1".to_string(),
+            outcome: CallOutcome::HungUpBeforeDial,
+            at_monotonic_ns: 2,
+        };
+        assert!(!should_forward(&started));
+        assert!(!should_forward(&ended));
     }
 
     #[test]
