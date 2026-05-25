@@ -31,7 +31,7 @@ pub use url_policy::{AudioFetchPolicy, UrlPolicyError};
 
 pub mod operator;
 
-pub use operator::{PiOperatorClient, UploadError};
+pub use operator::{PiOperatorClient, UploadError, validate_upload_url};
 
 pub mod gpio;
 
@@ -274,6 +274,12 @@ pub struct OperatorConfig {
     /// enable only for trusted local networks during development.
     #[serde(default)]
     pub allow_http_audio: bool,
+    /// Allowed storage hostnames for presigned upload URLs.
+    ///
+    /// When non-empty, upload URLs must have a host matching one of these entries.
+    /// When empty, any HTTPS host (that is not a private/link-local IP) is accepted.
+    #[serde(default)]
+    pub allowed_upload_hosts: Vec<String>,
     /// Maximum recording file size (bytes) accepted for upload. Files exceeding
     /// this are rejected before reading to prevent OOM. Default: 64 MiB.
     #[serde(default = "default_max_upload_bytes")]
@@ -318,6 +324,7 @@ impl Default for OperatorConfig {
             max_audio_body_bytes: default_max_audio_body_bytes(),
             allow_private_audio_hosts: false,
             allow_http_audio: false,
+            allowed_upload_hosts: Vec::new(),
             max_upload_bytes: default_max_upload_bytes(),
         }
     }
@@ -336,6 +343,7 @@ impl fmt::Debug for OperatorConfig {
             .field("max_audio_body_bytes", &self.max_audio_body_bytes)
             .field("allow_private_audio_hosts", &self.allow_private_audio_hosts)
             .field("allow_http_audio", &self.allow_http_audio)
+            .field("allowed_upload_hosts", &self.allowed_upload_hosts)
             .field("max_upload_bytes", &self.max_upload_bytes)
             .finish()
     }

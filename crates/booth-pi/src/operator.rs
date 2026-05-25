@@ -74,6 +74,9 @@ impl fmt::Debug for PiOperatorClient {
 /// Failure while uploading bytes directly to a presigned blob URL.
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
+    /// The upload URL failed validation (wrong scheme, disallowed host, etc.).
+    #[error("invalid upload URL: {0}")]
+    InvalidUrl(Cow<'static, str>),
     /// The local recording could not be read.
     #[error("recording I/O error: {0}")]
     Io(Cow<'static, str>),
@@ -96,6 +99,7 @@ pub enum UploadError {
 impl From<UploadError> for OperatorError {
     fn from(value: UploadError) -> Self {
         match value {
+            UploadError::InvalidUrl(msg) => OperatorError::Transport(msg),
             UploadError::Io(err) | UploadError::Transport(err) => OperatorError::Transport(err),
             UploadError::DuplicateRecording(message) => OperatorError::DuplicateRecording(message),
             UploadError::Http { status: 409, body } => {
@@ -125,6 +129,7 @@ impl PiOperatorClient {
                 .map_err(operator_transport)?;
             let upload_client = reqwest::Client::builder()
                 .timeout(timeout)
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(operator_transport)?;
 
@@ -278,77 +283,8 @@ impl PiOperatorClient {
     ) -> Result<(), UploadError> {
         #[cfg(feature = "operator")]
         {
-            // Validate file size against the configured cap before streaming.
-            let meta = fs::metadata(local_path)
-                .await
-                .map_err(|err| UploadError::Io(err.to_string().into()))?;
-            let file_size = meta.len();
-            if file_size > self.config.max_upload_bytes {
-                return Err(UploadError::Io(
-                    format!(
-                        "recording is {file_size} bytes, exceeds upload cap of {} bytes",
-                        self.config.max_upload_bytes
-                    )
-                    .into(),
-                ));
-            }
-
-            for attempt in 0..=UPLOAD_RETRIES {
-                debug!(
-                    route = "PUT <presigned-upload-url>",
-                    attempt = attempt + 1,
-                    "uploading recording"
-                );
-
-                // Open the file fresh on each attempt so we stream from disk
-                // rather than cloning an in-memory buffer.
-                let file = fs::File::open(local_path)
-                    .await
-                    .map_err(|err| UploadError::Io(err.to_string().into()))?;
-                let body = reqwest::Body::from(file);
-
-                let response = self
-                    .upload_client
-                    .put(&slot.upload_url)
-                    .header(CONTENT_TYPE, slot.content_type.as_str())
-                    .header(CONTENT_LENGTH, file_size)
-                    .body(body)
-                    .send()
-                    .await;
-
-                match response {
-                    Ok(response) if response.status().is_success() => {
-                        debug!(status = response.status().as_u16(), "upload accepted");
-                        return Ok(());
-                    }
-                    Ok(response) => {
-                        let status = response.status();
-                        let body = truncated_body(response).await;
-                        debug!(status = status.as_u16(), "upload rejected");
-                        if status.as_u16() == 409 && attempt == UPLOAD_RETRIES {
-                            return Err(UploadError::DuplicateRecording(body.into()));
-                        }
-                        if !is_retryable_upload_status(status.as_u16()) || attempt == UPLOAD_RETRIES
-                        {
-                            return Err(UploadError::Http {
-                                status: status.as_u16(),
-                                body,
-                            });
-                        }
-                    }
-                    Err(err) => {
-                        let msg = redact_url(&err.to_string()).into_owned();
-                        debug!(error = %msg, "upload transport failure");
-                        if attempt == UPLOAD_RETRIES {
-                            return Err(UploadError::Transport(msg.into()));
-                        }
-                    }
-                }
-
-                sleep(upload_backoff(attempt)).await;
-            }
-
-            Err(UploadError::Transport("upload retry loop exited".into()))
+            validate_upload_url(&slot.upload_url, &self.config.allowed_upload_hosts)?;
+            self.put_recording(slot, local_path).await
         }
 
         #[cfg(not(feature = "operator"))]
@@ -358,6 +294,88 @@ impl PiOperatorClient {
                 "booth-pi was compiled without the operator feature".into(),
             ))
         }
+    }
+
+    /// Inner upload implementation: validates file size and retries on
+    /// transient failures. Separated from [`Self::upload_recording`] so the
+    /// retry logic can be exercised in tests without URL validation blocking
+    /// HTTP-only mock servers.
+    #[cfg(feature = "operator")]
+    pub async fn put_recording(
+        &self,
+        slot: &UploadSlot,
+        local_path: &Path,
+    ) -> Result<(), UploadError> {
+        // Validate file size against the configured cap before streaming.
+        let meta = fs::metadata(local_path)
+            .await
+            .map_err(|err| UploadError::Io(err.to_string().into()))?;
+        let file_size = meta.len();
+        if file_size > self.config.max_upload_bytes {
+            return Err(UploadError::Io(
+                format!(
+                    "recording is {file_size} bytes, exceeds upload cap of {} bytes",
+                    self.config.max_upload_bytes
+                )
+                .into(),
+            ));
+        }
+
+        for attempt in 0..=UPLOAD_RETRIES {
+            debug!(
+                route = "PUT <presigned-upload-url>",
+                attempt = attempt + 1,
+                "uploading recording"
+            );
+
+            // Open the file fresh on each attempt so we stream from disk
+            // rather than cloning an in-memory buffer.
+            let file = fs::File::open(local_path)
+                .await
+                .map_err(|err| UploadError::Io(err.to_string().into()))?;
+            let body = reqwest::Body::from(file);
+
+            let response = self
+                .upload_client
+                .put(&slot.upload_url)
+                .header(CONTENT_TYPE, slot.content_type.as_str())
+                .header(CONTENT_LENGTH, file_size)
+                .body(body)
+                .send()
+                .await;
+
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    debug!(status = response.status().as_u16(), "upload accepted");
+                    return Ok(());
+                }
+                Ok(response) => {
+                    let status = response.status();
+                    let body = truncated_body(response).await;
+                    debug!(status = status.as_u16(), "upload rejected");
+                    if status.as_u16() == 409 && attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::DuplicateRecording(body.into()));
+                    }
+                    if !is_retryable_upload_status(status.as_u16()) || attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::Http {
+                            status: status.as_u16(),
+                            body,
+                        });
+                    }
+                }
+                Err(err) => {
+                    let msg = redact_url(&err.to_string()).into_owned();
+                    debug!(error = %msg, "upload transport failure");
+                    if attempt == UPLOAD_RETRIES {
+                        return Err(UploadError::Transport(msg.into()));
+                    }
+                }
+            }
+
+            sleep(upload_backoff(attempt)).await;
+        }
+
+        Err(UploadError::Transport("upload retry loop exited".into()))
     }
 
     #[cfg(feature = "operator")]
@@ -726,4 +744,107 @@ fn civil_from_days(days_since_epoch: u64) -> (i32, u32, u32) {
         u32::try_from(m).unwrap_or(12),
         u32::try_from(d).unwrap_or(31),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Upload URL validation
+// ---------------------------------------------------------------------------
+
+/// Validate a presigned upload URL before issuing a PUT request.
+///
+/// Rejects URLs that are not HTTPS, have a host matching a private/link-local
+/// IP range, or whose host is not in the configured allow-list (when the list
+/// is non-empty).
+pub fn validate_upload_url(raw_url: &str, allowed_hosts: &[String]) -> Result<(), UploadError> {
+    let parsed = url::Url::parse(raw_url)
+        .map_err(|e| UploadError::InvalidUrl(format!("malformed URL: {e}").into()))?;
+
+    // Require HTTPS
+    if parsed.scheme() != "https" {
+        return Err(UploadError::InvalidUrl(
+            format!(
+                "upload URL must use HTTPS, got scheme '{}'",
+                parsed.scheme()
+            )
+            .into(),
+        ));
+    }
+
+    // Require a host
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| UploadError::InvalidUrl("upload URL has no host".into()))?;
+
+    // Reject private / link-local / loopback addresses
+    if is_private_or_reserved_host(host) {
+        return Err(UploadError::InvalidUrl(
+            format!("upload URL host '{host}' resolves to a private/reserved address").into(),
+        ));
+    }
+
+    // If an allow-list is configured, enforce it
+    if !allowed_hosts.is_empty() && !allowed_hosts.iter().any(|h| h.eq_ignore_ascii_case(host)) {
+        return Err(UploadError::InvalidUrl(
+            format!("upload URL host '{host}' is not in the allowed hosts list").into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Returns true if `host` looks like a private, loopback, or link-local
+/// address. Handles IPv4 dotted-decimal, IPv6 bracket-free literals, and the
+/// `localhost` hostname.
+fn is_private_or_reserved_host(host: &str) -> bool {
+    // Common name for loopback
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    // Try IPv4
+    if let Ok(ipv4) = host.parse::<std::net::Ipv4Addr>() {
+        return ipv4.is_loopback()       // 127.0.0.0/8
+            || ipv4.is_private()         // 10/8, 172.16/12, 192.168/16
+            || ipv4.is_link_local()      // 169.254/16
+            || ipv4.is_unspecified()     // 0.0.0.0
+            || ipv4.is_broadcast()       // 255.255.255.255
+            || is_ipv4_shared(ipv4)      // 100.64/10 (CGN / Tailscale)
+            || is_ipv4_documentation(ipv4); // 192.0.2/24, 198.51.100/24, 203.0.113/24
+    }
+
+    // Try IPv6 (URLs may have brackets stripped by the `url` crate)
+    let ipv6_candidate = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ipv6) = ipv6_candidate.parse::<std::net::Ipv6Addr>() {
+        return ipv6.is_loopback()       // ::1
+            || ipv6.is_unspecified()    // ::
+            || is_ipv6_unique_local(&ipv6)  // fc00::/7
+            || is_ipv6_link_local(&ipv6); // fe80::/10
+    }
+
+    false
+}
+
+/// 100.64.0.0/10 — Carrier-grade NAT (RFC 6598), also used by Tailscale.
+fn is_ipv4_shared(ip: std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 100 && (octets[1] & 0xC0) == 64
+}
+
+/// Documentation ranges: 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24.
+fn is_ipv4_documentation(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    (o[0] == 192 && o[1] == 0 && o[2] == 2)
+        || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+        || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+}
+
+/// fc00::/7 — unique local addresses (IPv6 equivalent of RFC 1918).
+fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xFE00) == 0xFC00
+}
+
+/// fe80::/10 — link-local addresses.
+fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xFFC0) == 0xFE80
 }

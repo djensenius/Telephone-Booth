@@ -63,6 +63,7 @@ async fn lan_rejects_external_bind_without_token() {
         lan_enabled: true,
         lan_bind: "0.0.0.0:0".to_string(),
         token: None,
+        allow_tokenless: true,
         ..DebugConfig::default()
     };
 
@@ -127,6 +128,7 @@ async fn lan_allows_loopback_bind_without_token() -> Result<(), Box<dyn Error>> 
         lan_enabled: true,
         lan_bind: "127.0.0.1:0".to_string(),
         token: None,
+        allow_tokenless: true,
         ..DebugConfig::default()
     };
 

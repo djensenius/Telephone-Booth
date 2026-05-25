@@ -7,7 +7,8 @@
 #![cfg(feature = "operator")]
 #![allow(
     clippy::expect_used,
-    reason = "wiremock uses an expect builder method for request counts"
+    clippy::unwrap_used,
+    reason = "wiremock uses an expect builder method for request counts; tests use unwrap for assertions"
 )]
 
 use std::error::Error;
@@ -286,13 +287,12 @@ async fn maps_401_to_unauthorized() -> TestResult {
 }
 
 #[tokio::test]
-async fn upload_recording_retries_5xx_then_gives_up() -> TestResult {
+async fn upload_recording_rejects_http_localhost_url() -> TestResult {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/blob"))
-        .and(header("content-type", "audio/flac"))
-        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
-        .expect(4)
+        .respond_with(ResponseTemplate::new(503))
+        .expect(0) // validation rejects before any request is made
         .mount(&server)
         .await;
 
@@ -311,8 +311,138 @@ async fn upload_recording_retries_5xx_then_gives_up() -> TestResult {
     let result = client.upload_recording(&slot, &recording).await;
     let _ = std::fs::remove_file(&recording);
 
+    // URL is http:// on localhost — rejected by validation before any network I/O
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn put_recording_retries_5xx_then_gives_up() -> TestResult {
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/blob"))
+        .and(header("content-type", "audio/flac"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
+        .expect(4) // initial attempt + 3 retries
+        .mount(&server)
+        .await;
+
+    let client = PiOperatorClient::new(config(server.uri()))?;
+    let dir = std::env::current_dir()?.join("target/operator-smoke");
+    std::fs::create_dir_all(&dir)?;
+    let recording = dir.join(format!("upload-retry-{}.flac", std::process::id()));
+    std::fs::write(&recording, b"flac-data")?;
+
+    let slot = booth_hal::UploadSlot {
+        id: "33333333-3333-3333-3333-333333333333".to_string(),
+        upload_url: format!("{}/blob", server.uri()),
+        expires_at: "2026-01-01T00:10:00Z".to_string(),
+        content_type: "audio/flac".to_string(),
+    };
+    // Call put_recording directly to bypass URL validation (mock is HTTP on localhost)
+    let result = client.put_recording(&slot, &recording).await;
+    let _ = std::fs::remove_file(&recording);
+
     assert!(matches!(result, Err(UploadError::Http { status: 503, .. })));
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Upload URL validation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_upload_url_accepts_valid_https() {
+    let hosts = vec!["myaccount.blob.core.windows.net".to_string()];
+    let result = booth_pi::validate_upload_url(
+        "https://myaccount.blob.core.windows.net/container/blob?sv=2021-08-06&sig=abc",
+        &hosts,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn validate_upload_url_rejects_http() {
+    let hosts: Vec<String> = vec![];
+    let result = booth_pi::validate_upload_url("http://storage.example.com/blob", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("HTTPS"), "error should mention HTTPS: {msg}");
+}
+
+#[test]
+fn validate_upload_url_rejects_non_https_scheme() {
+    let hosts: Vec<String> = vec![];
+    // file:// URLs have no host and a different scheme
+    let result = booth_pi::validate_upload_url("file:///etc/passwd", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+}
+
+#[test]
+fn validate_upload_url_rejects_private_ipv4() {
+    let hosts: Vec<String> = vec![];
+    for addr in &[
+        "https://10.0.0.1/upload",
+        "https://192.168.1.1/upload",
+        "https://172.16.0.1/upload",
+        "https://127.0.0.1/upload",
+        "https://169.254.1.1/upload",
+        "https://100.100.1.1/upload",
+    ] {
+        let result = booth_pi::validate_upload_url(addr, &hosts);
+        assert!(
+            matches!(result, Err(UploadError::InvalidUrl(_))),
+            "expected rejection for {addr}"
+        );
+    }
+}
+
+#[test]
+fn validate_upload_url_rejects_private_ipv6() {
+    let hosts: Vec<String> = vec![];
+    for addr in &[
+        "https://[::1]/upload",
+        "https://[fc00::1]/upload",
+        "https://[fe80::1]/upload",
+    ] {
+        let result = booth_pi::validate_upload_url(addr, &hosts);
+        assert!(
+            matches!(result, Err(UploadError::InvalidUrl(_))),
+            "expected rejection for {addr}"
+        );
+    }
+}
+
+#[test]
+fn validate_upload_url_rejects_localhost() {
+    let hosts: Vec<String> = vec![];
+    let result = booth_pi::validate_upload_url("https://localhost/upload", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+}
+
+#[test]
+fn validate_upload_url_rejects_unlisted_host() {
+    let hosts = vec!["allowed.blob.core.windows.net".to_string()];
+    let result = booth_pi::validate_upload_url("https://evil.attacker.com/exfil", &hosts);
+    assert!(matches!(result, Err(UploadError::InvalidUrl(_))));
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("not in the allowed hosts"), "error: {msg}");
+}
+
+#[test]
+fn validate_upload_url_allows_any_public_host_when_list_empty() {
+    let hosts: Vec<String> = vec![];
+    let result =
+        booth_pi::validate_upload_url("https://any-storage.example.com/blob?sig=abc", &hosts);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn validate_upload_url_host_check_is_case_insensitive() {
+    let hosts = vec!["MyAccount.blob.core.windows.net".to_string()];
+    let result =
+        booth_pi::validate_upload_url("https://myaccount.blob.core.windows.net/c/b?sv=x", &hosts);
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -327,9 +457,10 @@ async fn upload_rejects_file_exceeding_max_upload_bytes() -> TestResult {
     let recording = dir.join(format!("upload-cap-{}.flac", std::process::id()));
     std::fs::write(&recording, b"this is more than ten bytes of data")?;
 
+    // Use a valid HTTPS URL so URL validation passes; size check runs before network I/O.
     let slot = booth_hal::UploadSlot {
         id: "44444444-4444-4444-4444-444444444444".to_string(),
-        upload_url: format!("{}/blob", server.uri()),
+        upload_url: "https://storage.example.com/blob".to_string(),
         expires_at: "2026-01-01T00:10:00Z".to_string(),
         content_type: "audio/flac".to_string(),
     };

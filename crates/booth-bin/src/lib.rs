@@ -1034,7 +1034,10 @@ fn operator_audio_ref(
             return AudioRef::LocalFile(local_path.to_string_lossy().into_owned());
         }
     }
-    AudioRef::RemoteUrl(audio_url, audio_sha256.map(String::from))
+    AudioRef::RemoteUrl(
+        audio_url,
+        audio_sha256.filter(|s| is_sha256_hex(s)).map(String::from),
+    )
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -1656,10 +1659,7 @@ mod tests {
 
         let audio = operator_audio_ref(remote.clone(), Some("../not-a-sha"), &recordings_dir);
 
-        assert_eq!(
-            audio,
-            AudioRef::RemoteUrl(remote, Some("../not-a-sha".to_string()))
-        );
+        assert_eq!(audio, AudioRef::RemoteUrl(remote, None));
     }
 
     #[test]

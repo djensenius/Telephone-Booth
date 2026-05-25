@@ -97,6 +97,11 @@ pub struct DebugConfig {
     /// Permit loopback clients to skip bearer auth. Defaults to false.
     #[serde(default)]
     pub loopback_skip_auth: bool,
+    /// Allow the debug surface to start without a bearer token. Defaults to
+    /// `false` (fail closed). Set to `true` only for local development or
+    /// testing where network exposure is not a concern.
+    #[serde(default)]
+    pub allow_tokenless: bool,
     /// Operator UI origin allowed by CORS, for example `https://operator.example.com`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_origin: Option<String>,
@@ -132,6 +137,7 @@ impl Default for DebugConfig {
             ring_buffer_capacity: default_ring(),
             token: None,
             loopback_skip_auth: false,
+            allow_tokenless: false,
             operator_origin: None,
             effective_config: ConfigRedacted::default(),
         }
@@ -256,6 +262,9 @@ pub enum DebugError {
     /// LAN listener configured with a non-loopback bind but missing or weak token.
     #[error("insecure lan bind: {0}")]
     InsecureLanBind(String),
+    /// Debug listener enabled without a bearer token and `allow_tokenless` is not set.
+    #[error("no debug token configured: {0}")]
+    MissingToken(String),
 }
 
 /// Commands that the debug surface can send to the phone runtime.
@@ -414,6 +423,17 @@ pub async fn serve_with_handles(
     metrics_render: Option<MetricsRender>,
 ) -> Result<ServeHandles, DebugError> {
     global_logs().set_capacity(config.ring_buffer_capacity);
+
+    // Fail closed: refuse to start if no bearer token is configured and the
+    // caller has not explicitly opted into tokenless operation.
+    if config.token.is_none() && !config.allow_tokenless {
+        return Err(DebugError::MissingToken(
+            "debug listener requires a bearer token; set BOOTH_DEBUG_TOKEN or \
+             [debug].token, or pass allow_tokenless = true for local development"
+                .to_string(),
+        ));
+    }
+
     let tls = generate_tls_config()?;
     let fingerprint = tls.fingerprint.clone();
     let state = AppState {
@@ -856,7 +876,8 @@ fn is_authorized(
         return true;
     }
     let Some(token) = &config.token else {
-        return true;
+        // No token configured — only permit if explicitly opted in.
+        return config.allow_tokenless;
     };
     bearer_tokens(headers).any(|candidate| constant_time_eq(candidate, &token.0))
 }
@@ -1298,5 +1319,160 @@ mod tests {
     #[test]
     fn converts_silence_to_floor_dbfs() {
         assert!((amplitude_to_dbfs(0.0) - -120.0).abs() < f32::EPSILON);
+    }
+
+    #[allow(clippy::unwrap_used)]
+    mod auth {
+        use super::super::{DebugConfig, DebugToken, is_authorized};
+        use axum::http::HeaderMap;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        #[test]
+        fn denies_when_no_token_and_tokenless_not_allowed() {
+            let config = DebugConfig {
+                token: None,
+                allow_tokenless: false,
+                ..Default::default()
+            };
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
+            assert!(!is_authorized(&config, &HeaderMap::new(), remote));
+        }
+
+        #[test]
+        fn allows_when_no_token_and_tokenless_allowed() {
+            let config = DebugConfig {
+                token: None,
+                allow_tokenless: true,
+                ..Default::default()
+            };
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
+            assert!(is_authorized(&config, &HeaderMap::new(), remote));
+        }
+
+        #[test]
+        fn denies_wrong_bearer_token() {
+            let config = DebugConfig {
+                token: Some(DebugToken("correct-token-value".to_string())),
+                allow_tokenless: false,
+                ..Default::default()
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", "Bearer wrong-token".parse().unwrap());
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
+            assert!(!is_authorized(&config, &headers, remote));
+        }
+
+        #[test]
+        fn allows_correct_bearer_token() {
+            let config = DebugConfig {
+                token: Some(DebugToken("correct-token-value".to_string())),
+                allow_tokenless: false,
+                ..Default::default()
+            };
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "authorization",
+                "Bearer correct-token-value".parse().unwrap(),
+            );
+            let remote = Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)),
+                1234,
+            ));
+            assert!(is_authorized(&config, &headers, remote));
+        }
+
+        #[test]
+        fn loopback_skip_auth_still_works() {
+            let config = DebugConfig {
+                token: Some(DebugToken("secret".to_string())),
+                loopback_skip_auth: true,
+                allow_tokenless: false,
+                ..Default::default()
+            };
+            let loopback = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234));
+            assert!(is_authorized(&config, &HeaderMap::new(), loopback));
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    mod startup_validation {
+        use super::super::{DebugConfig, DebugError, DebugToken, serve_with_handles};
+        use booth_telemetry::TelemetryBus;
+        use tokio::sync::mpsc;
+
+        #[tokio::test]
+        async fn rejects_startup_without_token() {
+            let config = DebugConfig {
+                token: None,
+                allow_tokenless: false,
+                ..Default::default()
+            };
+            let bus = TelemetryBus::new(16);
+            let (tx, _rx) = mpsc::channel(1);
+            let result = serve_with_handles(config, bus, tx, None).await;
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert!(
+                matches!(err, DebugError::MissingToken(_)),
+                "expected MissingToken, got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn allows_startup_with_allow_tokenless() {
+            let config = DebugConfig {
+                token: None,
+                allow_tokenless: true,
+                tailscale_enabled: true,
+                ..Default::default()
+            };
+            let bus = TelemetryBus::new(16);
+            let (tx, _rx) = mpsc::channel(1);
+            let result = serve_with_handles(config, bus, tx, None).await;
+            // Should succeed (or fail for a reason other than MissingToken,
+            // e.g. port already in use)
+            match result {
+                Ok(handles) => {
+                    let _ = handles.shutdown_tx.send(());
+                    let _ = handles.handle.await;
+                }
+                Err(DebugError::MissingToken(_)) => {
+                    panic!("should not get MissingToken when allow_tokenless is true");
+                }
+                Err(_) => {} // Other errors (bind, tls) are acceptable in test
+            }
+        }
+
+        #[tokio::test]
+        async fn allows_startup_with_token() {
+            let config = DebugConfig {
+                token: Some(DebugToken("my-secret-debug-token".to_string())),
+                allow_tokenless: false,
+                tailscale_enabled: true,
+                ..Default::default()
+            };
+            let bus = TelemetryBus::new(16);
+            let (tx, _rx) = mpsc::channel(1);
+            let result = serve_with_handles(config, bus, tx, None).await;
+            match result {
+                Ok(handles) => {
+                    let _ = handles.shutdown_tx.send(());
+                    let _ = handles.handle.await;
+                }
+                Err(DebugError::MissingToken(_)) => {
+                    panic!("should not get MissingToken when token is provided");
+                }
+                Err(_) => {} // Other errors are acceptable in test
+            }
+        }
     }
 }

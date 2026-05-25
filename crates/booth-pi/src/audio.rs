@@ -149,18 +149,27 @@ impl PiAudioSink {
 }
 
 /// Build a dedicated HTTP client for audio fetches with hardened settings.
+///
+/// # Panics
+///
+/// Panics if the TLS backend cannot be initialized. This uses rustls (compiled
+/// in via `reqwest/rustls-tls`), so initialization failure indicates a broken
+/// build rather than a recoverable runtime condition.
 #[cfg(feature = "audio")]
 fn build_audio_http_client(operator_config: &OperatorConfig) -> reqwest::Client {
     use std::time::Duration;
 
     let timeout = Duration::from_secs(operator_config.http_timeout_secs);
 
+    // Redirect policy is security-critical: SSRF bypass via redirect.
+    // This builder cannot silently fall back to a permissive client.
+    #[allow(clippy::expect_used)] // Infallible with rustls; panic is correct for broken build.
     reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("HTTP client build failed — TLS backend (rustls) could not initialize")
 }
 
 #[async_trait]
@@ -185,11 +194,32 @@ impl AudioSink for PiAudioSink {
                     let safe_url = redact_url(&url);
 
                     // Validate URL against fetch policy (scheme, host allowlist, private IPs)
-                    self.fetch_policy.validate(&url).map_err(|err| {
+                    let parsed_url = self.fetch_policy.validate(&url).map_err(|err| {
                         AudioError::Source(
                             format!("audio URL policy rejected {safe_url}: {err}").into(),
                         )
                     })?;
+
+                    // DNS-based SSRF check: resolve the hostname and verify all
+                    // addresses are public before connecting.
+                    if let Some(host) = parsed_url.host_str() {
+                        let port = parsed_url.port_or_known_default().unwrap_or(443);
+                        let lookup_target = format!("{host}:{port}");
+                        if let Ok(addrs) = tokio::net::lookup_host(&lookup_target).await {
+                            for addr in addrs {
+                                self.fetch_policy
+                                    .check_resolved_ip(addr.ip())
+                                    .map_err(|err| {
+                                        AudioError::Source(
+                                            format!(
+                                                "audio URL DNS check rejected {safe_url}: {err}"
+                                            )
+                                            .into(),
+                                        )
+                                    })?;
+                            }
+                        }
+                    }
 
                     let response = self.http_client.get(&url).send().await.map_err(|err| {
                         AudioError::Source(
