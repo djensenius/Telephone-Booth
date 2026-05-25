@@ -18,6 +18,8 @@ config:
   # provider guides).
   MD024:
     siblings_only: true
+  # Do not require padded/aligned table columns; compact tables are intentional.
+  MD060: false
   # First line need not be a top-level heading (front-matter friendly).
   MD041: false
 globs:

@@ -218,6 +218,8 @@ pub struct OperatorQuestion {
     pub id: QuestionId,
     /// Direct, time-limited URL for the question's audio (FLAC or MP3).
     pub audio_url: String,
+    /// SHA-256 digest of the question audio, when the operator supplied it.
+    pub audio_sha256: Option<String>,
     /// Human-readable description (for debug logging).
     pub description: Option<String>,
 }
@@ -229,6 +231,8 @@ pub struct OperatorMessage {
     pub id: String,
     /// Direct, time-limited URL for the message audio.
     pub audio_url: String,
+    /// SHA-256 digest of the message audio, when the operator supplied it.
+    pub audio_sha256: Option<String>,
     /// Question this message answers (if any).
     pub question_id: Option<QuestionId>,
 }

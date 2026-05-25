@@ -550,6 +550,7 @@ fn upload_backoff(attempt: usize) -> Duration {
 #[serde(rename_all = "camelCase")]
 struct ApiAudioRef {
     url: String,
+    sha256: Option<String>,
 }
 
 #[cfg(feature = "operator")]
@@ -567,6 +568,7 @@ impl From<ApiQuestion> for OperatorQuestion {
         Self {
             id: value.id,
             audio_url: value.audio.url,
+            audio_sha256: value.audio.sha256,
             description: Some(value.prompt),
         }
     }
@@ -587,6 +589,7 @@ impl From<ApiMessage> for OperatorMessage {
         Self {
             id: value.id,
             audio_url: value.audio.url,
+            audio_sha256: value.audio.sha256,
             question_id: value.question_id,
         }
     }

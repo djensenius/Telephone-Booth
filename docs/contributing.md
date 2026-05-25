@@ -35,6 +35,13 @@ just docs-check     # markdownlint + lychee
 CI runs the same commands plus `cargo doc -D warnings`, a cross-compile
 matrix, and `cargo-deny` / `cargo-audit`.
 
+## Before merging
+
+- Wait for the Copilot PR review to complete.
+- Address every actionable Copilot or human review comment before merging. If a
+  comment is a false positive, reply with the reason and resolve the thread.
+- Wait for all required CI jobs to pass.
+
 ## Style
 
 - `unsafe_code` is **denied** workspace-wide.

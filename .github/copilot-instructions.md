@@ -146,9 +146,9 @@ Every PR should:
 3. Note any new or modified feature flags.
 4. Confirm that `just check` passed locally (mention which platform — macOS
    vs Linux — since some lints only fire on one).
-5. Address every actionable comment from the Copilot reviewer (or any human
-   reviewer) before merging. If a comment is a false positive, reply with
-   the reason and resolve the thread.
+5. Wait for the Copilot PR review to complete before merging. Address every
+   actionable comment from the Copilot reviewer (or any human reviewer). If a
+   comment is a false positive, reply with the reason and resolve the thread.
 6. Wait for all CI jobs to pass:
    - `rustfmt`, `clippy`
    - `test (ubuntu-latest)`, `test (macos-latest)`

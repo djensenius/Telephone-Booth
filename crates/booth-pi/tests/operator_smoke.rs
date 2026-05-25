@@ -137,7 +137,37 @@ async fn get_random_question_deserializes_200() -> TestResult {
     let question = client.get_random_question().await?;
     assert_eq!(question.id, "11111111-1111-1111-1111-111111111111");
     assert_eq!(question.audio_url, "https://blob.example/question.flac");
+    assert_eq!(
+        question.audio_sha256.as_deref(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
     assert_eq!(question.description.as_deref(), Some("What did you hear?"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_random_message_deserializes_audio_sha() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("GET"))
+        .and(path("/v1/messages/random"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(header("accept", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(message_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let message = client.get_random_message().await?;
+    assert_eq!(message.id, "22222222-2222-2222-2222-222222222222");
+    assert_eq!(message.audio_url, "https://blob.example/message.flac");
+    assert_eq!(
+        message.audio_sha256.as_deref(),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+    assert_eq!(
+        message.question_id.as_deref(),
+        Some("11111111-1111-1111-1111-111111111111")
+    );
     Ok(())
 }
 
