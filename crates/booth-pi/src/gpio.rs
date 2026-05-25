@@ -22,7 +22,7 @@ mod imp {
         _gpio: Gpio,
         config: GpioConfig,
         pins: PiPins,
-        rx: mpsc::UnboundedReceiver<GpioEdge>,
+        rx: mpsc::Receiver<GpioEdge>,
         debounce_tasks: Vec<JoinHandle<()>>,
         started_at: Instant,
     }
@@ -49,24 +49,16 @@ mod imp {
                 rotary_read: open_input(&gpio, &config, PinRole::RotaryRead)?,
             };
 
-            let (tx, rx) = mpsc::unbounded_channel();
+            let (tx, rx) = mpsc::channel(usize::from(config.channel_capacity).max(1));
             let started_at = Instant::now();
             let debounce_tasks = vec![
-                configure_interrupt(
-                    &mut pins.hook,
-                    PinRole::Hook,
-                    &config,
-                    &handle,
-                    tx.clone(),
-                    started_at,
-                )?,
+                configure_interrupt(&mut pins.hook, PinRole::Hook, &config, &handle, tx.clone())?,
                 configure_interrupt(
                     &mut pins.rotary_pulse,
                     PinRole::RotaryPulse,
                     &config,
                     &handle,
                     tx.clone(),
-                    started_at,
                 )?,
                 configure_interrupt(
                     &mut pins.rotary_read,
@@ -74,7 +66,6 @@ mod imp {
                     &config,
                     &handle,
                     tx,
-                    started_at,
                 )?,
             ];
 
@@ -152,14 +143,19 @@ mod imp {
         role: PinRole,
         config: &GpioConfig,
         handle: &Handle,
-        tx: mpsc::UnboundedSender<GpioEdge>,
-        started_at: Instant,
+        tx: mpsc::Sender<GpioEdge>,
     ) -> Result<JoinHandle<()>, GpioError> {
-        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let raw_capacity = usize::from(config.channel_capacity / 2).max(1);
+        let (raw_tx, raw_rx) = mpsc::channel(raw_capacity);
         let debounce = Duration::from_millis(config.debounce_ms);
-        let task = handle.spawn(debounce_edges(role, raw_rx, tx, debounce, started_at));
+        let task = handle.spawn(debounce_edges(role, raw_rx, tx, debounce, Instant::now()));
         let invert = config.inverted(role);
         let bcm = config.bcm_for(role);
+        let role_label: &'static str = match role {
+            PinRole::Hook => "Hook",
+            PinRole::RotaryPulse => "RotaryPulse",
+            PinRole::RotaryRead => "RotaryRead",
+        };
 
         pin.set_async_interrupt(Trigger::Both, None, move |event| {
             if let Some(level) = event_level(event, invert) {
@@ -172,8 +168,19 @@ mod imp {
                     "gpio interrupt"
                 );
 
-                if raw_tx.send(level).is_err() {
-                    warn!(?role, bcm, "gpio debounce task already stopped");
+                match raw_tx.try_send(level) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        metrics::counter!(
+                            "booth_gpio_interrupts_dropped_total",
+                            "role" => role_label,
+                        )
+                        .increment(1);
+                        warn!(?role, bcm, "gpio raw channel full; dropping interrupt");
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        warn!(?role, bcm, "gpio debounce task already stopped");
+                    }
                 }
             } else {
                 warn!(
@@ -195,8 +202,8 @@ mod imp {
 
     async fn debounce_edges(
         role: PinRole,
-        mut raw_rx: mpsc::UnboundedReceiver<bool>,
-        tx: mpsc::UnboundedSender<GpioEdge>,
+        mut raw_rx: mpsc::Receiver<bool>,
+        tx: mpsc::Sender<GpioEdge>,
         debounce: Duration,
         started_at: Instant,
     ) {
@@ -223,7 +230,7 @@ mod imp {
                                 at_monotonic_ns: monotonic_ns(started_at.elapsed()),
                             };
 
-                            if tx.send(edge).is_err() {
+                            if tx.send(edge).await.is_err() {
                                 error!(?role, "gpio edge receiver dropped");
                                 return;
                             }

@@ -76,6 +76,10 @@ pub struct GpioConfig {
     /// Debounce window applied to all pins.
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
+    /// Capacity of the bounded GPIO event channels. The raw interrupt channel
+    /// uses half this value; the debounced output channel uses the full value.
+    #[serde(default = "default_channel_capacity")]
+    pub channel_capacity: u16,
     /// Optional per-role inversion applied after reading the physical level.
     #[serde(default)]
     pub invert: GpioInvertConfig,
@@ -123,6 +127,9 @@ fn default_hook() -> u8 {
 fn default_debounce_ms() -> u64 {
     5
 }
+fn default_channel_capacity() -> u16 {
+    64
+}
 
 impl Default for GpioConfig {
     fn default() -> Self {
@@ -132,6 +139,7 @@ impl Default for GpioConfig {
             hook: default_hook(),
             pull: GpioPull::default(),
             debounce_ms: default_debounce_ms(),
+            channel_capacity: default_channel_capacity(),
             invert: GpioInvertConfig::default(),
         }
     }
