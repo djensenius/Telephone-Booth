@@ -131,15 +131,24 @@ impl AudioSink for PiAudioSink {
                     repeat: tone == BuiltinTone::DialTone,
                 },
                 AudioRef::RemoteUrl(url) => {
+                    let safe_url = redact_url(&url);
                     let response = reqwest::get(&url).await.map_err(|err| {
-                        AudioError::Source(format!("fetch {}: {err}", redact_url(&url)).into())
+                        AudioError::Source(
+                            format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
+                        )
                     })?;
                     let response = response.error_for_status().map_err(|err| {
-                        AudioError::Source(format!("fetch {}: {err}", redact_url(&url)).into())
+                        AudioError::Source(
+                            format!("fetch {safe_url}: {}", redact_url(&err.to_string())).into(),
+                        )
                     })?;
                     let bytes = response.bytes().await.map_err(|err| {
                         AudioError::Source(
-                            format!("read response body from {}: {err}", redact_url(&url)).into(),
+                            format!(
+                                "read response body from {safe_url}: {}",
+                                redact_url(&err.to_string())
+                            )
+                            .into(),
                         )
                     })?;
                     PlayableAudio {
@@ -339,6 +348,10 @@ impl AudioSource for PiAudioSource {
                 )
             })
         }
+    }
+
+    async fn duration_of(&self, id: &RecordingId) -> Option<u64> {
+        self.finished.lock().await.get(id).map(|h| h.duration_ms)
     }
 
     async fn cleanup_recording(&self, id: &RecordingId) -> Result<(), AudioError> {

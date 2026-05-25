@@ -222,18 +222,33 @@ impl PiOperatorClient {
     }
 
     /// Notify the operator that an upload finished successfully.
-    pub async fn upload_complete(&self, upload_id: &str) -> Result<(), OperatorError> {
+    pub async fn upload_complete(
+        &self,
+        upload_id: &str,
+        sha256_hex: &str,
+        duration_ms: u64,
+    ) -> Result<(), OperatorError> {
         #[cfg(feature = "operator")]
         {
+            #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct CompleteBody<'a> {
+                sha256: &'a str,
+                duration_ms: u64,
+            }
+            let body = CompleteBody {
+                sha256: sha256_hex,
+                duration_ms,
+            };
             let path = format!("/v1/uploads/{upload_id}/complete");
-            self.send_empty(reqwest::Method::POST, &path, None::<&()>)
+            self.send_empty(reqwest::Method::POST, &path, Some(&body))
                 .await?;
             return Ok(());
         }
 
         #[cfg(not(feature = "operator"))]
         {
-            let _ = upload_id;
+            let _ = (upload_id, sha256_hex, duration_ms);
             unsupported()
         }
     }
@@ -387,12 +402,13 @@ impl OperatorClient for PiOperatorClient {
     async fn init_upload(
         &self,
         question_id: Option<&QuestionId>,
+        metadata: &booth_hal::UploadMetadata,
     ) -> Result<UploadSlot, OperatorError> {
         self.request_upload_slot(
             question_id,
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            1,
-            None,
+            &metadata.sha256_hex,
+            metadata.size_bytes,
+            metadata.duration_ms,
         )
         .await
     }
@@ -406,10 +422,10 @@ impl OperatorClient for PiOperatorClient {
     async fn complete_upload(
         &self,
         slot_id: &str,
-        _sha256_hex: &str,
-        _duration_ms: u64,
+        sha256_hex: &str,
+        duration_ms: u64,
     ) -> Result<(), OperatorError> {
-        self.upload_complete(slot_id).await
+        self.upload_complete(slot_id, sha256_hex, duration_ms).await
     }
 
     async fn put_status(&self, status: BoothStatus) -> Result<(), OperatorError> {
