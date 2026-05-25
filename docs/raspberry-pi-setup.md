@@ -150,11 +150,10 @@ from the workflow run page and `scp` it to the Pi.
 
 ## Install
 
-On the Pi:
+On the Pi (from your dev machine, as a one-liner):
 
 ```sh
-ssh pi@booth.local
-sudo apt install -y ./telephone-booth_*_arm64.deb
+ssh pi@booth.local "sudo apt install -y ./telephone-booth_*_arm64.deb"
 ```
 
 The `postinst` script creates the `phonebooth` system user, sets up
