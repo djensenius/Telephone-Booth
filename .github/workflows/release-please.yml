@@ -1,9 +1,15 @@
 name: release-please
 # Maintains an open Release PR that proposes the next semver bump + CHANGELOG
 # entry from accumulated Conventional Commits on `main`. Merging the Release
-# PR creates the tag and the GitHub Release, which in turn fires
-# `publish.yml` (push: tags) to build the .deb + tarball artifacts, then
-# `publish-apt.yml` to refresh the gh-pages APT repository.
+# PR creates the tag and the GitHub Release.
+#
+# IMPORTANT: tags / releases created by `GITHUB_TOKEN` do NOT trigger
+# downstream `push: tags` or `release: published` workflows (this is a
+# GitHub Actions safety rule to prevent recursive workflow loops). The
+# only exceptions are `workflow_dispatch` and `repository_dispatch`. So
+# after release-please creates the release, this workflow explicitly
+# dispatches `publish.yml` via `gh workflow run`, which kicks off the
+# .deb builds and (transitively) `publish-apt.yml`.
 on:
   push:
     branches: [main]
@@ -12,6 +18,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 concurrency:
   group: release-please
@@ -22,7 +29,21 @@ jobs:
     name: release-please
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+      - name: Dispatch publish workflow for the new release
+        if: ${{ steps.rp.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          set -eu
+          echo "release-please created $TAG; dispatching publish.yml"
+          gh workflow run publish.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$TAG" \
+            -f "tag=$TAG" \
+            -f "draft=false"

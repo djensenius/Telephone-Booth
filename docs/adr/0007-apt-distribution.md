@@ -70,10 +70,13 @@ Release) is the only manual step. All future upgrades flow through
 that package is installed.
 
 The keyring file lives in `packaging/debian/telephone-booth-archive-keyring.gpg`
-in this repo. It is a real ed25519 public key but treat it as a
-placeholder: the publish workflow (`publish.yml`) overwrites it from the
-`APT_SIGNING_KEY` secret before `cargo deb` packages it, so production
-`.deb`s ship the pubkey matching the secret.
+in this repo and is shipped verbatim inside every `.deb` (cargo-deb
+treats it as a regular asset). The committed file in this PR is a
+real ed25519 public key but is a **placeholder**; before the first
+real release the maintainer must regenerate it from the production
+private key (procedure in "Operating procedures" below) and commit the
+replacement. The publish workflow does not synthesise or replace the
+keyring — what's checked in is what Pis get.
 
 ### CI flow
 
@@ -147,18 +150,26 @@ and protected by required reviewers.
    gpg --quick-generate-key \
      "Telephone-Booth APT signing key <david@example.invalid>" \
      ed25519 sign 0
+   # Export the public key into the repo (replaces the placeholder).
+   gpg --export "<fingerprint>" \
+     > packaging/debian/telephone-booth-archive-keyring.gpg
+   # Export the secret key for the GitHub Environment.
    gpg --armor --export-secret-keys "<fingerprint>"
    ```
 
-2. Settings → Secrets and variables → Actions → New environment `production-apt`:
+2. Commit the regenerated
+   `packaging/debian/telephone-booth-archive-keyring.gpg`. Every `.deb`
+   from then on embeds this real public key.
+
+3. Settings → Secrets and variables → Actions → New environment `production-apt`:
    - Add `APT_SIGNING_KEY` (the ASCII-armored secret key from step 1).
    - Optionally add `APT_SIGNING_KEY_PASSPHRASE` if the key has one.
    - Restrict the environment to the `main` branch.
 
-3. Settings → Pages → Source = "Deploy from a branch", branch =
+4. Settings → Pages → Source = "Deploy from a branch", branch =
    `gh-pages`, folder = `/ (root)`.
 
-4. Trigger `publish` for `v0.1.0` (workflow_dispatch). On success,
+5. Trigger `publish` for `v0.1.0` (workflow_dispatch). On success,
    `publish-apt` runs and creates the initial `gh-pages` content.
 
 ### Day-2 install on a Pi

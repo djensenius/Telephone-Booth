@@ -54,7 +54,9 @@ configured for a single-component Rust workspace.
 3. Maintainer reviews and merges the Release PR.
 4. release-please-action observes the merge, creates tag `vX.Y.Z`, and
    creates the GitHub Release with auto-generated notes.
-5. The tag push triggers `publish.yml` (per ADR 0007), which builds the
+5. release-please-action then `workflow_dispatch`-es `publish.yml` via
+   `gh workflow run` with the new tag as input (see Token scope below for
+   why we can't just rely on `push: tags`). `publish.yml` builds the
    `.deb`s + macOS tarball and attaches them to the Release that
    release-please just created. `softprops/action-gh-release` updates
    the existing Release rather than failing on the duplicate tag.
@@ -66,12 +68,32 @@ configured for a single-component Rust workspace.
 
 ### Token scope
 
-`GITHUB_TOKEN` is sufficient. release-please-action pushes the release
-tag using `GITHUB_TOKEN`, and that push **does** trigger workflows that
-watch `push: tags`. (This is a common point of confusion: tags pushed by
-`GITHUB_TOKEN` trigger `push: tags` workflows; pushes to `branches` do
-not retrigger workflows that watch the same branch. The release flow is
-in the "tag" category, so we're fine.)
+A vanilla `GITHUB_TOKEN` is sufficient, but the trigger chain has to be
+arranged carefully. GitHub Actions' anti-recursion rule says that events
+triggered by `GITHUB_TOKEN` do **not** spawn new workflow runs, with two
+exceptions: `workflow_dispatch` and `repository_dispatch`. That means a
+naive `push: tags: ['v*']` trigger on `publish.yml` would **not** fire
+when release-please pushes the tag, because release-please uses
+`GITHUB_TOKEN`.
+
+To work around this without introducing a PAT or a GitHub App, the
+`release-please.yml` workflow itself dispatches `publish.yml` via
+`gh workflow run publish.yml -f tag=vX.Y.Z -f draft=false` after
+release-please-action reports `release_created == true`. `publish.yml`
+still keeps its `push: tags: ['v*']` trigger so that human-pushed tags
+(rare, but useful for hotfixes) also build. `workflow_dispatch` is
+allowed under the anti-recursion rule, so the chain works end-to-end
+with only `GITHUB_TOKEN` and no special tokens to rotate.
+
+The downstream `publish-apt.yml` is `workflow_run`-triggered, which is
+also unaffected by the recursion rule (it observes another workflow's
+completion rather than a repository event), so no special handling is
+needed there.
+
+If we ever want a Release PR merge to also re-run other branch-watching
+workflows (e.g. `ci.yml`), we will need to switch to a GitHub App token
+or PAT; see <https://github.com/peter-evans/create-pull-request/blob/main/docs/concepts-guidelines.md#triggering-further-workflow-runs>
+for the standard recipe.
 
 ## Alternatives considered
 

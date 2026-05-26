@@ -67,8 +67,6 @@ jobs:
         continue-on-error: true
 
       - name: Bootstrap gh-pages if missing
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -eu
           if [ ! -d pages/.git ]; then

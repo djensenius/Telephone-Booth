@@ -69,22 +69,23 @@ jobs:
           tool: cross,cargo-deb
       - name: Cross-build release
         run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
-      - name: Override keyring with production public key
-        env:
-          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+      - name: Verify keyring file is present
         run: |
-          if [ -z "${APT_SIGNING_KEY:-}" ]; then
-            echo "::warning::APT_SIGNING_KEY is not set; .deb will ship the in-repo placeholder pubkey. Signed Release files will NOT verify on Pis."
-            exit 0
+          set -eu
+          path=packaging/debian/telephone-booth-archive-keyring.gpg
+          if [ ! -s "$path" ]; then
+            echo "::error::$path is missing or empty; .deb cannot bootstrap APT trust."
+            exit 1
           fi
-          tmpdir="$(mktemp -d)"
-          export GNUPGHOME="$tmpdir"
-          chmod 700 "$tmpdir"
-          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
-          fpr="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
-          gpg --batch --export "$fpr" > packaging/debian/telephone-booth-archive-keyring.gpg
-          echo "Replaced keyring with pubkey for $fpr"
-          rm -rf "$tmpdir"
+          # Best-effort fingerprint dump for the build log so a wrong key is
+          # easy to spot in CI output.
+          if command -v gpg >/dev/null 2>&1; then
+            tmpdir="$(mktemp -d)"
+            export GNUPGHOME="$tmpdir"
+            chmod 700 "$tmpdir"
+            gpg --batch --show-keys "$path" || true
+            rm -rf "$tmpdir"
+          fi
       - name: Build .deb
         run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

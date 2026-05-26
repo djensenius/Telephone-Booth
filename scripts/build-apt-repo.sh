@@ -103,6 +103,19 @@ shopt -u nullglob
 # repo-relative (e.g. `pool/main/t/telephone-booth/foo.deb`), not absolute.
 cd "$PAGES_DIR"
 
+# Track every per-iteration scratch dir in an array and clean them up with a
+# single EXIT trap. Using `trap … EXIT` inside the loop would overwrite any
+# outer trap on every iteration (bash only supports one handler per signal),
+# which is fragile if cleanup is added later.
+TMP_DIRS=()
+cleanup() {
+    local d
+    for d in "${TMP_DIRS[@]:-}"; do
+        [ -n "$d" ] && rm -rf "$d"
+    done
+}
+trap cleanup EXIT
+
 # Per-arch Packages indexes. We filter the pool by the .deb name suffix so a
 # stray arch doesn't leak into the wrong index.
 for arch in "${ARCHES[@]}"; do
@@ -111,7 +124,7 @@ for arch in "${ARCHES[@]}"; do
 
     # Build a temporary directory of symlinks to just the .debs for this arch.
     tmp_pool="$(mktemp -d)"
-    trap 'rm -rf "$tmp_pool"' EXIT
+    TMP_DIRS+=("$tmp_pool")
 
     # Match Debian's `_<arch>.deb` filename convention.
     pool="pool/main/t/telephone-booth"
@@ -129,9 +142,6 @@ for arch in "${ARCHES[@]}"; do
         | sed -E "s|^Filename: .*/|Filename: ${pool}/|" \
         > "$arch_dir/Packages"
     gzip -9kf "$arch_dir/Packages"
-
-    rm -rf "$tmp_pool"
-    trap - EXIT
 done
 
 # Release file. Arch list reflects what we actually built.

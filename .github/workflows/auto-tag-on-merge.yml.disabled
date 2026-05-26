@@ -5,6 +5,13 @@
 # batching commits into a Release PR, it bumps the patch version and tags on
 # every merge to main.
 #
+# IMPORTANT: GitHub Actions' anti-recursion rule means tags pushed with the
+# default `GITHUB_TOKEN` do NOT trigger `push: tags` workflows. As written,
+# this workflow therefore explicitly `gh workflow run`-dispatches publish.yml
+# after pushing the tag (workflow_dispatch is one of the two events that can
+# be fired by `GITHUB_TOKEN`). If you change the trigger model, preserve that
+# dispatch step or switch to a PAT / GitHub App token.
+#
 # To switch FROM release-please TO this model:
 #
 #   1. Delete (or .disable) .github/workflows/release-please.yml so the two
@@ -34,6 +41,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: auto-tag
@@ -110,3 +118,18 @@ jobs:
           git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
           git push origin HEAD:main
           git push origin "$NEW_TAG"
+
+      - name: Dispatch publish workflow for the new tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -eu
+          # `GITHUB_TOKEN` pushes don't trigger `push: tags` workflows, so
+          # dispatch publish.yml explicitly. workflow_dispatch is one of the
+          # two events allowed to be triggered by GITHUB_TOKEN.
+          gh workflow run publish.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$NEW_TAG" \
+            -f "tag=$NEW_TAG" \
+            -f "draft=false"
