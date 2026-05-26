@@ -104,22 +104,52 @@ Replace `1` with whatever card number `aplay -l` reported for your interface.
 Tailscale provides the encrypted tunnel the booth uses to reach the operator
 backend and expose the debug surface with a real TLS certificate.
 
+### Install and authenticate
+
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
+sudo tailscale up \
+  --hostname=telephone-booth \
+  --ssh \
+  --accept-routes
 ```
 
 Follow the printed URL to authorize the node in your Tailscale admin console.
-Once connected:
+
+**Flags explained:**
+
+- `--hostname=telephone-booth` — sets a stable MagicDNS name
+  (`telephone-booth.<tailnet>.ts.net`)
+- `--ssh` — enables Tailscale SSH (no need to manage SSH keys)
+- `--accept-routes` — allows using subnet routes advertised by other nodes
+
+### Verify
 
 ```sh
 tailscale status
 ```
 
-should show the Pi as online.
+should show the Pi as online. Test SSH from another tailnet device:
+
+```sh
+ssh telephone-booth
+```
+
+### Ensure it survives reboots
+
+The Tailscale installer enables the systemd service by default, but verify:
+
+```sh
+sudo systemctl enable tailscaled
+sudo systemctl status tailscaled
+```
+
+Should show `enabled` and `active (running)`. After a reboot, Tailscale will
+automatically reconnect.
 
 > **Tip:** If your tailnet uses ACLs, ensure the booth node can reach the
-> operator backend host on the relevant port (typically 443).
+> operator backend host on the relevant port (typically 443). See
+> [tailscale.md](tailscale.md) for ACL examples.
 
 </details>
 
@@ -181,8 +211,23 @@ At minimum, set:
 ```sh
 BOOTH_OPERATOR_BASE_URL=https://operator.example.com
 BOOTH_OPERATOR_TOKEN=tbo_YOUR_TOKEN_HERE
-BOOTH_DEBUG_TOKEN=a-strong-random-string
+BOOTH_DEBUG_TOKEN=a-strong-random-string-at-least-16-chars
+RUST_LOG=info
 ```
+
+**Where to get these values:**
+
+- **`BOOTH_OPERATOR_BASE_URL`**: Your operator deployment URL (the URL where
+  your operator web interface is hosted)
+- **`BOOTH_OPERATOR_TOKEN`**: Generate in the operator UI by signing in,
+  dialing **6** → Settings → API tokens → Create. Copy the token (shown only
+  once). Format: `tbo_...`
+- **`BOOTH_DEBUG_TOKEN`**: Generate yourself with
+  `openssl rand -base64 24` or similar. This protects access to the debug
+  panel.
+
+See [tailscale.md](tailscale.md#environment-variables) for the complete
+environment variable reference.
 
 For non-secret settings (GPIO pins, audio device, timeouts) edit the TOML
 config:
@@ -242,7 +287,7 @@ Verify:
 tailscale serve status
 ```
 
-You can now reach the debug panel at `https://booth.<tailnet-name>.ts.net/`
+You can now reach the debug panel at `https://telephone-booth.<tailnet-name>.ts.net/`
 using the debug token you set in step 6. See [`tailscale.md`](tailscale.md)
 for more detail.
 
@@ -277,7 +322,7 @@ Look for `state_machine.ready` and `operator.connected` log lines.
 
 ## Debug panel
 
-Open `https://booth.<tailnet-name>.ts.net/` in a browser and enter the debug
+Open `https://telephone-booth.<tailnet-name>.ts.net/` in a browser and enter the debug
 token. You should see the live pin matrix, state history, and audio meters.
 
 </details>

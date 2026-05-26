@@ -71,7 +71,7 @@ curl -fsS -X POST \
   -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"count":5}' \
-  https://phone-booth.<your-tailnet>.ts.net/v1/simulate/pulse
+  https://telephone-booth.<your-tailnet>.ts.net/v1/simulate/pulse
 ```
 
 Disable controls again after testing and restart the service.
@@ -80,7 +80,7 @@ Disable controls again after testing and restart the service.
 
 ```sh
 sudo tailscale status
-sudo tailscale up --hostname=phone-booth
+sudo tailscale up --hostname=telephone-booth
 sudo /usr/share/telephone-booth/setup-tailscale-serve.sh
 sudo systemctl restart telephone-booth-tailscale-serve.service
 telephone-booth tailscale-status

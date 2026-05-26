@@ -39,7 +39,7 @@ You can also read it through the Tailscale URL while Tailscale is healthy:
 ```sh
 curl -fsS \
   -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
-  https://phone-booth.<your-tailnet>.ts.net/v1/cert/fingerprint
+  https://telephone-booth.<your-tailnet>.ts.net/v1/cert/fingerprint
 ```
 
 Record the `sha256` value before pinning a LAN connection.
