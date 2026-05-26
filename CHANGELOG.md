@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/djensenius/Telephone-Booth/compare/v0.2.0...v0.3.0) (2026-05-26)
+
+
+### Features
+
+* operator sync resilience — heartbeat, reconnect burst, durable event spool ([#68](https://github.com/djensenius/Telephone-Booth/issues/68)) ([2a436ca](https://github.com/djensenius/Telephone-Booth/commit/2a436ca305b2b649a8e7decb7a7ebb9f5ad5f3cf))
+
 ## [0.2.0](https://github.com/djensenius/Telephone-Booth/compare/v0.1.1...v0.2.0) (2026-05-26)
 
 
