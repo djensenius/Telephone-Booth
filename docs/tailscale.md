@@ -57,8 +57,15 @@ sudo tailscale up \
   (`telephone-booth.<tailnet>.ts.net`). Without this, Tailscale auto-generates
   a name from the OS hostname which may not be descriptive.
 - `--ssh` — enables Tailscale SSH so you can `ssh telephone-booth` from any
-  device on your tailnet without managing SSH keys or opening port 22 to
-  the internet.
+  device on your tailnet without managing SSH keys. **Important:** When
+  Tailscale SSH is enabled, it takes over SSH access and the regular SSH
+  daemon (sshd) on port 22 becomes inaccessible from the local LAN by default.
+  To preserve local LAN SSH access (e.g., `ssh pi@telephone-booth.local` or
+  `ssh pi@<IP>`), you must either:
+  1. Disable Tailscale SSH and use traditional SSH with key-based auth, or
+  2. Access the device through Tailscale's network (`ssh telephone-booth`), or
+  3. Configure Tailscale SSH to allow fallback to local SSH (see Tailscale
+     docs on SSH configuration).
 - `--accept-routes` — allows the node to use subnet routes advertised by
   other nodes (useful if your operator backend is on a different subnet).
 - `--advertise-exit-node=false` — explicitly disables exit node mode
@@ -336,6 +343,14 @@ sudo tailscale up --hostname=telephone-booth --advertise-tags=tag:booth
   `sudo systemctl enable tailscaled` and `sudo systemctl start tailscaled`.
   The `telephone-booth-tailscale-serve.service` will auto-start once
   Tailscale is ready.
+- **Local LAN SSH (`ssh pi@telephone-booth.local`) stopped working after
+  enabling Tailscale SSH**: Tailscale SSH takes over SSH access by default.
+  To access via local LAN, either: (a) use `ssh telephone-booth` from a device
+  on your tailnet, (b) temporarily disable Tailscale SSH with
+  `sudo tailscale set --ssh=false`, or (c) connect a keyboard/monitor to the
+  Pi for local console access. To preserve both Tailscale SSH and local LAN
+  SSH, you need to configure Tailscale SSH policies in your admin console to
+  allow fallback.
 - **Tailscale is down or the node is expired**: `telephone-booth
   tailscale-status` or `tailscale status` fails. Re-run
   `sudo tailscale up --hostname=telephone-booth --ssh --accept-routes`, then
