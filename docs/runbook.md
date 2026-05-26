@@ -1,5 +1,9 @@
 # Runbook (day-2 ops)
 
+For troubleshooting specific problems, see
+[troubleshooting.md](troubleshooting.md). For observability setup and monitoring
+dashboards, see [observability.md](observability.md).
+
 ## Runtime CLI
 
 ```sh

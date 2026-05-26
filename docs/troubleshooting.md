@@ -1,7 +1,8 @@
 # Troubleshooting
 
 If you don't find your symptom here, check the [debug panel](debug-panel.md)
-— most issues become obvious once you see the live GPIO and audio meters.
+— most issues become obvious once you see the live GPIO and audio meters. For
+ongoing operational issues, see the [runbook](runbook.md).
 
 ## The booth is silent (no dial tone) when the receiver is lifted
 

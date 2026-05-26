@@ -43,7 +43,17 @@ and printed once to stdout.
 
 ## 4. Next steps
 
-- Wire the phone — [`hardware.md`](hardware.md)
-- Register with the operator — [`operator-api.md`](operator-api.md)
-- Expose debug over your tailnet — [`tailscale.md`](tailscale.md)
-- Ship a real install — [`packaging.md`](packaging.md)
+### Understand the architecture
+
+- **[Architecture overview](architecture.md)** — Learn the hexagonal design, state machine, and event/effect model
+- **[Simulator TUI](simulator.md)** — Test the full state machine interactively without hardware
+
+### Deploy to production
+
+- **[Raspberry Pi setup](raspberry-pi-setup.md)** — Flash, configure, and wire a physical booth
+- **[Hardware wiring](hardware.md)** — GPIO pinout and rotary phone connections
+- **[Tailscale setup](tailscale.md)** — Remote access with automatic HTTPS certificates
+
+### Contribute
+
+- **[Contributing guide](contributing.md)** — Coding conventions, PR process, ADRs
