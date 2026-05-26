@@ -1,0 +1,42 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: arm64 armhf
+Codename: stable
+Components: main
+Date: Tue, 26 May 2026 04:45:51 +0000
+Description: Telephone-Booth phone-side client packages
+Label: Telephone-Booth
+Origin: Telephone-Booth
+Suite: stable
+MD5Sum:
+ e14302c9052efcff0f9f24b6eba5677b              216 Release
+ d34a64f680e35135255a477b6752dbb4              897 main/binary-arm64/Packages
+ 0e4c3ae9644c3cfdfd856fa9db43764e              607 main/binary-arm64/Packages.gz
+ e0c56006bbb6573712c7e4209235aef5              897 main/binary-armhf/Packages
+ dd687653f82ce375af9fda60562616c5              607 main/binary-armhf/Packages.gz
+SHA1:
+ ed71ea5a91c2527042e94b2271f8f66d44e51814              216 Release
+ a1e7996af49cd25daea3bba33b62c6b8fbed6410              897 main/binary-arm64/Packages
+ 19806770e7fb3268ce601534fd19e67a90aa049e              607 main/binary-arm64/Packages.gz
+ 396911f24b803e107744be62a1bc9746ec3c57d2              897 main/binary-armhf/Packages
+ 94aa316ef3d5ba39b5eab322c17642d37f86a839              607 main/binary-armhf/Packages.gz
+SHA256:
+ bb7bf79a36c9f2ac602f393c69643b2c5851231dbfd608411ce51ec850985fe7              216 Release
+ f54a2a1049067a49c5d9b28a8dd1b81a78cf1f4d37048a7390834fede3615cdc              897 main/binary-arm64/Packages
+ 18b9041f9c3852e8d66095bee503ad61e6c40fdd9030c529196b25cd8bf75585              607 main/binary-arm64/Packages.gz
+ 16730bdd21470ea63ab9a5f7ba2681d89be776bee0ed44a81f4867cccb7aa7c3              897 main/binary-armhf/Packages
+ 84557077b4ef09979d30be837fff70c951ddc234ea34fa7eb70b9dda8d55ad07              607 main/binary-armhf/Packages.gz
+SHA512:
+ f04211a600efdb3e788aa25e44e663326e24d2cfeced6f8defec51aab521a9f837cd001bdf8594db2b9abe0144e4789daffd5b742cb6e40b2443eb4305f46661              216 Release
+ 6e34fa315ae40abb117c4a452048ea0e701527112be453d4f0d60cbc4a854476aa12f5b87b843fae227ec34cfa4fcd4f4fd13db67329a308377387ddb3705eb8              897 main/binary-arm64/Packages
+ b300fae879263340372a6f1a2836e4db12f83b92ddb2be48f21226fbedf8556067a71e50981b00aa6dd3457f2c019b7c64354e5606669d3c0eaaee7fba9fd762              607 main/binary-arm64/Packages.gz
+ be575e68932f68191567dd3c76276bb427659e43ebeef782f74310fef9594fecb576b73dc3e605480d94c982d6903f590fafc86520fffb5ac0308aa60a87220c              897 main/binary-armhf/Packages
+ 879f18ba13c0c0474a0787740d8aaaff88bf6f1ccc09d1b6eb36ef3b134f2199e14ef145232d42ff91ebd3fee4c5f46c541e7cf42e5c1ef6501caabc1cabdf72              607 main/binary-armhf/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQSn+DgWVkkni8ItNqAfRx2prhKbPAUCahUlfwAKCRAfRx2prhKb
+PM7pAQDd+1OaY7egatomp8PWfYzcB7uOeKE8C/y9PO2xkFjSHQD/Q8KdpFIhfAGX
+5FkleCVGHpI8CC8xWVx/YuwKgoPZuw8=
+=QlkQ
+-----END PGP SIGNATURE-----
