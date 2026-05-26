@@ -80,3 +80,16 @@ sudo systemctl restart telephone-booth
 
 If a restart is required _often_, that's a bug — please file an issue with
 the relevant `journalctl -u telephone-booth` excerpt.
+
+## Cannot SSH to the Pi via `.local` hostname
+
+- **`.local` is the standard mDNS domain** and should work on most networks.
+  Use `ssh pi@telephone-booth.local` (not `.lan`).
+- **`.lan` is router-specific** and may not be configured. If your router
+  doesn't support `.lan`, use `.local` or the Pi's IP address instead.
+- **mDNS not working?** Install `avahi-daemon` on the Pi (usually pre-installed
+  on Raspberry Pi OS). On your client machine, ensure mDNS is enabled
+  (macOS/Linux: built-in; Windows: install Bonjour Print Services).
+- **Still can't resolve?** Find the Pi's IP with `tailscale status` or check
+  your router's DHCP leases, then use `ssh pi@<IP-address>`.
+- **Or use Tailscale SSH:** `ssh telephone-booth` (no `.local`, no IP needed)
