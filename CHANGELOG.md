@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/djensenius/Telephone-Booth/compare/v0.1.1...v0.2.0) (2026-05-26)
+
+
+### Features
+
+* **debug:** add simulator remote access via tmux and web UI ([#66](https://github.com/djensenius/Telephone-Booth/issues/66)) ([5074a85](https://github.com/djensenius/Telephone-Booth/commit/5074a8505d1c8b672fd0da65ff338afed7222e61))
+
+
+### Documentation
+
+* expand Tailscale setup and environment variable reference ([#62](https://github.com/djensenius/Telephone-Booth/issues/62)) ([3f07c07](https://github.com/djensenius/Telephone-Booth/commit/3f07c07e2153a80373091405960e726a8fddc480))
+* fix hostname consistency and clarify .local vs .lan ([#65](https://github.com/djensenius/Telephone-Booth/issues/65)) ([f19b616](https://github.com/djensenius/Telephone-Booth/commit/f19b616c1b2c38c961f1fe470f65e3cc465c5eab))
+* **tailscale:** fix incorrect SSH behavior documentation ([#64](https://github.com/djensenius/Telephone-Booth/issues/64)) ([594bd23](https://github.com/djensenius/Telephone-Booth/commit/594bd2341549b99aaab4c29b5cd6dd221c700b19))
+
 ## [0.1.1](https://github.com/djensenius/Telephone-Booth/compare/v0.1.0...v0.1.1) (2026-05-26)
 
 
