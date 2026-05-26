@@ -37,3 +37,17 @@ loopback_skip_auth = false
 
 [telemetry]
 journal_level = "info"
+
+[runtime]
+# Autostart mode for the systemd unit. Both default to false (real Pi adapters,
+# no TUI). Setting either to true requires the binary to be built with the
+# matching Cargo feature; the published .deb includes both.
+#
+# CLI flags (--mock, --simulator) can force a mode on at launch but cannot
+# force it off — this file is the autostart source of truth.
+#
+# simulator = true requires a TTY for the TUI and will NOT work under the
+# default telephone-booth.service unit without a systemd override that
+# allocates one (TTYPath= + StandardInput=tty + StandardOutput=tty).
+mock = false
+simulator = false

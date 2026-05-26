@@ -68,6 +68,8 @@ pub struct RuntimeConfig {
     pub telemetry: TelemetryConfig,
     /// Observability stack (system metrics + operator event forwarding).
     pub observability: ObservabilityConfig,
+    /// Runtime startup mode (mock / simulator) for autostart deployments.
+    pub runtime: RuntimeStartupConfig,
     /// Debug bearer token loaded from `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug_token: Option<String>,
@@ -99,9 +101,35 @@ impl Default for RuntimeConfig {
             debug: DebugConfig::default(),
             telemetry: TelemetryConfig::default(),
             observability: ObservabilityConfig::default(),
+            runtime: RuntimeStartupConfig::default(),
             debug_token: None,
         }
     }
+}
+
+/// Runtime startup mode flags. Lets the systemd unit autostart the booth in
+/// `--mock` or `--simulator` mode without altering `ExecStart`.
+///
+/// Both default to `false` (real Pi adapters, no TUI). The corresponding CLI
+/// flags (`--mock`, `--simulator`) can force a mode **on** at launch but cannot
+/// force it off. Setting either to `true` requires the binary to be built with
+/// the matching Cargo feature (`mock` and/or `simulator`); the published
+/// `.deb` includes both.
+///
+/// **Caveat:** `simulator = true` runs an interactive `ratatui` TUI, which
+/// requires a TTY. The default `telephone-booth.service` unit does not allocate
+/// one, so autostart in simulator mode needs a unit override that sets
+/// `StandardInput`/`StandardOutput`/`TTYPath` appropriately, or a manual launch
+/// from a shell.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimeStartupConfig {
+    /// Use the in-memory `booth-mock` HAL adapters instead of Raspberry Pi
+    /// hardware. Equivalent to passing `--mock` on the command line.
+    pub mock: bool,
+    /// Launch the interactive simulator TUI on startup. Equivalent to passing
+    /// `--simulator` on the command line. Requires a TTY (see struct docs).
+    pub simulator: bool,
 }
 
 /// Runtime-owned telemetry and logging config.
@@ -1396,6 +1424,19 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     if unique.len() != pins.len() {
         bail!("gpio pins must be unique");
     }
+
+    // --- Runtime startup mode: refuse a setting that the build can't honor ---
+    #[cfg(not(feature = "mock"))]
+    if config.runtime.mock {
+        bail!("runtime.mock = true but this binary was built without the `mock` Cargo feature");
+    }
+    #[cfg(not(feature = "simulator"))]
+    if config.runtime.simulator {
+        bail!(
+            "runtime.simulator = true but this binary was built without the `simulator` Cargo feature"
+        );
+    }
+
     Ok(())
 }
 
@@ -1459,6 +1500,27 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
             .context("parse BOOTH_OBSERVABILITY_FORWARD_ENABLED")?;
     }
 
+    apply_runtime_env_overrides(&mut config.runtime, |key| {
+        env::var_os(key).map(|v| v.to_string_lossy().into_owned())
+    })?;
+
+    Ok(())
+}
+
+/// Apply `BOOTH_RUNTIME_MOCK` / `BOOTH_RUNTIME_SIMULATOR` to a
+/// `RuntimeStartupConfig`. Takes a getter so the parsing logic can be tested
+/// without mutating the process-global environment (which is `unsafe` in
+/// Rust 1.80+ and forbidden workspace-wide).
+fn apply_runtime_env_overrides(
+    config: &mut RuntimeStartupConfig,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    if let Some(value) = get("BOOTH_RUNTIME_MOCK") {
+        config.mock = parse_bool(&value).context("parse BOOTH_RUNTIME_MOCK")?;
+    }
+    if let Some(value) = get("BOOTH_RUNTIME_SIMULATOR") {
+        config.simulator = parse_bool(&value).context("parse BOOTH_RUNTIME_SIMULATOR")?;
+    }
     Ok(())
 }
 
@@ -1676,8 +1738,8 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
 )]
 mod tests {
     use super::{
-        AudioRef, RuntimeConfig, is_sha256_hex, operator_audio_ref, upload_recording,
-        validate_config,
+        AudioRef, RuntimeConfig, RuntimeStartupConfig, apply_runtime_env_overrides, is_sha256_hex,
+        operator_audio_ref, upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1963,5 +2025,124 @@ mod tests {
             .system_push_interval_ms = 0;
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("system_push_interval_ms"));
+    }
+
+    // --- runtime startup mode tests ---
+
+    #[test]
+    fn runtime_startup_defaults_to_off() {
+        let config = RuntimeConfig::default();
+        assert!(!config.runtime.mock);
+        assert!(!config.runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_startup_round_trips_via_toml() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        config.runtime.simulator = true;
+        let text = toml::to_string(&config).expect("serialize");
+        let parsed: RuntimeConfig = toml::from_str(&text).expect("parse");
+        assert!(parsed.runtime.mock);
+        assert!(parsed.runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_section_parses_from_toml_fragment() {
+        let text = r"
+            [runtime]
+            mock = true
+            simulator = true
+        ";
+        let parsed: RuntimeConfig = toml::from_str(text).expect("parse [runtime] section");
+        assert!(parsed.runtime.mock);
+        assert!(parsed.runtime.simulator);
+    }
+
+    #[cfg(all(feature = "mock", feature = "simulator"))]
+    #[test]
+    fn validate_accepts_runtime_flags_when_features_present() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        config.runtime.simulator = true;
+        validate_config(&config).expect("flags allowed when both features compiled in");
+    }
+
+    #[cfg(not(feature = "mock"))]
+    #[test]
+    fn validate_rejects_runtime_mock_when_feature_disabled() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("runtime.mock"));
+        assert!(err.to_string().contains("`mock`"));
+    }
+
+    #[cfg(not(feature = "simulator"))]
+    #[test]
+    fn validate_rejects_runtime_simulator_when_feature_disabled() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.simulator = true;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("runtime.simulator"));
+        assert!(err.to_string().contains("`simulator`"));
+    }
+
+    #[test]
+    fn runtime_env_overrides_apply_to_startup_config() {
+        let mut runtime = RuntimeStartupConfig::default();
+        let vars = std::collections::HashMap::from([
+            ("BOOTH_RUNTIME_MOCK".to_string(), "true".to_string()),
+            ("BOOTH_RUNTIME_SIMULATOR".to_string(), "1".to_string()),
+        ]);
+        apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect("apply env overrides");
+        assert!(runtime.mock);
+        assert!(runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_accept_false_to_disable_a_config_default() {
+        // Simulates a config file with `mock = true` being overridden at
+        // runtime by `BOOTH_RUNTIME_MOCK=false` (e.g. via a systemd drop-in).
+        let mut runtime = RuntimeStartupConfig {
+            mock: true,
+            simulator: false,
+        };
+        let vars = std::collections::HashMap::from([(
+            "BOOTH_RUNTIME_MOCK".to_string(),
+            "false".to_string(),
+        )]);
+        apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect("apply env overrides");
+        assert!(!runtime.mock);
+        assert!(!runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_absent_preserves_config() {
+        let mut runtime = RuntimeStartupConfig {
+            mock: true,
+            simulator: true,
+        };
+        apply_runtime_env_overrides(&mut runtime, |_| None).expect("apply env overrides");
+        assert!(runtime.mock);
+        assert!(runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_reject_invalid_bool() {
+        let mut runtime = RuntimeStartupConfig::default();
+        let vars = std::collections::HashMap::from([(
+            "BOOTH_RUNTIME_MOCK".to_string(),
+            "maybe".to_string(),
+        )]);
+        let err = apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect_err("invalid bool should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BOOTH_RUNTIME_MOCK"),
+            "error should mention the env var, got: {msg}"
+        );
     }
 }

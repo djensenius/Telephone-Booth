@@ -68,7 +68,7 @@ jobs:
         with:
           tool: cross,cargo-deb
       - name: Cross-build release
-        run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
+        run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd,simulator,mock --no-default-features
       - name: Verify keyring file is present
         run: |
           set -eu

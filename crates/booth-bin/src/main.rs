@@ -84,6 +84,11 @@ async fn run_cli() -> Result<()> {
             simulator,
         } => {
             let config = load_config(config.as_deref())?;
+            // CLI flag can only force a mode on; the config setting provides
+            // the autostart baseline for systemd units.
+            let mock = mock || config.runtime.mock;
+            #[cfg(feature = "simulator")]
+            let simulator = simulator || config.runtime.simulator;
             #[cfg(feature = "simulator")]
             if simulator {
                 let (log_path, _guard) = install_simulator_tracing(&config.telemetry.journal_level);

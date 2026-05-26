@@ -104,11 +104,52 @@ pulses interactively.
 
 The simulator lives in
 [`crates/booth-bin/src/simulator.rs`](../crates/booth-bin/src/simulator.rs)
-behind the `simulator` Cargo feature (on by default in `booth-bin`). The
-runtime is spawned with `start_debug: false`, `listen_signals: false`, and
-`notify_systemd: false` so the TUI owns Ctrl+C and the screen, and so the
-embedded debug HTTP/TLS surface does not contend for ports.
+behind the `simulator` Cargo feature (on by default in `booth-bin`, and
+shipped in the published `.deb`). The runtime is spawned with
+`start_debug: false`, `listen_signals: false`, and `notify_systemd: false`
+so the TUI owns Ctrl+C and the screen, and so the embedded debug HTTP/TLS
+surface does not contend for ports.
 
 The terminal is set up via `ratatui` + `crossterm` and is restored from a
 `Drop` guard so a panic or fatal error cannot leave the terminal in raw
 mode.
+
+## Running on the Raspberry Pi
+
+The published `.deb` is built with `--features pi,systemd,simulator,mock`,
+so `--simulator` and `--mock` work on an installed Pi just as they do in
+development. Two ways to use them:
+
+**Interactive — over SSH:**
+
+```sh
+sudo systemctl stop telephone-booth          # release GPIO + audio
+sudo -u phonebooth /usr/bin/telephone-booth run --simulator [--mock]
+```
+
+The TUI runs in your SSH session. Quit with `q` to leave the GPIO/audio
+pins free for the systemd unit to reclaim on restart.
+
+**Autostart — via config:**
+
+Both modes can be flipped on in `/etc/phone-booth/config.toml` so the
+systemd unit picks them up without editing `ExecStart`:
+
+```toml
+[runtime]
+mock      = true      # use mock HAL adapters (no rotary phone needed)
+simulator = false     # see TTY caveat below before enabling
+```
+
+CLI flags can force a mode **on** at launch but cannot force it off —
+the config file is the autostart source of truth. See
+[`docs/configuration.md`](configuration.md#runtime-startup-mode) for
+the full table.
+
+`runtime.simulator = true` requires a TTY for the TUI; the stock
+`telephone-booth.service` unit does **not** allocate one, so autostarting
+in simulator mode needs a systemd override that points the service at a
+console (`TTYPath=/dev/tty1` + `StandardInput=tty` +
+`StandardOutput=tty`). `runtime.mock = true` has no such requirement and
+works under the stock unit — handy for bringing up a Pi without the
+rotary phone wired in.
