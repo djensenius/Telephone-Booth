@@ -571,7 +571,8 @@ fn validate_lan_security(config: &DebugConfig) -> Result<(), DebugError> {
 
 fn build_router(state: AppState) -> Router {
     let cors = cors_layer(state.config.operator_origin.as_deref());
-    Router::new()
+    // Authenticated API routes — require bearer token.
+    let authed = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/state", get(state_snapshot))
         .route("/v1/events", get(events_since))
@@ -583,11 +584,23 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/cert/fingerprint", get(cert_fingerprint))
         .route("/v1/simulate/event", post(simulate_event))
         .route("/v1/simulate/pulse", post(simulate_pulse))
-        .route("/v1/ui/simulator", get(simulator_ui))
         .route("/v1/ws/telemetry", get(ws_telemetry))
         .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, auth_middleware))
-        .layer(cors)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
+    // Public routes — served without auth so the login page is reachable.
+    let public = Router::new()
+        .route("/", get(root_redirect))
+        .route("/v1/ui/simulator", get(simulator_ui))
+        .with_state(state);
+    authed.merge(public).layer(cors)
+}
+
+/// Redirect the bare `/` path to the simulator UI.
+async fn root_redirect() -> Response {
+    axum::response::Redirect::permanent("/v1/ui/simulator").into_response()
 }
 
 /// Build a tiny sub-router that exposes Prometheus text exposition.
@@ -802,18 +815,19 @@ struct SimulateResponse {
 
 /// Serve the self-contained simulator control UI.
 ///
-/// Gated behind `allow_controls` — returns 403 if simulator controls are
-/// disabled in the debug config.
-async fn simulator_ui(State(state): State<AppState>) -> Result<Response, StatusCode> {
-    ensure_controls(&state)?;
-    Ok((
+/// Served without auth so the token-entry login page is always reachable.
+/// The page itself gates API calls behind the bearer token entered by the
+/// user, and the control endpoints (`/v1/simulate/*`) enforce
+/// `allow_controls` server-side.
+async fn simulator_ui() -> Response {
+    (
         [(
             CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         )],
         include_str!("simulator_ui.html"),
     )
-        .into_response())
+        .into_response()
 }
 
 async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
