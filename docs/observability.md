@@ -39,6 +39,64 @@ booth-debug /metrics (loopback) ◀── booth-metrics::MetricsHandle::render
 vmagent (sidecar) ── scrape /metrics every 10 s ──▶ VictoriaMetrics ──▶ Grafana
 ```
 
+## Deployment topology
+
+Three independent hosts in the steady-state deployment:
+
+1. **Booth host (Raspberry Pi).** Runs the `telephone-booth` Rust binary
+   and the `telephone-booth-vmagent` systemd sidecar. The booth's
+   `GET /metrics` endpoint is bound to loopback only — nothing outside
+   the booth ever scrapes it directly.
+2. **Operator host.** Runs the operator API + Postgres + the web UI.
+   Receives `POST /v1/events` and `PUT /v1/system` from each booth over
+   the public internet (bearer auth). This is where the queryable event
+   log lives.
+3. **Metrics host.** Runs VictoriaMetrics (the time-series database) and
+   Grafana. **Not** the booth, and not necessarily the same machine as
+   the operator. Each booth's local `vmagent` pushes here via
+   Prometheus `remote_write` over HTTPS, authenticated with the bearer
+   token in `/etc/phone-booth/vmagent-token`.
+
+```text
+┌──────────────────────────────┐    POST /v1/events,       ┌───────────────────┐
+│ Booth host (Pi)              │    PUT /v1/system         │ Operator host     │
+│   telephone-booth (Rust) ────┼──────────────────────────▶│   API + Postgres  │
+│   vmagent (sidecar) ─┐       │                           │   + web UI        │
+└──────────────────────┼───────┘                           └───────────────────┘
+                       │ Prometheus remote_write (HTTPS, bearer)
+                       ▼
+                ┌─────────────────────────────────┐
+                │ Metrics host                    │
+                │   VictoriaMetrics ◀── Grafana   │
+                └─────────────────────────────────┘
+```
+
+### Why VictoriaMetrics and not Prometheus?
+
+VictoriaMetrics is a drop-in Prometheus-compatible TSDB: it ingests the
+Prometheus text exposition format that the booth emits, accepts
+Prometheus `remote_write` from `vmagent`, and Grafana queries it with
+PromQL. If you already operate a Prometheus server elsewhere you have
+two equally supported options:
+
+- **Keep VictoriaMetrics as written.** Point its `remote_write` URL at
+  your VM instance (`/api/v1/write`). No code changes; this is the path
+  the dashboards in `dashboards/` are tested against.
+- **Use Prometheus instead of VictoriaMetrics.** Point `vmagent`'s
+  `remote_write` URL at a Prometheus server with the
+  `--web.enable-remote-write-receiver` flag enabled (Prometheus ≥ 2.33).
+  The booth and dashboards do not change — they only speak the
+  Prometheus ecosystem protocols.
+
+What the booth does **not** support out of the box is direct scraping
+of `/metrics` by a remote Prometheus — the route is bound to loopback
+on purpose, so the scrape has to originate on the booth itself. The
+`vmagent` sidecar exists precisely to bridge that gap. If you would
+rather not run `vmagent`, you would need to add a non-loopback bind
+for `/metrics` (with bearer auth) and accept the Tailscale-ACL surface
+that comes with it. See [ADR 0006](adr/0006-observability-stack.md)
+for the trade-offs we weighed before landing on the sidecar.
+
 ## Telemetry events
 
 Every event on the booth telemetry bus is also forwarded to the operator
