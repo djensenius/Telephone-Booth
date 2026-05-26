@@ -280,7 +280,7 @@ impl SessionTracker {
 /// shutdown so the buffered events are not flushed during cleanup (we
 /// would otherwise race against the connection going away).
 ///
-/// When an [`EventSpool`] is provided, failed batches are persisted to disk
+/// When an [`super::event_spool::EventSpool`] is provided, failed batches are persisted to disk
 /// and replayed on startup so events survive restarts and extended outages.
 #[allow(clippy::needless_pass_by_value)]
 pub fn spawn_event_forwarder(
@@ -428,7 +428,7 @@ pub fn spawn_system_pusher(
 
 /// Spawn the status heartbeat task.
 ///
-/// Periodically re-pushes the booth's current [`BoothStatus`] so the
+/// Periodically re-pushes the booth's current `BoothStatus` so the
 /// operator never shows stale state — even if it missed an earlier
 /// transition push due to a transient network failure.
 #[allow(clippy::needless_pass_by_value)]
