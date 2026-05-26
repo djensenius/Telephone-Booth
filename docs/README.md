@@ -49,3 +49,5 @@ rebuilds it from the filesystem; CI fails if it drifts.
 - [0004 — Tailscale serve for debug TLS](adr/0004-tailscale-serve-for-debug-tls.md)
 - [0005 — Rust 1.95.0](adr/0005-rust-1.95.0.md)
 - [0006 — Observability stack](adr/0006-observability-stack.md)
+- [0007 — APT distribution](adr/0007-apt-distribution.md)
+- [0008 — Automated releases](adr/0008-automated-releases.md)

@@ -51,6 +51,61 @@ matrix, and `cargo-deny` / `cargo-audit`.
   [`deny.toml`](../deny.toml).
 - Significant architecture changes get an ADR in `docs/adr/`.
 
+## Releasing
+
+Releases are fully automated by
+[release-please](https://github.com/googleapis/release-please) — see
+[ADR 0008](adr/0008-automated-releases.md) for the full design.
+
+The maintainer never tags or pushes a release by hand. The flow is:
+
+1. PRs land on `main` with **Conventional Commit titles**
+   (`feat(core): …`, `fix(pi): …`, `docs: …`). Squash-merge is
+   recommended so the squash commit subject becomes the release-please
+   input.
+2. `release-please.yml` re-runs on every `main` push and maintains a
+   single open PR titled `chore: release X.Y.Z`. The PR previews the
+   proposed `Cargo.toml` bump and the new `CHANGELOG.md` entries derived
+   from the conventional commits since the last release.
+3. When you are ready to cut a release, **merge the Release PR**. That
+   one click:
+   - Tags `vX.Y.Z`,
+   - Creates the GitHub Release with auto-generated notes,
+   - Triggers `publish.yml` to build the `.deb`s (arm64 + armhf) and the
+     macOS tarball, which `softprops/action-gh-release` attaches to the
+     same Release,
+   - Triggers `publish-apt.yml` to refresh the signed APT repository on
+     the `gh-pages` branch.
+4. Within ~5 minutes of merging the Release PR, `apt update` on any Pi
+   subscribed to the project's APT repository (or any Pi running
+   `unattended-upgrades`) sees the new version. See
+   [packaging.md](packaging.md) for the Pi-side install/upgrade flow.
+
+### Bump rules
+
+`feat:` → minor (`0.1.0 → 0.2.0`); `fix:` / `perf:` → patch
+(`0.1.0 → 0.1.1`); `feat!:` or `BREAKING CHANGE:` footer → major
+(`0.1.0 → 1.0.0`). `chore:` / `refactor:` / `test:` / `ci:` do not bump
+the version and are hidden from the changelog by default.
+
+Override the next version explicitly by adding a
+`Release-As: 1.2.3` footer to any commit (typically the squash commit
+message). Use this for the very first release, for retraction-style
+re-releases, or to bypass the conventional-commit bump rules.
+
+### Manual release (escape hatch)
+
+`publish.yml` is also `workflow_dispatch`-triggered. To force a build
+without going through release-please (e.g. to retry a failed publish
+job for an existing tag), run `gh workflow run publish.yml -f tag=vX.Y.Z
+-f draft=false`.
+
+### Alternative: tag on every merge
+
+A dormant alternative workflow lives at
+`.github/workflows/auto-tag-on-merge.yml.disabled`. Switch by renaming
+it and deleting `release-please.yml`. See ADR 0008 for the procedure.
+
 ## Adding a HAL adapter
 
 To support a new SBC (Pico, ESP32, an industrial controller, …):

@@ -11,13 +11,43 @@ on:
         required: false
         type: boolean
         default: true
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  resolve:
+    name: resolve release inputs
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.derive.outputs.tag }}
+      draft: ${{ steps.derive.outputs.draft }}
+    steps:
+      - id: derive
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "draft=${INPUT_DRAFT:-true}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-deb:
     name: build .deb (${{ matrix.target }})
+    needs: resolve
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -39,6 +69,23 @@ jobs:
           tool: cross,cargo-deb
       - name: Cross-build release
         run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
+      - name: Verify keyring file is present
+        run: |
+          set -eu
+          path=packaging/debian/telephone-booth-archive-keyring.gpg
+          if [ ! -s "$path" ]; then
+            echo "::error::$path is missing or empty; .deb cannot bootstrap APT trust."
+            exit 1
+          fi
+          # Best-effort fingerprint dump for the build log so a wrong key is
+          # easy to spot in CI output.
+          if command -v gpg >/dev/null 2>&1; then
+            tmpdir="$(mktemp -d)"
+            export GNUPGHOME="$tmpdir"
+            chmod 700 "$tmpdir"
+            gpg --batch --show-keys "$path" || true
+            rm -rf "$tmpdir"
+          fi
       - name: Build .deb
         run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -48,6 +95,7 @@ jobs:
 
   build-tarball:
     name: build tarball (${{ matrix.target }})
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -75,7 +123,7 @@ jobs:
           path: dist/*.tar.gz
 
   release:
-    needs: [build-deb, build-tarball]
+    needs: [resolve, build-deb, build-tarball]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,7 +139,8 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ inputs.tag }}
-          draft: ${{ inputs.draft }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          draft: ${{ needs.resolve.outputs.draft == 'true' }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: release/*
