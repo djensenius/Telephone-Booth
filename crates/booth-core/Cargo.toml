@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Pure (no_std + alloc) state machine that drives the Telephone Booth phone client."
 
 [lints]

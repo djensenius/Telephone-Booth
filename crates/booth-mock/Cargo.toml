@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Mock HAL adapters for the Telephone Booth phone client. Used by integration tests and the host dev runtime."
 
 [lints]
