@@ -22,9 +22,13 @@
   ],
   "packages": {
     ".": {
+      "release-type": "simple",
       "component": "telephone-booth",
       "changelog-path": "CHANGELOG.md",
-      "package-name": "telephone-booth"
+      "package-name": "telephone-booth",
+      "extra-files": [
+        "Cargo.toml"
+      ]
     }
   }
 }
