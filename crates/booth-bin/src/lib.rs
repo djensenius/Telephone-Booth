@@ -68,6 +68,8 @@ pub struct RuntimeConfig {
     pub telemetry: TelemetryConfig,
     /// Observability stack (system metrics + operator event forwarding).
     pub observability: ObservabilityConfig,
+    /// Runtime startup mode (mock / simulator) for autostart deployments.
+    pub runtime: RuntimeStartupConfig,
     /// Debug bearer token loaded from `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub debug_token: Option<String>,
@@ -99,9 +101,35 @@ impl Default for RuntimeConfig {
             debug: DebugConfig::default(),
             telemetry: TelemetryConfig::default(),
             observability: ObservabilityConfig::default(),
+            runtime: RuntimeStartupConfig::default(),
             debug_token: None,
         }
     }
+}
+
+/// Runtime startup mode flags. Lets the systemd unit autostart the booth in
+/// `--mock` or `--simulator` mode without altering `ExecStart`.
+///
+/// Both default to `false` (real Pi adapters, no TUI). The corresponding CLI
+/// flags (`--mock`, `--simulator`) can force a mode **on** at launch but cannot
+/// force it off. Setting either to `true` requires the binary to be built with
+/// the matching Cargo feature (`mock` and/or `simulator`); the published
+/// `.deb` includes both.
+///
+/// **Caveat:** `simulator = true` runs an interactive `ratatui` TUI, which
+/// requires a TTY. The default `telephone-booth.service` unit does not allocate
+/// one, so autostart in simulator mode needs a unit override that sets
+/// `StandardInput`/`StandardOutput`/`TTYPath` appropriately, or a manual launch
+/// from a shell.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimeStartupConfig {
+    /// Use the in-memory `booth-mock` HAL adapters instead of Raspberry Pi
+    /// hardware. Equivalent to passing `--mock` on the command line.
+    pub mock: bool,
+    /// Launch the interactive simulator TUI on startup. Equivalent to passing
+    /// `--simulator` on the command line. Requires a TTY (see struct docs).
+    pub simulator: bool,
 }
 
 /// Runtime-owned telemetry and logging config.
@@ -1396,6 +1424,19 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     if unique.len() != pins.len() {
         bail!("gpio pins must be unique");
     }
+
+    // --- Runtime startup mode: refuse a setting that the build can't honor ---
+    #[cfg(not(feature = "mock"))]
+    if config.runtime.mock {
+        bail!("runtime.mock = true but this binary was built without the `mock` Cargo feature");
+    }
+    #[cfg(not(feature = "simulator"))]
+    if config.runtime.simulator {
+        bail!(
+            "runtime.simulator = true but this binary was built without the `simulator` Cargo feature"
+        );
+    }
+
     Ok(())
 }
 
@@ -1457,6 +1498,15 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
     if let Some(value) = env::var_os("BOOTH_OBSERVABILITY_FORWARD_ENABLED") {
         config.observability.operator_forward.enabled = parse_bool(&value.to_string_lossy())
             .context("parse BOOTH_OBSERVABILITY_FORWARD_ENABLED")?;
+    }
+
+    if let Some(value) = env::var_os("BOOTH_RUNTIME_MOCK") {
+        config.runtime.mock =
+            parse_bool(&value.to_string_lossy()).context("parse BOOTH_RUNTIME_MOCK")?;
+    }
+    if let Some(value) = env::var_os("BOOTH_RUNTIME_SIMULATOR") {
+        config.runtime.simulator =
+            parse_bool(&value.to_string_lossy()).context("parse BOOTH_RUNTIME_SIMULATOR")?;
     }
 
     Ok(())
@@ -1963,5 +2013,66 @@ mod tests {
             .system_push_interval_ms = 0;
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("system_push_interval_ms"));
+    }
+
+    // --- runtime startup mode tests ---
+
+    #[test]
+    fn runtime_startup_defaults_to_off() {
+        let config = RuntimeConfig::default();
+        assert!(!config.runtime.mock);
+        assert!(!config.runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_startup_round_trips_via_toml() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        config.runtime.simulator = true;
+        let text = toml::to_string(&config).expect("serialize");
+        let parsed: RuntimeConfig = toml::from_str(&text).expect("parse");
+        assert!(parsed.runtime.mock);
+        assert!(parsed.runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_section_parses_from_toml_fragment() {
+        let text = r"
+            [runtime]
+            mock = true
+            simulator = true
+        ";
+        let parsed: RuntimeConfig = toml::from_str(text).expect("parse [runtime] section");
+        assert!(parsed.runtime.mock);
+        assert!(parsed.runtime.simulator);
+    }
+
+    #[cfg(all(feature = "mock", feature = "simulator"))]
+    #[test]
+    fn validate_accepts_runtime_flags_when_features_present() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        config.runtime.simulator = true;
+        validate_config(&config).expect("flags allowed when both features compiled in");
+    }
+
+    #[cfg(not(feature = "mock"))]
+    #[test]
+    fn validate_rejects_runtime_mock_when_feature_disabled() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.mock = true;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("runtime.mock"));
+        assert!(err.to_string().contains("`mock`"));
+    }
+
+    #[cfg(not(feature = "simulator"))]
+    #[test]
+    fn validate_rejects_runtime_simulator_when_feature_disabled() {
+        let mut config = RuntimeConfig::default();
+        config.runtime.simulator = true;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("runtime.simulator"));
+        assert!(err.to_string().contains("`simulator`"));
     }
 }

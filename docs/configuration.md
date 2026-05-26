@@ -67,7 +67,46 @@ enabled           = true
 batch_max         = 200       # events per POST /v1/events
 flush_interval_ms = 2000
 buffer_max        = 4096      # hard cap; drop-oldest on overflow
+
+[runtime]
+# Autostart mode. Both default to false. CLI flags (--mock, --simulator) can
+# force a mode on at launch but cannot force it off.
+mock      = false
+simulator = false
 ```
+
+### Runtime startup mode
+
+`[runtime]` lets the systemd unit autostart the booth in `--mock` or
+`--simulator` mode without editing `ExecStart`. Both flags default to
+`false`, in which case the binary uses the real Pi adapters and runs
+headless — the historical behaviour.
+
+| Key                  | Effect                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| `runtime.mock`       | Use the in-memory `booth-mock` HAL adapters instead of Pi hardware. Same as `--mock`.        |
+| `runtime.simulator`  | Launch the interactive `ratatui` TUI on startup. Same as `--simulator`.                      |
+
+Both require the binary to be built with the matching Cargo feature
+(`mock`, `simulator`). The published `.deb` includes both; if you build
+a custom binary with `--no-default-features --features pi,systemd`
+(only) then setting either flag to `true` will fail `validate_config`
+at startup with an explicit error.
+
+`simulator = true` requires a TTY for the TUI. The default
+`telephone-booth.service` unit does **not** allocate one, so
+autostarting in simulator mode needs a systemd override:
+
+```ini
+# /etc/systemd/system/telephone-booth.service.d/simulator.conf
+[Service]
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+```
+
+`mock = true` has no such requirement and works under the stock unit —
+useful for bringing up a Pi without the rotary phone wired in.
 
 ### Observability
 
@@ -110,6 +149,8 @@ settings:
 | `observability.enabled`                         | `BOOTH_OBSERVABILITY_ENABLED`                                                     |
 | `observability.booth_id`                        | `BOOTH_OBSERVABILITY_BOOTH_ID`                                                    |
 | `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY_FORWARD_ENABLED`                                             |
+| `runtime.mock`                                  | `BOOTH_RUNTIME_MOCK`                                                              |
+| `runtime.simulator`                             | `BOOTH_RUNTIME_SIMULATOR`                                                         |
 
 Other observability settings (`sample_interval_ms`, `batch_max`,
 `flush_interval_ms`, `buffer_max`) are config-file only and have no
