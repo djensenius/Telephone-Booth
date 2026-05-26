@@ -87,6 +87,10 @@ pub struct OperatorForwardConfig {
     /// system stats at `sample_interval_ms` but only pushes at most this
     /// often.
     pub system_push_interval_ms: u64,
+    /// Interval between periodic status re-pushes, in milliseconds. Ensures
+    /// the operator never shows stale state even if it missed a transition
+    /// push. Set to `0` to disable the heartbeat.
+    pub heartbeat_interval_ms: u64,
 }
 
 impl Default for OperatorForwardConfig {
@@ -97,6 +101,7 @@ impl Default for OperatorForwardConfig {
             flush_interval_ms: 2_000,
             buffer_max: 4_096,
             system_push_interval_ms: 5_000,
+            heartbeat_interval_ms: 30_000,
         }
     }
 }
@@ -274,6 +279,9 @@ impl SessionTracker {
 /// Returns the join handle; the caller is expected to `abort()` it on
 /// shutdown so the buffered events are not flushed during cleanup (we
 /// would otherwise race against the connection going away).
+///
+/// When an [`EventSpool`] is provided, failed batches are persisted to disk
+/// and replayed on startup so events survive restarts and extended outages.
 #[allow(clippy::needless_pass_by_value)]
 pub fn spawn_event_forwarder(
     bus: TelemetryBus,
@@ -281,11 +289,33 @@ pub fn spawn_event_forwarder(
     identity: RuntimeIdentity,
     config: ObservabilityConfig,
     session_handle: SessionHandle,
+    event_spool: Option<Arc<crate::event_spool::EventSpool>>,
 ) -> JoinHandle<()> {
     // Subscribe synchronously so we don't miss any events that fire
     // between spawn and the task's first poll.
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
+        // Replay any spooled batches from a previous run before processing
+        // new events. Events have stable eventIds so replay is idempotent.
+        if let Some(ref spool) = event_spool {
+            for body in spool.drain() {
+                match operator.push_events_json(&body).await {
+                    Ok(ack) => {
+                        debug!(
+                            accepted = ack.accepted,
+                            duplicates = ack.duplicates,
+                            "replayed spooled event batch"
+                        );
+                    }
+                    Err(OperatorError::Unsupported(_)) => {}
+                    Err(err) => {
+                        warn!(%err, "failed to replay spooled events; will retry next flush");
+                        break;
+                    }
+                }
+            }
+        }
+
         let mut tracker = SessionTracker::new();
         let mut batch: VecDeque<Value> = VecDeque::with_capacity(config.operator_forward.batch_max);
         let mut dropped: u64 = 0;
@@ -294,12 +324,20 @@ pub fn spawn_event_forwarder(
         ));
         flush.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut next_seq: u64 = 0;
+        let mut was_failing = false;
 
         loop {
             tokio::select! {
                 () = flush_tick(&mut flush) => {
                     if !batch.is_empty() {
-                        flush_once(&operator, &mut batch, &identity).await;
+                        let ok = flush_once(&operator, &mut batch, &identity).await;
+                        if ok && was_failing {
+                            debug!("operator reconnected; event forwarder recovered");
+                            was_failing = false;
+                        } else if !ok {
+                            was_failing = true;
+                            maybe_spill(event_spool.as_ref(), &mut batch, &config);
+                        }
                     }
                 }
                 received = rx.recv() => {
@@ -325,7 +363,14 @@ pub fn spawn_event_forwarder(
                                 bus.publish(synth);
                             }
                             if batch.len() >= config.operator_forward.batch_max {
-                                flush_once(&operator, &mut batch, &identity).await;
+                                let ok = flush_once(&operator, &mut batch, &identity).await;
+                                if ok && was_failing {
+                                    debug!("operator reconnected; event forwarder recovered");
+                                    was_failing = false;
+                                } else if !ok {
+                                    was_failing = true;
+                                    maybe_spill(event_spool.as_ref(), &mut batch, &config);
+                                }
                             }
                             if dropped > 0 {
                                 warn!(dropped, "operator event forwarder buffer overflow");
@@ -381,17 +426,88 @@ pub fn spawn_system_pusher(
     })
 }
 
+/// Spawn the status heartbeat task.
+///
+/// Periodically re-pushes the booth's current [`BoothStatus`] so the
+/// operator never shows stale state — even if it missed an earlier
+/// transition push due to a transient network failure.
+#[allow(clippy::needless_pass_by_value)]
+pub fn spawn_status_heartbeat(
+    bus: TelemetryBus,
+    operator: Arc<dyn OperatorClient>,
+    config: ObservabilityConfig,
+) -> JoinHandle<()> {
+    use booth_hal::BoothStatus;
+
+    let mut rx = bus.subscribe();
+    tokio::spawn(async move {
+        let interval_ms = config.operator_forward.heartbeat_interval_ms;
+        if interval_ms == 0 {
+            return;
+        }
+        let mut heartbeat = tokio::time::interval(Duration::from_millis(interval_ms));
+        heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        let mut current_status: BoothStatus = BoothStatus::Idle;
+
+        loop {
+            tokio::select! {
+                () = flush_tick(&mut heartbeat) => {
+                    if let Err(err) = operator.put_status(current_status).await {
+                        debug!(%err, "status heartbeat PUT /v1/status failed");
+                    } else {
+                        debug!(status = %current_status, "status heartbeat pushed");
+                    }
+                }
+                received = rx.recv() => {
+                    match received {
+                        Ok(record) => {
+                            if let TelemetryEvent::StateTransition { to, .. } = &record.event {
+                                current_status = state_name_to_booth_status(to);
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => (),
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Map a state-machine state name to the coarse [`BoothStatus`] pushed to
+/// the operator.
+fn state_name_to_booth_status(name: &str) -> booth_hal::BoothStatus {
+    use booth_hal::BoothStatus;
+    match name {
+        "idle" | "Idle" => BoothStatus::Idle,
+        "dial_tone" | "DialTone" => BoothStatus::DialTone,
+        "playing_question" | "PlayingQuestion" => BoothStatus::PlayingQuestion,
+        "recording" | "Recording" => BoothStatus::Recording,
+        "uploading" | "Uploading" => BoothStatus::Uploading,
+        "playing_message" | "PlayingMessage" => BoothStatus::PlayingMessage,
+        "playing_instructions" | "PlayingInstructions" => BoothStatus::PlayingInstructions,
+        // Conservative fallback: if we see an unknown state name, report Idle
+        // rather than panicking. The operator treats unknown states gracefully.
+        _ => BoothStatus::Idle,
+    }
+}
+
 async fn flush_tick(interval: &mut tokio::time::Interval) {
     interval.tick().await;
 }
 
+/// Attempt to flush the event batch to the operator.
+///
+/// Returns `true` on success (batch cleared), `false` on failure (batch
+/// retained for next attempt).
 async fn flush_once(
     operator: &Arc<dyn OperatorClient>,
     batch: &mut VecDeque<Value>,
     identity: &RuntimeIdentity,
-) {
+) -> bool {
     if batch.is_empty() {
-        return;
+        return true;
     }
     let events: Vec<&Value> = batch.iter().collect();
     let body = json!({ "events": events }).to_string();
@@ -404,17 +520,20 @@ async fn flush_once(
                 "POST /v1/events flushed"
             );
             batch.clear();
+            true
         }
         Err(OperatorError::Unsupported(_)) => {
             // The operator client doesn't support events at all; drop
             // the batch silently so we don't loop forever.
             batch.clear();
+            true
         }
         Err(err) => {
             // Keep the batch buffered for the next flush; the buffer cap
             // in push_with_cap will eventually drop oldest if the
             // operator stays unreachable.
             warn!(%err, "POST /v1/events failed; keeping batch buffered");
+            false
         }
     }
 }
@@ -428,6 +547,32 @@ fn push_with_cap(batch: &mut VecDeque<Value>, item: Value, cap: usize, dropped_c
         *dropped_counter = dropped_counter.saturating_add(1);
     }
     batch.push_back(item);
+}
+
+/// Spill the in-memory batch to disk when the operator is unreachable and
+/// the buffer is approaching capacity. This prevents event loss across
+/// extended outages or booth restarts.
+fn maybe_spill(
+    spool: Option<&Arc<crate::event_spool::EventSpool>>,
+    batch: &mut VecDeque<Value>,
+    config: &ObservabilityConfig,
+) {
+    let Some(spool) = spool else { return };
+    // Only spill when the buffer is at least half full — avoids spilling
+    // tiny batches on every transient hiccup.
+    if batch.len() < config.operator_forward.buffer_max / 2 {
+        return;
+    }
+    let items: Vec<Value> = batch.drain(..).collect();
+    if let Err(err) = spool.spill(&items) {
+        warn!(%err, "failed to spill event batch to disk");
+        // Put the items back so push_with_cap can still evict oldest.
+        for item in items {
+            batch.push_back(item);
+        }
+    } else {
+        debug!(count = items.len(), "spilled event batch to disk");
+    }
 }
 
 fn monotonic_ns_of(record: &TelemetryRecord) -> u64 {

@@ -93,3 +93,6 @@ conf-files = [
     "/etc/apt/apt.conf.d/50-telephone-booth-unattended",
 ]
 maintainer-scripts = "../../packaging/debian"
+
+[dev-dependencies]
+tempfile = "3"
