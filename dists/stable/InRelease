@@ -4,39 +4,39 @@ Hash: SHA512
 Architectures: arm64 armhf
 Codename: stable
 Components: main
-Date: Tue, 26 May 2026 14:37:46 +0000
+Date: Tue, 26 May 2026 14:42:37 +0000
 Description: Telephone-Booth phone-side client packages
 Label: Telephone-Booth
 Origin: Telephone-Booth
 Suite: stable
 MD5Sum:
- 2a9700dde09858a4151a27da7a12fb2b              216 Release
+ c6aa5a5d4dcdf7b46cace7cf6fbab976              216 Release
  73db658d204b617fc0ac5a9d839f11e2             1794 main/binary-arm64/Packages
- 9ca0737da56ea13cd327163751d185a0              811 main/binary-arm64/Packages.gz
+ 6659832e608744ef1ab29342d66c8896              811 main/binary-arm64/Packages.gz
  9f57261c4e8f2afb51f0a5159da154e7             1794 main/binary-armhf/Packages
- 4e0f7413455965a752b5799a22b13c6b              812 main/binary-armhf/Packages.gz
+ 792d2b981655c7d1c4bbc14f9101cc1a              812 main/binary-armhf/Packages.gz
 SHA1:
- eb658c9cce23eedc4f48ff399fa3669884e700db              216 Release
+ 2efeebdbb6d253f14ffbee783870c5938bf802fb              216 Release
  d453db5e37f6bc900f94ae33ad1dbdcad5ac3fb3             1794 main/binary-arm64/Packages
- e527562485eaecdd5a271aa6759eda8fee1c178c              811 main/binary-arm64/Packages.gz
+ 216411f60753dc8cf4390d08aefd6685c63cd074              811 main/binary-arm64/Packages.gz
  915d82d1028a68deecfe8cc7509b3f6f9baea8fd             1794 main/binary-armhf/Packages
- 7269a3aabbb7d6cebda6a1f0ed3b1048d7ad6dda              812 main/binary-armhf/Packages.gz
+ f8cb147ee238febf6d53f0dbcb0bc5af12b4bc5b              812 main/binary-armhf/Packages.gz
 SHA256:
- f310d7bcdc149b409ce060ebbdc012e2982bbe65a50728bbebce8866638c8fe0              216 Release
+ c68ada9926213f1150048cec15b394a80b43020dfc54dc57642dc188c3fa304f              216 Release
  e16af3a66bf7756c1dca2deadd961777264ff402f8424ec8093b90a09c2fca79             1794 main/binary-arm64/Packages
- 13be351071876c659f0e04721ca3adefb220d0236bc386c9479c6accce0f8fb1              811 main/binary-arm64/Packages.gz
+ 5ceec19ae873afd71be4586144e59db80d76ab4390f5fb05a0536e85364a4e3b              811 main/binary-arm64/Packages.gz
  852b73645536161202563a321d4e5076759af8766ae5516d15bfa72d71032ba5             1794 main/binary-armhf/Packages
- 990f36685a61265784617fd8eec21196f6c437ccbc18748a83ef6f92dfbffce0              812 main/binary-armhf/Packages.gz
+ 13ec7ffe9df9c84a5376c980ffd8528fbe3e3962dbe99d0e6f8457bc73bc8a9c              812 main/binary-armhf/Packages.gz
 SHA512:
- 76b600fb50c42ddc194d6bb0522a294b89f7cdbfd5b6e394902b34339c9fbccb7fad3640486a02d370d1880696e0e896dc8a803d6bb03ca26f596d1dca17f824              216 Release
+ fc4e1b9927f64ca427d0c443b79b8640bf19e7eedeacea8730f94bea6f218bded76daa0fd646ad5463ddd74dd3caddcb079f109df0b0270395d3224df945276d              216 Release
  bfe02268202e00c95f6cce9d05adc23c1df8bbcaf8a5c2ad5541be43043081839e83c2a4e103513e65db50fd28dd9735971cc1a6d0d335ad7e173665b30fbe5f             1794 main/binary-arm64/Packages
- d142204a4d56633fbac053de4d03ebc566f5f91f00686e79e3765b3073e837e5f14cdb7db95f620f83a391a5fb40e50d7643e7d1b29c8de734ae721bbc883662              811 main/binary-arm64/Packages.gz
+ baff1acf8b65f2ef213ac8051e8c3e81f8cc34ce55e7f36a52d8626bf12020d16b77247a66e2f06124617997032e4013aa6bb94def5f337d6a6b1b5fe358a2fd              811 main/binary-arm64/Packages.gz
  5817c02f7c9b3536f955188d399587bdf162bec2a8afe063a7ad238117c2d83075352292eb8243d19cc816281cec6121eb5bbba09ff895c813b778dd91f88a2b             1794 main/binary-armhf/Packages
- 51f0f0bcf56227f91fac8bfd19e5d65218e42e8d977f6fa722b47b338b10290c84f8c57bd85e15eb390f1a57ec37af0a4be99b31436de56c01aa6563eff45446              812 main/binary-armhf/Packages.gz
+ aa9b21325095c5a7fdb2f9ad7138115399f3aebd0b10496bb48df284bfb074d9a806b2e16bdb6fdbc6291134277f17051e6d455f92bf873fda75f9a0b0475878              812 main/binary-armhf/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQSn+DgWVkkni8ItNqAfRx2prhKbPAUCahWwOgAKCRAfRx2prhKb
-PN8MAP429zRWVpd9zzOxucfuCBFp0ciryontf0t5+Qh3oy+UugD/ZlP99mqsEeZj
-sAnpw4V7+KfQ/VWhl3uOcLl+8LXWyQs=
-=CQAC
+iHUEARYKAB0WIQSn+DgWVkkni8ItNqAfRx2prhKbPAUCahWxXQAKCRAfRx2prhKb
+PAd+AQCCub4GQI0o8bEuSTzZXR8PP/hVmGUV7MEE8bC3YrODqQD/SqthbrwP9cPx
+/p0ryYYO31kCyvXq7VBl2Takvvc5Yg0=
+=7nyz
 -----END PGP SIGNATURE-----
