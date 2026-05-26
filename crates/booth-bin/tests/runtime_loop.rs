@@ -23,6 +23,7 @@ async fn runtime_accepts_debug_events_and_dispatches_effects() -> Result<(), Box
             start_debug: false,
             listen_signals: false,
             notify_systemd: false,
+            ..RuntimeOptions::default()
         },
     );
 
@@ -105,6 +106,7 @@ async fn hangup_during_slow_fetch_is_not_blocked() -> Result<(), Box<dyn Error>>
             start_debug: false,
             listen_signals: false,
             notify_systemd: false,
+            ..RuntimeOptions::default()
         },
     );
 
@@ -171,6 +173,7 @@ async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>
             start_debug: false,
             listen_signals: false,
             notify_systemd: false,
+            ..RuntimeOptions::default()
         },
     );
 

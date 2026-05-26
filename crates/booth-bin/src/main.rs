@@ -10,6 +10,7 @@ use booth_bin::{
     DEFAULT_CONFIG_PATH, RuntimeOptions, build_pi_adapters, check_runtime, load_config,
     render_config_toml, simulate_pulses, spawn_runtime,
 };
+use booth_hal::RuntimeMode;
 use booth_telemetry::TelemetryBus;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -223,19 +224,33 @@ fn print_json_block(value: Option<&serde_json::Value>) -> Result<()> {
 }
 
 async fn run(config: booth_bin::RuntimeConfig, mock: bool) -> Result<()> {
+    let runtime_mode = if mock {
+        RuntimeMode::Mock
+    } else {
+        RuntimeMode::Real
+    };
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         default_config = DEFAULT_CONFIG_PATH,
         mock,
+        runtime_mode = %runtime_mode,
         "starting telephone-booth runtime"
     );
     let bus = TelemetryBus::new(config.ring_buffer_capacity());
     let adapters = if mock {
         mock_adapters(&bus)?
     } else {
-        build_pi_adapters(&config, &bus)?
+        build_pi_adapters(&config, &bus, runtime_mode)?
     };
-    let handle = spawn_runtime(config, adapters, bus, RuntimeOptions::default());
+    let handle = spawn_runtime(
+        config,
+        adapters,
+        bus,
+        RuntimeOptions {
+            runtime_mode,
+            ..RuntimeOptions::default()
+        },
+    );
     let final_state = handle.join.await.context("runtime task panicked")??;
     tracing::info!(state = final_state.tag(), "runtime stopped");
     Ok(())

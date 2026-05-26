@@ -475,6 +475,60 @@ pub enum StorageError {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime mode
+// ---------------------------------------------------------------------------
+
+/// How the booth process is wired up at runtime.
+///
+/// Distinct from the booth's call state ([`BoothStatus`]): this describes
+/// **how** the binary is running rather than what it is doing right now.
+/// Surfaced to the operator so the UI can flag non-production booths
+/// (e.g. with a `MOCK` / `SIM` badge) and so Grafana can filter dashboards
+/// to exclude synthetic traffic.
+///
+/// Precedence at startup (see `booth-bin`): if both `--simulator` and
+/// `--mock` are active, the effective mode is [`RuntimeMode::Simulator`]
+/// — the TUI taking over input is the more user-visible fact than the
+/// mock adapters running underneath. The simulator can be paired with
+/// either mock or real backend adapters; the mode reflects the input
+/// surface, not the I/O backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMode {
+    /// Production wiring: real GPIO / audio / HTTP adapters.
+    #[default]
+    Real,
+    /// `booth-mock` adapters wired throughout; no real hardware or
+    /// network I/O. Typical on a developer laptop or CI.
+    Mock,
+    /// The TUI simulator is driving input. Backend adapters may still be
+    /// real (audio + operator HTTP) or mock — the mode reflects only
+    /// that the human-input surface is synthetic.
+    Simulator,
+}
+
+impl RuntimeMode {
+    /// Stable wire-format string (matches the serde representation).
+    ///
+    /// Useful for metric labels and log fields that want a `&'static str`
+    /// without going through `serde_json`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Real => "real",
+            Self::Mock => "mock",
+            Self::Simulator => "simulator",
+        }
+    }
+}
+
+impl fmt::Display for RuntimeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // System snapshot
 // ---------------------------------------------------------------------------
 
@@ -522,6 +576,12 @@ pub struct SystemSnapshot {
     /// Pi throttling / undervoltage flags (`vcgencmd get_throttled`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throttling: Option<ThrottlingFlags>,
+    /// How the booth process is wired up at runtime. `None` when the
+    /// snapshot is taken in a context that does not know the mode (older
+    /// booths predating this field, or unit tests that build snapshots
+    /// directly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<RuntimeMode>,
 }
 
 /// CPU utilization plus load averages.
@@ -939,6 +999,10 @@ pub fn redact_url(url: &str) -> Cow<'_, str> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test assertions use expect for clearer panic messages on failure"
+)]
 mod tests {
     use super::*;
 
@@ -990,5 +1054,53 @@ mod tests {
     fn preserves_path_only_url_no_query() {
         let url = "http://localhost:8080/v1/audio/tone.flac";
         assert_eq!(redact_url(url), url);
+    }
+
+    #[test]
+    fn runtime_mode_serializes_snake_case() {
+        let json = serde_json::to_string(&RuntimeMode::Real).expect("serialize real");
+        assert_eq!(json, "\"real\"");
+        let json = serde_json::to_string(&RuntimeMode::Mock).expect("serialize mock");
+        assert_eq!(json, "\"mock\"");
+        let json = serde_json::to_string(&RuntimeMode::Simulator).expect("serialize simulator");
+        assert_eq!(json, "\"simulator\"");
+    }
+
+    #[test]
+    fn runtime_mode_round_trips() {
+        for mode in [RuntimeMode::Real, RuntimeMode::Mock, RuntimeMode::Simulator] {
+            let json = serde_json::to_string(&mode).expect("serialize");
+            let parsed: RuntimeMode = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(mode, parsed);
+            assert_eq!(mode.as_str(), parsed.as_str());
+        }
+    }
+
+    #[test]
+    fn runtime_mode_default_is_real() {
+        assert_eq!(RuntimeMode::default(), RuntimeMode::Real);
+    }
+
+    #[test]
+    fn system_snapshot_omits_runtime_mode_when_none() {
+        let snapshot = SystemSnapshot::default();
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        assert!(
+            !json.contains("runtimeMode"),
+            "default snapshot should omit runtimeMode, got: {json}"
+        );
+    }
+
+    #[test]
+    fn system_snapshot_emits_runtime_mode_when_set() {
+        let snapshot = SystemSnapshot {
+            runtime_mode: Some(RuntimeMode::Simulator),
+            ..SystemSnapshot::default()
+        };
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        assert!(
+            json.contains("\"runtimeMode\":\"simulator\""),
+            "snapshot should carry simulator mode, got: {json}"
+        );
     }
 }

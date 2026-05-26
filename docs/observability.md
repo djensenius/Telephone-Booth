@@ -149,6 +149,7 @@ fields:
 | `uptime_seconds`          | Host uptime.                                                   |
 | `throttling`              | Pi `vcgencmd get_throttled` flags. **Not populated in v1.**    |
 | `tailscale`               | Connected state. **Not populated in v1.**                      |
+| `runtime_mode`            | One of `real`, `mock`, `simulator`. Tells the operator UI whether to show a `MOCK` / `SIM` badge. Mock and simulator booths do real network I/O against the operator, so this field is the only signal the backend has that the booth is non-production. `None` for older booths predating this field. |
 
 Pi-only fields are `None` on macOS dev machines. The simulator and
 host-runtime test path both exercise the sysinfo branch so dashboards
@@ -190,6 +191,7 @@ error messages) ever become labels.
 | `booth_audio_input_dbfs`            | (none)                              |
 | `booth_audio_output_dbfs`           | (none)                              |
 | `booth_event_forward_inflight`      | (none)                              |
+| `booth_info`                        | `mode` (`real`, `mock`, `simulator`) — always 1.0; lets Grafana / VictoriaMetrics filter dashboards by runtime mode (e.g. `booth_calls_total * on(booth_id) group_left() booth_info{mode="real"}` to exclude mock / simulator booths). Cardinality is bounded to 3. |
 
 ### Histograms
 

@@ -20,7 +20,7 @@ use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioPort, OperatorClient,
-    OperatorError, PinRole, RecordingId, TelemetryEvent,
+    OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
 };
 use booth_pi::{
     AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
@@ -157,6 +157,10 @@ pub struct RuntimeOptions {
     pub listen_signals: bool,
     /// Send systemd readiness notification when the `systemd` feature is enabled.
     pub notify_systemd: bool,
+    /// How the booth process is wired up. Threaded through to the system
+    /// sampler so every `SystemSnapshot` carries a `runtimeMode` field
+    /// and to the `booth_info{mode=…}` gauge for Grafana filtering.
+    pub runtime_mode: RuntimeMode,
 }
 
 impl Default for RuntimeOptions {
@@ -165,6 +169,7 @@ impl Default for RuntimeOptions {
             start_debug: true,
             listen_signals: true,
             notify_systemd: true,
+            runtime_mode: RuntimeMode::Real,
         }
     }
 }
@@ -272,7 +277,14 @@ pub fn simulate_pulses(pulses: u8) -> Vec<(Event, State, Vec<Effect>)> {
 }
 
 /// Build runtime adapters backed by the Raspberry Pi implementation.
-pub fn build_pi_adapters(config: &RuntimeConfig, bus: &TelemetryBus) -> Result<RuntimeAdapters> {
+///
+/// `runtime_mode` is attached to the operator client so every outbound
+/// `PUT /v1/status` carries a `runtimeMode` field for the operator UI.
+pub fn build_pi_adapters(
+    config: &RuntimeConfig,
+    bus: &TelemetryBus,
+    runtime_mode: RuntimeMode,
+) -> Result<RuntimeAdapters> {
     let (telemetry_tx, mut telemetry_rx) = mpsc::channel(128);
     let telemetry_bus = bus.clone();
     tokio::spawn(async move {
@@ -296,7 +308,8 @@ pub fn build_pi_adapters(config: &RuntimeConfig, bus: &TelemetryBus) -> Result<R
     let audio_source =
         PiAudioSource::with_telemetry(config.audio.clone(), Arc::new(storage), Some(telemetry_tx));
     let operator = booth_pi::PiOperatorClient::new(config.operator.clone())
-        .map_err(|err| anyhow!("create operator client: {err}"))?;
+        .map_err(|err| anyhow!("create operator client: {err}"))?
+        .with_runtime_mode(runtime_mode);
 
     Ok(RuntimeAdapters::new(
         Box::new(gpio),
@@ -344,6 +357,7 @@ pub fn build_simulator_adapters(
     config: &RuntimeConfig,
     bus: &TelemetryBus,
     mock_io: bool,
+    runtime_mode: RuntimeMode,
 ) -> Result<(RuntimeAdapters, booth_mock::GpioInjector)> {
     let (gpio, gpio_injector) = booth_mock::MockGpioPort::with_telemetry(bus);
 
@@ -378,7 +392,8 @@ pub fn build_simulator_adapters(
             Some(telemetry_tx),
         );
         let operator = booth_pi::PiOperatorClient::new(config.operator.clone())
-            .map_err(|err| anyhow!("create operator client: {err}"))?;
+            .map_err(|err| anyhow!("create operator client: {err}"))?
+            .with_runtime_mode(runtime_mode);
         (Box::new(sink), Box::new(source), Arc::new(operator))
     };
 
@@ -451,7 +466,8 @@ async fn run_runtime(
         match booth_metrics::install_registry(config.observability.booth_id.clone()) {
             Ok(handle) => {
                 metrics_handle = Some(handle);
-                let sampler = booth_metrics::SystemSampler::new();
+                let sampler =
+                    booth_metrics::SystemSampler::new().with_runtime_mode(options.runtime_mode);
                 let sampler_for_consumer = sampler.clone();
                 let sampler_config = booth_metrics::SamplerConfig {
                     interval: Duration::from_millis(config.observability.sample_interval_ms),

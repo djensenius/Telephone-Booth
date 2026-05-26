@@ -37,6 +37,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, MissedTickBehavior, interval};
 
 use crate::{RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime};
+use booth_hal::RuntimeMode;
 
 const EVENT_HISTORY: usize = 64;
 const RENDER_TICK: Duration = Duration::from_millis(100);
@@ -73,7 +74,8 @@ pub async fn run_simulator(
         }
     }
 
-    let (adapters, injector) = build_simulator_adapters(&config, &bus, mock_io)?;
+    let (adapters, injector) =
+        build_simulator_adapters(&config, &bus, mock_io, RuntimeMode::Simulator)?;
     let handle = spawn_runtime(
         config,
         adapters,
@@ -82,6 +84,7 @@ pub async fn run_simulator(
             start_debug: false,
             listen_signals: false,
             notify_systemd: false,
+            runtime_mode: RuntimeMode::Simulator,
         },
     );
 
