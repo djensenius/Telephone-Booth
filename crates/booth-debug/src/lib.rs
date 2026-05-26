@@ -600,7 +600,7 @@ fn build_router(state: AppState) -> Router {
 
 /// Redirect the bare `/` path to the simulator UI.
 async fn root_redirect() -> Response {
-    axum::response::Redirect::permanent("/v1/ui/simulator").into_response()
+    axum::response::Redirect::to("/v1/ui/simulator").into_response()
 }
 
 /// Build a tiny sub-router that exposes Prometheus text exposition.

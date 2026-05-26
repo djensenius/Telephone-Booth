@@ -49,9 +49,14 @@ impl EventSpool {
 
     /// Scan spool directory and return saved batches in oldest-first order.
     ///
-    /// Each returned item is a ready-to-send JSON string (`{"events":[...]}`).
-    pub fn drain(&self) -> Vec<String> {
-        let mut entries = self.sorted_entries();
+    /// Each returned item is a `(path, body)` tuple: the path to the spool
+    /// file and the ready-to-send JSON string (`{"events":[...]}`).
+    ///
+    /// Files are NOT deleted by this method — the caller must call
+    /// [`Self::remove_file`] after each successful send. This prevents data
+    /// loss if replay fails partway through.
+    pub fn drain(&self) -> Vec<(PathBuf, String)> {
+        let entries = self.sorted_entries();
         let mut batches = Vec::with_capacity(entries.len());
         for path in &entries {
             match std::fs::read(path) {
@@ -60,10 +65,11 @@ impl EventSpool {
                     match serde_json::from_slice::<Vec<Value>>(&bytes) {
                         Ok(events) => {
                             let envelope = serde_json::json!({ "events": events }).to_string();
-                            batches.push(envelope);
+                            batches.push((path.clone(), envelope));
                         }
                         Err(err) => {
                             warn!(path = %path.display(), %err, "corrupt event spool file; removing");
+                            let _ = std::fs::remove_file(path);
                         }
                     }
                 }
@@ -72,13 +78,13 @@ impl EventSpool {
                 }
             }
         }
-        // Delete all scanned files; if replay fails the forwarder will
-        // re-spill them.
-        for path in &mut entries {
-            let _ = std::fs::remove_file(path);
-        }
         debug!(count = batches.len(), "drained event spool");
         batches
+    }
+
+    /// Remove a single spool file after successful replay.
+    pub fn remove_file(path: &Path) {
+        let _ = std::fs::remove_file(path);
     }
 
     /// Returns `true` if there are spooled batches on disk.
@@ -150,7 +156,11 @@ mod tests {
         assert!(spool.has_pending());
         let drained = spool.drain();
         assert_eq!(drained.len(), 1);
-        assert!(drained[0].contains("\"eventId\":\"a\""));
+        let (path, body) = &drained[0];
+        assert!(body.contains("\"eventId\":\"a\""));
+        // File still on disk until explicitly removed
+        assert!(spool.has_pending());
+        EventSpool::remove_file(path);
         assert!(!spool.has_pending());
     }
 

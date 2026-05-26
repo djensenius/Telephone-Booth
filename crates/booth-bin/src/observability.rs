@@ -40,6 +40,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, warn};
+
+use crate::event_spool::EventSpool;
 use uuid::Uuid;
 
 /// Top-level observability config block in `config.toml`.
@@ -289,7 +291,7 @@ pub fn spawn_event_forwarder(
     identity: RuntimeIdentity,
     config: ObservabilityConfig,
     session_handle: SessionHandle,
-    event_spool: Option<Arc<crate::event_spool::EventSpool>>,
+    event_spool: Option<Arc<EventSpool>>,
 ) -> JoinHandle<()> {
     // Subscribe synchronously so we don't miss any events that fire
     // between spawn and the task's first poll.
@@ -298,7 +300,7 @@ pub fn spawn_event_forwarder(
         // Replay any spooled batches from a previous run before processing
         // new events. Events have stable eventIds so replay is idempotent.
         if let Some(ref spool) = event_spool {
-            for body in spool.drain() {
+            for (path, body) in spool.drain() {
                 match operator.push_events_json(&body).await {
                     Ok(ack) => {
                         debug!(
@@ -306,10 +308,13 @@ pub fn spawn_event_forwarder(
                             duplicates = ack.duplicates,
                             "replayed spooled event batch"
                         );
+                        EventSpool::remove_file(&path);
                     }
-                    Err(OperatorError::Unsupported(_)) => {}
+                    Err(OperatorError::Unsupported(_)) => {
+                        EventSpool::remove_file(&path);
+                    }
                     Err(err) => {
-                        warn!(%err, "failed to replay spooled events; will retry next flush");
+                        warn!(%err, "failed to replay spooled events; will retry next startup");
                         break;
                     }
                 }
@@ -481,8 +486,8 @@ fn state_name_to_booth_status(name: &str) -> booth_hal::BoothStatus {
     use booth_hal::BoothStatus;
     match name {
         "idle" | "Idle" => BoothStatus::Idle,
-        "dial_tone" | "DialTone" => BoothStatus::DialTone,
-        "playing_question" | "PlayingQuestion" => BoothStatus::PlayingQuestion,
+        "dial_tone" | "dialing" | "DialTone" => BoothStatus::DialTone,
+        "playing_question" | "beep" | "PlayingQuestion" => BoothStatus::PlayingQuestion,
         "recording" | "Recording" => BoothStatus::Recording,
         "uploading" | "Uploading" => BoothStatus::Uploading,
         "playing_message" | "PlayingMessage" => BoothStatus::PlayingMessage,
@@ -553,7 +558,7 @@ fn push_with_cap(batch: &mut VecDeque<Value>, item: Value, cap: usize, dropped_c
 /// the buffer is approaching capacity. This prevents event loss across
 /// extended outages or booth restarts.
 fn maybe_spill(
-    spool: Option<&Arc<crate::event_spool::EventSpool>>,
+    spool: Option<&Arc<EventSpool>>,
     batch: &mut VecDeque<Value>,
     config: &ObservabilityConfig,
 ) {
