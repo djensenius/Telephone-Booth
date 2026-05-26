@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.1](https://github.com/djensenius/Telephone-Booth/compare/v0.1.0...v0.1.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **ci:** resolve --pubkey-output to absolute path before cd ([#53](https://github.com/djensenius/Telephone-Booth/issues/53)) ([6678da2](https://github.com/djensenius/Telephone-Booth/commit/6678da2a44f72041241506f189200c3c39e9c495))
+* **ci:** tolerate gpg --import exit=2 in publish-apt ([#52](https://github.com/djensenius/Telephone-Booth/issues/52)) ([b4db6e8](https://github.com/djensenius/Telephone-Booth/commit/b4db6e884563bb2d573455bb9e5360162c6f2735))
+* **ci:** unblock cargo-deny audit on main ([#59](https://github.com/djensenius/Telephone-Booth/issues/59)) ([fdcfa11](https://github.com/djensenius/Telephone-Booth/commit/fdcfa1185db1b3a3c8a416aa93ff0a0b8265542c))
+* **observability:** include runtime mode in booth status and system snapshots ([#57](https://github.com/djensenius/Telephone-Booth/issues/57)) ([9321c4b](https://github.com/djensenius/Telephone-Booth/commit/9321c4b5b715a3d58e590cea336a12dabbd5441f))
+* **packaging:** ship simulator+mock in .deb and add [runtime] autostart config ([#56](https://github.com/djensenius/Telephone-Booth/issues/56)) ([b1271ad](https://github.com/djensenius/Telephone-Booth/commit/b1271ad764445390f13f4208787a4f87aae48586))
+
+
+### Documentation
+
+* **adr:** note gh-pages signed-commits ruleset exclusion ([#54](https://github.com/djensenius/Telephone-Booth/issues/54)) ([26b755d](https://github.com/djensenius/Telephone-Booth/commit/26b755dfd30e9c7997cec946e1470671087e08a3))
+* **observability:** document Prometheus deployment topology ([#55](https://github.com/djensenius/Telephone-Booth/issues/55)) ([ae40a01](https://github.com/djensenius/Telephone-Booth/commit/ae40a014902b86a95eab407f49220bc3e06a81f5))
+
 ## [0.1.0](https://github.com/djensenius/Telephone-Booth/compare/v0.1.0...v0.1.0) (2026-05-26)
 
 
