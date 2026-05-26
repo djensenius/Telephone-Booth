@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "rust",
+  "release-type": "simple",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "include-component-in-tag": false,
@@ -22,9 +22,13 @@
   ],
   "packages": {
     ".": {
+      "release-type": "simple",
       "component": "telephone-booth",
       "changelog-path": "CHANGELOG.md",
-      "package-name": "telephone-booth"
+      "package-name": "telephone-booth",
+      "extra-files": [
+        "Cargo.toml"
+      ]
     }
   }
 }
