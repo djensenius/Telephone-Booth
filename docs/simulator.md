@@ -229,15 +229,15 @@ allow_controls = true
 **Controls are blocked against a real-hardware booth.** Even when
 `allow_controls = true`, `/v1/simulate/event` and `/v1/simulate/pulse`
 return `403` (with `{"reason": "headless_real_hardware"}`) whenever the
-booth is running in [`RuntimeMode::Real`][rmode] — i.e. the regular
+booth is running in `RuntimeMode::Real` — i.e. the regular
 `telephone-booth.service` wired to actual GPIO, audio, and operator HTTP.
 This prevents synthetic events from racing with hardware events on a live
 booth. The web UI detects this via `/v1/config` and shows a "headless /
 real-hardware mode" banner with the hook and dial buttons disabled; the
 event stream and state display stay live. Controls are only accepted in
-`RuntimeMode::Mock` or `RuntimeMode::Simulator`.
-
-[rmode]: https://docs.rs/booth-hal/latest/booth_hal/enum.RuntimeMode.html
+`RuntimeMode::Mock` or `RuntimeMode::Simulator` — see
+[`crates/booth-hal/src/lib.rs`](../crates/booth-hal/src/lib.rs) for the
+enum definition.
 
 **Autostart — via config (headless, no TUI):**
 

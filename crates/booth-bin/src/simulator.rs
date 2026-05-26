@@ -110,9 +110,9 @@ pub async fn run_simulator(
     if !token_configured && !runtime_config.debug.allow_tokenless {
         tracing::warn!(
             "web simulator disabled: set [debug] token = \"<secret>\" in \
-             config (or PHONE_BOOTH_DEBUG__TOKEN), or set [debug] \
-             allow_tokenless = true for local-only dev, to enable the web \
-             UI at http://{}/v1/ui/simulator",
+             config (or BOOTH_DEBUG_TOKEN / BOOTH_DEBUG_TOKEN_FILE), or set \
+             [debug] allow_tokenless = true for local-only dev, to enable \
+             the web UI at http://{}/v1/ui/simulator",
             runtime_config.debug.loopback_bind,
         );
     } else {
