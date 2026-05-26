@@ -106,7 +106,7 @@ fn builds_urls_and_headers_without_leaking_token() -> TestResult {
             .get(USER_AGENT)
             .map(reqwest::header::HeaderValue::to_str)
             .transpose()?,
-        Some("telephone-booth/0.1.0")
+        Some(concat!("telephone-booth/", env!("CARGO_PKG_VERSION")))
     );
     assert_eq!(
         headers
