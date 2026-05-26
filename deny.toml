@@ -11,6 +11,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MIT-0",
@@ -28,6 +29,10 @@ yanked = "warn"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal crates declare each other as `version = "*"` with a `path`
+# attribute. Without this flag cargo-deny v2 reports every internal
+# `booth-*` reference as a wildcard error.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

@@ -19,6 +19,11 @@ license = "BSD-3-Clause"
 authors = ["David Jensenius"]
 repository = "https://github.com/djensenius/Telephone-Booth"
 homepage = "https://github.com/djensenius/Telephone-Booth"
+# Workspace crates are internal-only and use `version = "*"` path deps.
+# `publish = false` makes that intent explicit and lets cargo-deny's
+# `allow-wildcard-paths` apply (it only skips wildcard checks for
+# private/non-publishable crates).
+publish = false
 
 # Release profile shipped in the .deb. We let the Rust linker strip
 # symbols during the build (which knows the target's stripping ABI),
