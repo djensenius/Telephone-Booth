@@ -169,7 +169,17 @@ and protected by required reviewers.
 4. Settings → Pages → Source = "Deploy from a branch", branch =
    `gh-pages`, folder = `/ (root)`.
 
-5. Trigger `publish` for `v0.1.0` (workflow_dispatch). On success,
+5. If a repository ruleset requires signed commits on all branches,
+   add `refs/heads/gh-pages` to the ruleset's **exclude** list. The
+   `gh-pages` branch holds CI-generated APT metadata that is signed at
+   the *repository* level by GPG (the `Release.gpg` / `InRelease`
+   files), not at the *commit* level. The CI runner cannot produce
+   git-verified commits without enrolling its own signing key on
+   GitHub, which would be more dangerous than the protection it adds
+   for a branch that no human ever pushes to. The signed-commits rule
+   should still apply to `main` and all source branches.
+
+6. Trigger `publish` for `v0.1.0` (workflow_dispatch). On success,
    `publish-apt` runs and creates the initial `gh-pages` content.
 
 ### Day-2 install on a Pi
