@@ -15,7 +15,7 @@ via `debug.tailscale_enabled` / `debug.lan_enabled`.
 
 | Transport             | URL                                       | TLS                                       |
 | --------------------- | ----------------------------------------- | ----------------------------------------- |
-| **Tailscale serve** (default) | `https://booth.<your-tailnet>.ts.net` | Real Let's Encrypt cert issued by Tailscale |
+| **Tailscale serve** (default) | `https://telephone-booth.<your-tailnet>.ts.net` | Real Let's Encrypt cert issued by Tailscale |
 | **LAN fallback**      | `https://<pi-ip>:8443`                    | Self-signed (rcgen) cert, fingerprint-pinned |
 
 For Tailscale, see [`tailscale.md`](tailscale.md); for the LAN fallback

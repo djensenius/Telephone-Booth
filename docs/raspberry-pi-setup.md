@@ -109,7 +109,7 @@ backend and expose the debug surface with a real TLS certificate.
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up \
-  --hostname=phone-booth \
+  --hostname=telephone-booth \
   --ssh \
   --accept-routes
 ```
@@ -118,8 +118,8 @@ Follow the printed URL to authorize the node in your Tailscale admin console.
 
 **Flags explained:**
 
-- `--hostname=phone-booth` — sets a stable MagicDNS name
-  (`phone-booth.<tailnet>.ts.net`)
+- `--hostname=telephone-booth` — sets a stable MagicDNS name
+  (`telephone-booth.<tailnet>.ts.net`)
 - `--ssh` — enables Tailscale SSH (no need to manage SSH keys)
 - `--accept-routes` — allows using subnet routes advertised by other nodes
 
@@ -132,7 +132,7 @@ tailscale status
 should show the Pi as online. Test SSH from another tailnet device:
 
 ```sh
-ssh phone-booth
+ssh telephone-booth
 ```
 
 ### Ensure it survives reboots
@@ -287,7 +287,7 @@ Verify:
 tailscale serve status
 ```
 
-You can now reach the debug panel at `https://booth.<tailnet-name>.ts.net/`
+You can now reach the debug panel at `https://telephone-booth.<tailnet-name>.ts.net/`
 using the debug token you set in step 6. See [`tailscale.md`](tailscale.md)
 for more detail.
 
@@ -322,7 +322,7 @@ Look for `state_machine.ready` and `operator.connected` log lines.
 
 ## Debug panel
 
-Open `https://booth.<tailnet-name>.ts.net/` in a browser and enter the debug
+Open `https://telephone-booth.<tailnet-name>.ts.net/` in a browser and enter the debug
 token. You should see the live pin matrix, state history, and audio meters.
 
 </details>

@@ -45,7 +45,7 @@ flags during the initial `tailscale up`:
 
 ```sh
 sudo tailscale up \
-  --hostname=phone-booth \
+  --hostname=telephone-booth \
   --ssh \
   --accept-routes \
   --advertise-exit-node=false
@@ -53,10 +53,10 @@ sudo tailscale up \
 
 **Flags explained:**
 
-- `--hostname=phone-booth` — sets a stable, human-readable MagicDNS name
-  (`phone-booth.<tailnet>.ts.net`). Without this, Tailscale auto-generates
+- `--hostname=telephone-booth` — sets a stable, human-readable MagicDNS name
+  (`telephone-booth.<tailnet>.ts.net`). Without this, Tailscale auto-generates
   a name from the OS hostname which may not be descriptive.
-- `--ssh` — enables Tailscale SSH so you can `ssh phone-booth` from any
+- `--ssh` — enables Tailscale SSH so you can `ssh telephone-booth` from any
   device on your tailnet without managing SSH keys or opening port 22 to
   the internet.
 - `--accept-routes` — allows the node to use subnet routes advertised by
@@ -91,7 +91,7 @@ You should see output like:
 Test SSH access from another device on your tailnet:
 
 ```sh
-ssh phone-booth
+ssh telephone-booth
 ```
 
 This should connect without password prompts (Tailscale SSH uses your tailnet
@@ -124,7 +124,7 @@ Re-authenticate with a tag (requires updating ACLs first — see below):
 
 ```sh
 sudo tailscale up \
-  --hostname=phone-booth \
+  --hostname=telephone-booth \
   --ssh \
   --accept-routes \
   --advertise-tags=tag:booth
@@ -170,7 +170,7 @@ comparison.
 After authentication, your booth is accessible at:
 
 ```text
-https://phone-booth.<your-tailnet>.ts.net/
+https://telephone-booth.<your-tailnet>.ts.net/
 ```
 
 The exact tailnet suffix depends on your Tailscale account (e.g.
@@ -216,7 +216,7 @@ From any allowed tailnet device:
 ```sh
 curl -fsS \
   -H "Authorization: Bearer $BOOTH_DEBUG_TOKEN" \
-  https://phone-booth.<your-tailnet>.ts.net/healthz
+  https://telephone-booth.<your-tailnet>.ts.net/healthz
 ```
 
 In the operator UI, set the debug URL to the MagicDNS HTTPS URL and paste
@@ -326,7 +326,7 @@ Restrict access to administrators or a dedicated tag:
 Authenticate the booth with the tag if you use one:
 
 ```sh
-sudo tailscale up --hostname=phone-booth --advertise-tags=tag:booth
+sudo tailscale up --hostname=telephone-booth --advertise-tags=tag:booth
 ```
 
 ## Failure modes and recovery
@@ -338,7 +338,7 @@ sudo tailscale up --hostname=phone-booth --advertise-tags=tag:booth
   Tailscale is ready.
 - **Tailscale is down or the node is expired**: `telephone-booth
   tailscale-status` or `tailscale status` fails. Re-run
-  `sudo tailscale up --hostname=phone-booth --ssh --accept-routes`, then
+  `sudo tailscale up --hostname=telephone-booth --ssh --accept-routes`, then
   `sudo systemctl restart telephone-booth-tailscale-serve`. Use the
   [LAN fallback](lan-fallback.md) while tailnet access is down.
 - **Serve config is missing**: run
