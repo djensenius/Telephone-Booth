@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/djensenius/Telephone-Booth/compare/v0.3.0...v0.3.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **simulator:** pair the TUI with a working web simulator and harden the headless guard ([#70](https://github.com/djensenius/Telephone-Booth/issues/70)) ([f4eed7d](https://github.com/djensenius/Telephone-Booth/commit/f4eed7db1e6012ae8157573894e0ce85704c7a34))
+
 ## [0.3.0](https://github.com/djensenius/Telephone-Booth/compare/v0.2.0...v0.3.0) (2026-05-26)
 
 
