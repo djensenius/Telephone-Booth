@@ -21,13 +21,14 @@ WAN-facing port.
 
 Before setting up Tailscale on your booth:
 
-1. **Enable MagicDNS** in your Tailscale admin console:
+1. **Create a Tailscale account** and tailnet if you don't already have one
+   (sign up at <https://login.tailscale.com>)
+2. **Enable MagicDNS** in your Tailscale admin console:
    - Go to <https://login.tailscale.com/admin/dns>
    - Enable **MagicDNS**
-2. **Enable HTTPS certificates**:
+3. **Enable HTTPS certificates**:
    - In the same DNS settings, enable **HTTPS** (enables automatic Let's
      Encrypt certificate provisioning)
-3. **Create a Tailscale account** and tailnet if you don't already have one
 
 ## Initial setup and authentication
 
@@ -142,7 +143,7 @@ In your Tailscale admin console, go to **Access Controls** and add:
     {
       "action": "accept",
       "src": ["autogroup:admin"],
-      "dst": ["tag:booth:*"]
+      "dst": ["tag:booth:443"]
     },
     {
       "action": "accept",
@@ -156,9 +157,13 @@ In your Tailscale admin console, go to **Access Controls** and add:
 This ensures:
 
 - Only admins can manage booths tagged with `tag:booth`.
-- Admins can reach the booth on any port (including `:443` for the debug
-  surface).
+- Admins can reach the booth on port 443 (the debug surface HTTPS endpoint).
 - The booth can reach the operator backend on port 443.
+
+**Note:** For broader admin access to all booth ports (including SSH), use
+`"dst": ["tag:booth:*"]` instead of `"dst": ["tag:booth:443"]`. See the
+additional [ACL example](#acl-example) at the end of this document for
+comparison.
 
 ## MagicDNS hostname
 
@@ -332,10 +337,10 @@ sudo tailscale up --hostname=phone-booth --advertise-tags=tag:booth
   The `telephone-booth-tailscale-serve.service` will auto-start once
   Tailscale is ready.
 - **Tailscale is down or the node is expired**: `telephone-booth
-  tailscale-status` or `tailscale status` fails. Re-run `sudo tailscale
-  up --hostname=phone-booth --ssh`, then `sudo systemctl restart
-  telephone-booth-tailscale-serve`. Use the [LAN fallback](lan-fallback.md)
-  while tailnet access is down.
+  tailscale-status` or `tailscale status` fails. Re-run
+  `sudo tailscale up --hostname=phone-booth --ssh --accept-routes`, then
+  `sudo systemctl restart telephone-booth-tailscale-serve`. Use the
+  [LAN fallback](lan-fallback.md) while tailnet access is down.
 - **Serve config is missing**: run
   `sudo /usr/share/telephone-booth/setup-tailscale-serve.sh` or
   `sudo systemctl restart telephone-booth-tailscale-serve.service`.
