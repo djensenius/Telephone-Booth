@@ -128,6 +128,13 @@ keep both compilable.
 - Conventional Commits are preferred, e.g. `feat(core): …`,
   `fix(pi): …`, `docs(adr): …`. Not strictly enforced, but it shapes the
   changelog and CI commit-status messages.
+- **Default to `fix:` (patch bump)** for commit and PR titles unless the
+  change genuinely adds user-visible new functionality (`feat:` → minor) or
+  introduces a breaking change (`feat!:` / `BREAKING CHANGE:` → major). When
+  in doubt, prefer `fix:` so release-please proposes a patch release. Pure
+  documentation, refactors, CI, or chore work should still use their
+  conventional prefixes (`docs:`, `refactor:`, `ci:`, `chore:`), which do not
+  bump the version at all.
 - Branch names: `<github-username>/<short-topic>` for personal work and
   `feat/<topic>`, `fix/<topic>`, `chore/<topic>`, `docs/<topic>` for shared
   branches.
@@ -159,6 +166,40 @@ Every PR should:
 If a CI failure is pre-existing on `main` (not caused by your PR), fix it in
 the same PR rather than disabling the check — the project policy is to keep
 `main` green at all times.
+
+## "Ship it" workflow
+
+When the maintainer says **"ship it"** (or an equivalent shorthand) on a PR
+or after a change has been pushed, treat that as a single instruction to
+drive the change all the way to a released version. Concretely:
+
+1. Open the PR if one isn't already open. Default the title to a `fix:`
+   prefix (patch bump) unless the change is clearly a `feat:` or breaking
+   change. Do **not** add a `Co-authored-by: Copilot` trailer.
+2. Wait for **all** required CI jobs to finish (`rustfmt`, `clippy`,
+   `test (ubuntu-latest)`, `test (macos-latest)`,
+   `build (aarch64-apple-darwin)`,
+   `cross-build (aarch64-unknown-linux-gnu)`,
+   `cross-build (armv7-unknown-linux-gnueabihf)`,
+   `rustdoc + docs lint`). If any fails, fix the root cause (don't disable
+   the check) and push again.
+3. Wait for the Copilot PR review. Address every actionable comment from
+   Copilot or any human reviewer. For false positives, reply with the
+   reason and resolve the thread. Re-request review if the reviewer
+   requested changes.
+4. Once CI is green and review feedback is addressed, **squash-merge** the
+   PR into `main`.
+5. `release-please.yml` will (re)open or update the Release PR on the next
+   `main` push. Wait for that Release PR to settle, then **merge the
+   Release PR** to cut the new tag + GitHub Release. By default this will
+   be a patch bump because of the `fix:` default above.
+6. After the Release PR merges, watch `publish.yml` and `publish-apt.yml`
+   to confirm the `.deb`s and APT repository update succeed. If either
+   fails, re-dispatch it (`gh workflow run publish.yml -f tag=vX.Y.Z
+   -f draft=false`) or open a follow-up fix PR.
+
+Only consider "ship it" done once steps 1-6 are complete — not when the
+feature PR merges.
 
 ## Documentation
 

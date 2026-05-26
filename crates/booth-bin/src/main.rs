@@ -318,5 +318,27 @@ fn install_simulator_tracing(
         .with(booth_debug::log_layer());
     let _ = tracing::subscriber::set_global_default(subscriber);
 
+    // Re-point the process's stderr at the same log file so C-level libraries
+    // (e.g. alsa-lib's snd_lib_error_default) can't punch through the TUI by
+    // writing directly to FD 2. Failure here is non-fatal — we'd rather still
+    // launch the TUI than abort startup over a logging side-channel.
+    #[cfg(unix)]
+    redirect_stderr_to(&path_buf);
+
     (Some(path), Some(guard))
+}
+
+/// Replace this process's stderr (FD 2) with a handle to `path`. Used by the
+/// simulator TUI so that out-of-band C-library writers (alsa-lib, libsystemd,
+/// etc.) end up in the simulator log file instead of corrupting the
+/// framebuffer. Best-effort: silently no-ops if the file can't be opened or
+/// the `dup2` call fails.
+#[cfg(all(unix, feature = "simulator"))]
+fn redirect_stderr_to(path: &std::path::Path) {
+    use std::fs::OpenOptions;
+
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = rustix::stdio::dup2_stderr(&file);
 }

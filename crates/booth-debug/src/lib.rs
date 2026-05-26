@@ -58,6 +58,7 @@ use tracing::{Event as TracingEvent, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
+pub use booth_hal::RuntimeMode;
 pub use booth_telemetry::{TelemetryBus, TelemetryRecord};
 
 const DEFAULT_STATE_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
@@ -86,8 +87,23 @@ pub struct DebugConfig {
     #[serde(default)]
     pub lan_enabled: bool,
     /// Whether `POST /v1/simulate/*` control endpoints are available.
+    ///
+    /// This is a *necessary* gate but not sufficient on its own — see
+    /// [`runtime_mode`](Self::runtime_mode). Control endpoints are blocked
+    /// against [`RuntimeMode::Real`] even when `allow_controls = true`, so
+    /// nobody can poke synthetic events into a live booth and race with
+    /// real GPIO / audio hardware.
     #[serde(default)]
     pub allow_controls: bool,
+    /// Runtime mode the booth is operating in (real / mock / simulator).
+    ///
+    /// Set by `booth-bin` from the effective `RuntimeMode` at startup. The
+    /// debug surface uses this to decide whether `/v1/simulate/*` controls
+    /// are accepted (blocked on [`RuntimeMode::Real`]) and exposes it
+    /// to the UI via `/v1/config` so the web simulator can show a
+    /// "headless mode — controls disabled" banner.
+    #[serde(default)]
+    pub runtime_mode: RuntimeMode,
     /// Maximum number of telemetry events and log lines retained for catch-up.
     #[serde(default = "default_ring")]
     pub ring_buffer_capacity: usize,
@@ -134,6 +150,7 @@ impl Default for DebugConfig {
             tailscale_enabled: true,
             lan_enabled: false,
             allow_controls: false,
+            runtime_mode: RuntimeMode::default(),
             ring_buffer_capacity: default_ring(),
             token: None,
             loopback_skip_auth: false,
@@ -201,6 +218,12 @@ pub struct DebugConfigRedacted {
     pub lan_enabled: bool,
     /// Whether simulation controls are enabled.
     pub allow_controls: bool,
+    /// Runtime mode the booth is operating in. The web simulator uses this
+    /// to decide whether to enable its hook / dial controls — they are
+    /// blocked server-side when `runtimeMode == "real"`, regardless of
+    /// `allowControls`.
+    #[serde(default)]
+    pub runtime_mode: RuntimeMode,
     /// Replay/log ring buffer capacity.
     pub ring_buffer_capacity: usize,
     /// Operator CORS origin, when configured.
@@ -216,6 +239,7 @@ impl Default for DebugConfigRedacted {
             tailscale_enabled: true,
             lan_enabled: false,
             allow_controls: false,
+            runtime_mode: RuntimeMode::default(),
             ring_buffer_capacity: default_ring(),
             operator_origin: None,
             loopback_skip_auth: false,
@@ -231,6 +255,7 @@ impl DebugConfigRedacted {
             tailscale_enabled: config.tailscale_enabled,
             lan_enabled: config.lan_enabled,
             allow_controls: config.allow_controls,
+            runtime_mode: config.runtime_mode,
             ring_buffer_capacity: config.ring_buffer_capacity,
             operator_origin: config.operator_origin.clone(),
             loopback_skip_auth: config.loopback_skip_auth,
@@ -755,13 +780,13 @@ struct CertFingerprintResponse {
 async fn simulate_event(
     State(state): State<AppState>,
     Json(event): Json<Event>,
-) -> Result<Json<SimulateResponse>, StatusCode> {
+) -> Result<Json<SimulateResponse>, Response> {
     ensure_controls(&state)?;
     state
         .runtime_tx
         .send(RuntimeCommand::InjectEvent(event))
         .await
-        .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
     Ok(Json(SimulateResponse {
         accepted: true,
         injected: 1,
@@ -776,7 +801,7 @@ struct PulseRequest {
 async fn simulate_pulse(
     State(state): State<AppState>,
     Json(request): Json<PulseRequest>,
-) -> Result<Json<SimulateResponse>, StatusCode> {
+) -> Result<Json<SimulateResponse>, Response> {
     ensure_controls(&state)?;
     let mut injected = 0_u16;
     for _ in 0..request.count {
@@ -784,14 +809,14 @@ async fn simulate_pulse(
             .runtime_tx
             .send(RuntimeCommand::InjectEvent(Event::RotaryPulse))
             .await
-            .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE)?;
+            .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
         injected = injected.saturating_add(1);
     }
     state
         .runtime_tx
         .send(RuntimeCommand::InjectEvent(Event::Tick))
         .await
-        .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_err| StatusCode::SERVICE_UNAVAILABLE.into_response())?;
     injected = injected.saturating_add(1);
     Ok(Json(SimulateResponse {
         accepted: true,
@@ -799,12 +824,52 @@ async fn simulate_pulse(
     }))
 }
 
-fn ensure_controls(state: &AppState) -> Result<(), StatusCode> {
-    if state.config.allow_controls {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
+/// Gate `/v1/simulate/*` endpoints on two server-side conditions:
+///
+/// 1. `allow_controls = true` in the debug config (operator opt-in).
+/// 2. `runtime_mode != Real` — a live booth wired to real GPIO + audio +
+///    operator must never accept synthetic events that would race with
+///    hardware. This is enforced unconditionally, even when
+///    `allow_controls = true`, so that an accidentally-left-on flag can't
+///    turn into a production foot-gun.
+///
+/// Returns a 403 with a JSON body that names the specific reason so the
+/// UI (and any other caller) can render an actionable message.
+//
+// `axum::response::Response` is inherently large (>128 bytes); since this
+// helper exists specifically to build axum error responses we accept the
+// `result_large_err` warning here.
+#[allow(clippy::result_large_err)]
+fn ensure_controls(state: &AppState) -> Result<(), Response> {
+    if !state.config.allow_controls {
+        return Err(controls_denied(
+            "controls_disabled",
+            "Set [debug] allow_controls = true to enable /v1/simulate/* endpoints.",
+            state.config.runtime_mode,
+        ));
     }
+    if state.config.runtime_mode == RuntimeMode::Real {
+        return Err(controls_denied(
+            "headless_real_hardware",
+            "Controls are blocked while the booth is in real-hardware mode \
+             so synthetic events cannot race with live GPIO and audio.",
+            state.config.runtime_mode,
+        ));
+    }
+    Ok(())
+}
+
+fn controls_denied(reason: &'static str, detail: &'static str, mode: RuntimeMode) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "controls_denied",
+            "reason": reason,
+            "detail": detail,
+            "runtimeMode": mode.as_str(),
+        })),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -830,8 +895,36 @@ async fn simulator_ui() -> Response {
         .into_response()
 }
 
-async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| telemetry_socket(socket, state))
+async fn ws_telemetry(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    // Browsers can't set custom Authorization headers on WebSocket connections,
+    // so the simulator UI smuggles the bearer token through
+    // `Sec-WebSocket-Protocol` as `bearer.<token>`. RFC 6455 requires the server
+    // to echo back one of the offered subprotocols (or none of them and accept
+    // anyway, depending on the client). Safari in particular drops the upgrade
+    // with "The network connection was lost" if the client offered a
+    // subprotocol but the server didn't acknowledge one. Pick the matching
+    // bearer token (whichever the client sent, since auth has already passed)
+    // and echo it back so the handshake completes cleanly across browsers.
+    let bearer_protocol = headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .find(|token| token.starts_with("bearer."))
+                .map(str::to_owned)
+        });
+    let upgrader = if let Some(protocol) = bearer_protocol {
+        ws.protocols([protocol])
+    } else {
+        ws
+    };
+    upgrader.on_upgrade(move |socket| telemetry_socket(socket, state))
 }
 
 async fn telemetry_socket(mut socket: WebSocket, state: AppState) {
