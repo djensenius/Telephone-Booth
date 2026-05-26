@@ -22,7 +22,7 @@ use crate::{MAX_UPLOAD_DURATION_MS, OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
     BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion,
-    QuestionId, SystemSnapshot, UploadSlot, redact_url,
+    QuestionId, RuntimeMode, SystemSnapshot, UploadSlot, redact_url,
 };
 
 #[cfg(feature = "operator")]
@@ -54,6 +54,7 @@ const UPLOAD_BACKOFF_BASE: Duration = Duration::from_millis(25);
 pub struct PiOperatorClient {
     config: OperatorConfig,
     base_url: String,
+    runtime_mode: Option<RuntimeMode>,
     #[cfg(feature = "operator")]
     client: reqwest::Client,
     #[cfg(feature = "operator")]
@@ -133,6 +134,7 @@ impl PiOperatorClient {
             Ok(Self {
                 config,
                 base_url,
+                runtime_mode: None,
                 client,
                 upload_client,
             })
@@ -140,8 +142,30 @@ impl PiOperatorClient {
 
         #[cfg(not(feature = "operator"))]
         {
-            Ok(Self { config, base_url })
+            Ok(Self {
+                config,
+                base_url,
+                runtime_mode: None,
+            })
         }
+    }
+
+    /// Attach the booth's runtime mode so every outbound `PUT /v1/status`
+    /// carries a `runtimeMode` field for the operator UI's badge.
+    ///
+    /// Mode is a per-process constant decided at startup, so we accept it
+    /// once via a builder method rather than threading it through every
+    /// status call.
+    #[must_use]
+    pub fn with_runtime_mode(mut self, mode: RuntimeMode) -> Self {
+        self.runtime_mode = Some(mode);
+        self
+    }
+
+    /// Return the runtime mode this client advertises, if any.
+    #[must_use]
+    pub fn runtime_mode(&self) -> Option<RuntimeMode> {
+        self.runtime_mode
     }
 
     /// Return the absolute API URL for a path such as `/v1/status`.
@@ -182,7 +206,7 @@ impl PiOperatorClient {
     pub async fn put_status_ref(&self, status: &BoothStatus) -> Result<(), OperatorError> {
         #[cfg(feature = "operator")]
         {
-            let body = StatusUpdate::new(status);
+            let body = StatusUpdate::new(status, self.runtime_mode);
             self.send_empty(reqwest::Method::PUT, "/v1/status", Some(&body))
                 .await?;
             return Ok(());
@@ -700,17 +724,20 @@ struct StatusUpdate {
     current_question_id: Option<String>,
     current_message_id: Option<String>,
     last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_mode: Option<&'static str>,
 }
 
 #[cfg(feature = "operator")]
 impl StatusUpdate {
-    fn new(status: &BoothStatus) -> Self {
+    fn new(status: &BoothStatus, runtime_mode: Option<RuntimeMode>) -> Self {
         Self {
             state: booth_status_state(status),
             updated_at: rfc3339_now(),
             current_question_id: None,
             current_message_id: None,
             last_error: None,
+            runtime_mode: runtime_mode.map(RuntimeMode::as_str),
         }
     }
 }

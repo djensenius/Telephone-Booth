@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use booth_hal::{
     AudioChannel, AudioDeviceStats, CallOutcome, CpuStats, DiskStats, MemoryStats, NetworkStats,
-    ProcessStats, SystemSnapshot, TelemetryEvent,
+    ProcessStats, RuntimeMode, SystemSnapshot, TelemetryEvent,
 };
 use booth_telemetry::TelemetryBus;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -191,6 +191,7 @@ struct SystemSamplerInner {
     #[cfg(feature = "system")]
     sysinfo: Mutex<SysinfoState>,
     audio: Mutex<AudioDeviceStats>,
+    runtime_mode: Mutex<Option<RuntimeMode>>,
 }
 
 #[cfg(feature = "system")]
@@ -219,8 +220,38 @@ impl SystemSampler {
                     networks: Networks::new_with_refreshed_list(),
                 }),
                 audio: Mutex::new(AudioDeviceStats::default()),
+                runtime_mode: Mutex::new(None),
             }),
         }
+    }
+
+    /// Builder: attach the booth's runtime mode so every sampled snapshot
+    /// carries a `runtimeMode` field. Also publishes a one-shot
+    /// `booth_info{mode=…}` gauge for Grafana / VictoriaMetrics filtering.
+    #[must_use]
+    pub fn with_runtime_mode(self, mode: RuntimeMode) -> Self {
+        self.set_runtime_mode(mode);
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    /// Set (or overwrite) the runtime mode this sampler tags snapshots with.
+    ///
+    /// Public so adapter wiring in `booth-bin` can attach the mode after
+    /// constructing the sampler. Setting the mode also updates the
+    /// `booth_info` gauge so the new value is visible in metrics.
+    pub fn set_runtime_mode(&self, mode: RuntimeMode) {
+        *self.inner.runtime_mode.lock() = Some(mode);
+        // Bounded cardinality: mode has 3 possible values. Set to 1.0 so
+        // `booth_info{mode="real"}` is a recognizable gauge in Grafana.
+        metrics::gauge!("booth_info", "mode" => mode.as_str()).set(1.0_f64);
+    }
+
+    /// Return the runtime mode currently attached, if any.
+    #[must_use]
+    pub fn runtime_mode(&self) -> Option<RuntimeMode> {
+        *self.inner.runtime_mode.lock()
     }
 
     /// Record the latest audio device name observed on the bus.
@@ -242,6 +273,7 @@ impl SystemSampler {
         let mut snapshot = SystemSnapshot {
             audio: Some(self.inner.audio.lock().clone()),
             temperature_celsius: read_cpu_temp_celsius(),
+            runtime_mode: *self.inner.runtime_mode.lock(),
             ..SystemSnapshot::default()
         };
         #[cfg(feature = "system")]
@@ -710,6 +742,37 @@ mod tests {
         let audio = snap.audio.expect("audio populated");
         assert_eq!(audio.input_device.as_deref(), Some("Built-in Microphone"));
         assert_eq!(audio.output_device.as_deref(), Some("Built-in Output"));
+    }
+
+    #[test]
+    fn runtime_mode_is_omitted_by_default() {
+        let sampler = SystemSampler::new();
+        assert!(sampler.runtime_mode().is_none());
+        let snap = sampler.sample_once();
+        assert!(snap.runtime_mode.is_none());
+    }
+
+    #[test]
+    fn with_runtime_mode_stamps_each_snapshot() {
+        ensure_registry();
+        let sampler = SystemSampler::new().with_runtime_mode(RuntimeMode::Mock);
+        assert_eq!(sampler.runtime_mode(), Some(RuntimeMode::Mock));
+        let first = sampler.sample_once();
+        let second = sampler.sample_once();
+        assert_eq!(first.runtime_mode, Some(RuntimeMode::Mock));
+        assert_eq!(second.runtime_mode, Some(RuntimeMode::Mock));
+    }
+
+    #[test]
+    fn set_runtime_mode_can_overwrite() {
+        ensure_registry();
+        let sampler = SystemSampler::new().with_runtime_mode(RuntimeMode::Mock);
+        sampler.set_runtime_mode(RuntimeMode::Simulator);
+        assert_eq!(sampler.runtime_mode(), Some(RuntimeMode::Simulator));
+        assert_eq!(
+            sampler.sample_once().runtime_mode,
+            Some(RuntimeMode::Simulator)
+        );
     }
 
     #[test]

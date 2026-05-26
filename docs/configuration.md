@@ -108,6 +108,17 @@ TTYPath=/dev/tty1
 `mock = true` has no such requirement and works under the stock unit —
 useful for bringing up a Pi without the rotary phone wired in.
 
+Whichever mode the booth resolves to is also surfaced to the operator: the
+runtime stamps every `PUT /v1/status` and `PUT /v1/system` payload with a
+`runtimeMode` field (`real`, `mock`, or `simulator`) and exports it as a
+bounded `booth_info{mode=…}` gauge for Grafana / VictoriaMetrics. The
+operator UI uses the field to render a `MOCK` or `SIM` badge so dashboard
+viewers can tell synthetic booths apart at a glance. Simulator mode wins
+over mock when both are set, because "TUI is driving input" is a more
+user-visible fact than "mock adapters underneath" — the simulator can be
+paired with the real `booth-pi` audio + operator adapters and the badge
+should still say `SIM`.
+
 ### Observability
 
 When `observability.enabled = true` (the default) the runtime installs

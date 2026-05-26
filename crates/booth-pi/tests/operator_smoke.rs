@@ -13,7 +13,7 @@
 
 use std::error::Error;
 
-use booth_hal::{BoothStatus, OperatorError};
+use booth_hal::{BoothStatus, OperatorError, RuntimeMode};
 use booth_pi::operator::default_headers;
 use booth_pi::{OperatorConfig, PiOperatorClient, UploadError};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -208,6 +208,49 @@ async fn put_status_sends_shape_and_headers() -> TestResult {
         .and(header("content-type", "application/json"))
         .and(body_string_contains("\"state\":\"dialTone\""))
         .and(body_string_contains("\"updatedAt\""))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    client.put_status_ref(&BoothStatus::DialTone).await?;
+    Ok(())
+}
+
+struct NoRuntimeMode;
+
+impl Match for NoRuntimeMode {
+    fn matches(&self, request: &Request) -> bool {
+        !std::str::from_utf8(&request.body)
+            .unwrap_or("")
+            .contains("runtimeMode")
+    }
+}
+
+#[tokio::test]
+async fn put_status_omits_runtime_mode_by_default() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("PUT"))
+        .and(path("/v1/status"))
+        .and(NoRuntimeMode)
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    client.put_status_ref(&BoothStatus::DialTone).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn put_status_includes_runtime_mode_when_configured() -> TestResult {
+    let server = MockServer::start().await;
+    let client = PiOperatorClient::new(config(server.uri()))
+        .expect("client")
+        .with_runtime_mode(RuntimeMode::Mock);
+    Mock::given(method("PUT"))
+        .and(path("/v1/status"))
+        .and(body_string_contains("\"runtimeMode\":\"mock\""))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&server)

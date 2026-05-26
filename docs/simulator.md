@@ -108,7 +108,12 @@ behind the `simulator` Cargo feature (on by default in `booth-bin`, and
 shipped in the published `.deb`). The runtime is spawned with
 `start_debug: false`, `listen_signals: false`, and `notify_systemd: false`
 so the TUI owns Ctrl+C and the screen, and so the embedded debug HTTP/TLS
-surface does not contend for ports.
+surface does not contend for ports. It is also spawned with
+`runtime_mode: RuntimeMode::Simulator`, which means every `SystemSnapshot`
+the booth pushes to the operator carries `runtimeMode: "simulator"` and the
+operator UI renders a `SIM` badge next to the booth's status — even when
+the simulator is paired with the real `booth-pi` audio + operator adapters.
+Plain `--mock` runs report `runtimeMode: "mock"` the same way.
 
 The terminal is set up via `ratatui` + `crossterm` and is restored from a
 `Drop` guard so a panic or fatal error cannot leave the terminal in raw

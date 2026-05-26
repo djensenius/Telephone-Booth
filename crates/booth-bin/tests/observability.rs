@@ -35,6 +35,7 @@ async fn observability_forwards_call_events_to_operator() -> Result<(), Box<dyn 
             start_debug: false,
             listen_signals: false,
             notify_systemd: false,
+            ..RuntimeOptions::default()
         },
     );
 

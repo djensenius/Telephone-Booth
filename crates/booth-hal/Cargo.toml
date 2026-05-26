@@ -22,3 +22,6 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror = { workspace = true }
 async-trait = { workspace = true, optional = true }
 heapless = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
