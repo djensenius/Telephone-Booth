@@ -583,6 +583,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/cert/fingerprint", get(cert_fingerprint))
         .route("/v1/simulate/event", post(simulate_event))
         .route("/v1/simulate/pulse", post(simulate_pulse))
+        .route("/v1/ui/simulator", get(simulator_ui))
         .route("/v1/ws/telemetry", get(ws_telemetry))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
@@ -797,6 +798,22 @@ fn ensure_controls(state: &AppState) -> Result<(), StatusCode> {
 struct SimulateResponse {
     accepted: bool,
     injected: u16,
+}
+
+/// Serve the self-contained simulator control UI.
+///
+/// Gated behind `allow_controls` — returns 403 if simulator controls are
+/// disabled in the debug config.
+async fn simulator_ui(State(state): State<AppState>) -> Result<Response, StatusCode> {
+    ensure_controls(&state)?;
+    Ok((
+        [(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        )],
+        include_str!("simulator_ui.html"),
+    )
+        .into_response())
 }
 
 async fn ws_telemetry(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {

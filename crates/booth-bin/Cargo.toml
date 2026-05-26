@@ -64,7 +64,7 @@ extended-description = "Phone-side software for the Telephone Booth art installa
 section = "sound"
 priority = "optional"
 depends = "tailscale, alsa-utils"
-recommends = "vmagent, unattended-upgrades"
+recommends = "tmux, vmagent, unattended-upgrades"
 assets = [
     ["target/release/telephone-booth", "/usr/bin/telephone-booth", "755"],
     ["../../README.md", "/usr/share/doc/telephone-booth/README.md", "644"],
@@ -81,6 +81,9 @@ assets = [
     ["../../packaging/debian/telephone-booth.list", "/etc/apt/sources.list.d/telephone-booth.list", "644"],
     ["../../packaging/debian/50-telephone-booth-unattended.conf", "/etc/apt/apt.conf.d/50-telephone-booth-unattended", "644"],
     ["../../scripts/setup-tailscale-serve.sh", "/usr/share/telephone-booth/setup-tailscale-serve.sh", "755"],
+    ["../../scripts/telephone-booth-simulator-tmux.sh", "/usr/share/telephone-booth/telephone-booth-simulator-tmux.sh", "755"],
+    ["../../scripts/telephone-booth-mode.sh", "/usr/sbin/telephone-booth-mode", "755"],
+    ["../../packaging/debian/telephone-booth-simulator.service", "/lib/systemd/system/telephone-booth-simulator.service", "644"],
 ]
 conf-files = [
     "/etc/phone-booth/env",
