@@ -87,7 +87,10 @@ jobs:
             rm -rf "$tmpdir"
           fi
       - name: Build .deb
-        run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
+        # --no-strip: the release profile already strips via the Rust
+        # linker; running cargo-deb's host `strip` on a cross-compiled
+        # aarch64/armv7 binary fails because the host strip is x86_64.
+        run: cargo deb -p booth-bin --no-build --no-strip --target ${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: telephone-booth-${{ matrix.target }}
