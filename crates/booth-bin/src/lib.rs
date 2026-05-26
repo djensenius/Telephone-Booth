@@ -1500,15 +1500,27 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
             .context("parse BOOTH_OBSERVABILITY_FORWARD_ENABLED")?;
     }
 
-    if let Some(value) = env::var_os("BOOTH_RUNTIME_MOCK") {
-        config.runtime.mock =
-            parse_bool(&value.to_string_lossy()).context("parse BOOTH_RUNTIME_MOCK")?;
-    }
-    if let Some(value) = env::var_os("BOOTH_RUNTIME_SIMULATOR") {
-        config.runtime.simulator =
-            parse_bool(&value.to_string_lossy()).context("parse BOOTH_RUNTIME_SIMULATOR")?;
-    }
+    apply_runtime_env_overrides(&mut config.runtime, |key| {
+        env::var_os(key).map(|v| v.to_string_lossy().into_owned())
+    })?;
 
+    Ok(())
+}
+
+/// Apply `BOOTH_RUNTIME_MOCK` / `BOOTH_RUNTIME_SIMULATOR` to a
+/// `RuntimeStartupConfig`. Takes a getter so the parsing logic can be tested
+/// without mutating the process-global environment (which is `unsafe` in
+/// Rust 1.80+ and forbidden workspace-wide).
+fn apply_runtime_env_overrides(
+    config: &mut RuntimeStartupConfig,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    if let Some(value) = get("BOOTH_RUNTIME_MOCK") {
+        config.mock = parse_bool(&value).context("parse BOOTH_RUNTIME_MOCK")?;
+    }
+    if let Some(value) = get("BOOTH_RUNTIME_SIMULATOR") {
+        config.simulator = parse_bool(&value).context("parse BOOTH_RUNTIME_SIMULATOR")?;
+    }
     Ok(())
 }
 
@@ -1726,8 +1738,8 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
 )]
 mod tests {
     use super::{
-        AudioRef, RuntimeConfig, is_sha256_hex, operator_audio_ref, upload_recording,
-        validate_config,
+        AudioRef, RuntimeConfig, RuntimeStartupConfig, apply_runtime_env_overrides, is_sha256_hex,
+        operator_audio_ref, upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2074,5 +2086,63 @@ mod tests {
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("runtime.simulator"));
         assert!(err.to_string().contains("`simulator`"));
+    }
+
+    #[test]
+    fn runtime_env_overrides_apply_to_startup_config() {
+        let mut runtime = RuntimeStartupConfig::default();
+        let vars = std::collections::HashMap::from([
+            ("BOOTH_RUNTIME_MOCK".to_string(), "true".to_string()),
+            ("BOOTH_RUNTIME_SIMULATOR".to_string(), "1".to_string()),
+        ]);
+        apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect("apply env overrides");
+        assert!(runtime.mock);
+        assert!(runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_accept_false_to_disable_a_config_default() {
+        // Simulates a config file with `mock = true` being overridden at
+        // runtime by `BOOTH_RUNTIME_MOCK=false` (e.g. via a systemd drop-in).
+        let mut runtime = RuntimeStartupConfig {
+            mock: true,
+            simulator: false,
+        };
+        let vars = std::collections::HashMap::from([(
+            "BOOTH_RUNTIME_MOCK".to_string(),
+            "false".to_string(),
+        )]);
+        apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect("apply env overrides");
+        assert!(!runtime.mock);
+        assert!(!runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_absent_preserves_config() {
+        let mut runtime = RuntimeStartupConfig {
+            mock: true,
+            simulator: true,
+        };
+        apply_runtime_env_overrides(&mut runtime, |_| None).expect("apply env overrides");
+        assert!(runtime.mock);
+        assert!(runtime.simulator);
+    }
+
+    #[test]
+    fn runtime_env_overrides_reject_invalid_bool() {
+        let mut runtime = RuntimeStartupConfig::default();
+        let vars = std::collections::HashMap::from([(
+            "BOOTH_RUNTIME_MOCK".to_string(),
+            "maybe".to_string(),
+        )]);
+        let err = apply_runtime_env_overrides(&mut runtime, |key| vars.get(key).cloned())
+            .expect_err("invalid bool should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BOOTH_RUNTIME_MOCK"),
+            "error should mention the env var, got: {msg}"
+        );
     }
 }
