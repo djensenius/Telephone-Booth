@@ -36,7 +36,8 @@ You will need:
    environment.
 3. Select your microSD card as the target.
 4. Click the **gear icon** (or press `Ctrl+Shift+X`) to open Advanced Options:
-   - **Set hostname:** e.g. `booth`
+   - **Set hostname:** `telephone-booth` (this will be your local network name:
+     `telephone-booth.local`)
    - **Enable SSH:** use password authentication or paste your public key
    - **Set username and password:** e.g. `pi` / a strong password
    - **Configure Wi-Fi** (if not using Ethernet): enter SSID + passphrase,
@@ -52,10 +53,10 @@ wait about 60 seconds for first boot.
 <details>
 <summary>3. First boot and system configuration</summary>
 
-SSH into the Pi:
+SSH into the Pi (using `.local` for mDNS discovery):
 
 ```sh
-ssh pi@booth.local
+ssh pi@telephone-booth.local
 ```
 
 Update the system:
@@ -183,8 +184,8 @@ For testing an unreleased branch:
 just cross-build aarch64-unknown-linux-gnu   # Pi 4 / 5
 # or: just cross-build armv7-unknown-linux-gnueabihf   # Pi 3 / Zero 2
 just deb
-scp target/aarch64-unknown-linux-gnu/debian/*.deb pi@booth.local:
-ssh pi@booth.local "sudo apt install -y ./telephone-booth_*_arm64.deb"
+scp target/aarch64-unknown-linux-gnu/debian/*.deb pi@telephone-booth.local:
+ssh pi@telephone-booth.local "sudo apt install -y ./telephone-booth_*_arm64.deb"
 ```
 
 ## Option C — download from GitHub Releases

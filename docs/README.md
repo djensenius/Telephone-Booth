@@ -5,10 +5,15 @@ The phone-side Rust client lives in this repo on the `rust-client` branch.
 This index is the source of truth for the docs tree. `just docs-index`
 rebuilds it from the filesystem; CI fails if it drifts.
 
-## For first-time setup
+## Start here
 
-- [Getting started](getting-started.md) — clone → mise install → `just dev`
+- [Project overview](overview.md) — what this is, who it's for, architecture at a glance
+
+## Setup & Development
+
 - [Raspberry Pi setup](raspberry-pi-setup.md) — from-scratch Pi provisioning (OS, audio, Tailscale, deploy, wiring)
+- [Getting started](getting-started.md) — clone → mise install → `just dev`
+- [Simulator TUI](simulator.md) — interactive `--simulator` flag for local testing without a phone
 - [Hardware](hardware.md) — wiring the rotary phone + GPIO pinout
 - [Configuration](configuration.md) — every config key, its default, env-var equivalent
 
@@ -16,7 +21,6 @@ rebuilds it from the filesystem; CI fails if it drifts.
 
 - [Packaging](packaging.md) — building the `.deb`, installing via systemd
 - [Operator API](operator-api.md) — registering with the operator backend, token rotation
-- [Simulator TUI](simulator.md) — interactive `--simulator` flag for local testing without a phone
 - [Tailscale](tailscale.md) — exposing the debug surface over your tailnet
 - [LAN fallback](lan-fallback.md) — self-signed certs + fingerprint pinning
 

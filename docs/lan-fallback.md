@@ -6,6 +6,9 @@ still [Tailscale serve](tailscale.md), which gives a real Let's Encrypt
 certificate; LAN fallback uses a self-signed certificate and explicit
 fingerprint pinning.
 
+**Prefer [Tailscale](tailscale.md) for production** — it provides real
+certificates and encrypted tunnels. Use LAN fallback only when necessary.
+
 ## Security model
 
 LAN fallback is **disabled by default** and binds to loopback

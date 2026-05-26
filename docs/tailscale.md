@@ -7,6 +7,9 @@ MagicDNS name, and obtains/renews a real Let's Encrypt certificate. The
 booth process does not run ACME, store public TLS private keys, or open a
 WAN-facing port.
 
+**If Tailscale isn't available** or you need local LAN access, see
+[LAN fallback](lan-fallback.md) for self-signed certificate setup.
+
 ## Why `tailscale serve` owns HTTPS
 
 - Tailscale already knows the booth's tailnet identity and MagicDNS name.
