@@ -91,6 +91,13 @@ fi
 mkdir -p "$PAGES_DIR/pool/main/t/telephone-booth"
 touch "$PAGES_DIR/.nojekyll"
 
+# Resolve PUBKEY_OUTPUT to an absolute path now, before we 'cd' into
+# PAGES_DIR. Otherwise a relative path like 'pages/foo.gpg' breaks after
+# the cd (it would resolve to '<pages-dir>/pages/foo.gpg').
+if [[ -n "$PUBKEY_OUTPUT" && "$PUBKEY_OUTPUT" != /* ]]; then
+    PUBKEY_OUTPUT="$PWD/$PUBKEY_OUTPUT"
+fi
+
 # Copy any newly-built .debs into the pool. Skip if no new files; that allows
 # rerunning purely to regenerate metadata.
 shopt -s nullglob
