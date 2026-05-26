@@ -116,8 +116,21 @@ jobs:
           fi
           export GNUPGHOME="$(mktemp -d)"
           chmod 700 "$GNUPGHOME"
+          # `gpg --import` returns 2 even on a successful import if it emits
+          # any diagnostic (the "invalid armor header" line that appears when
+          # GitHub Actions masks the secret in the input stream is benign).
+          # Tolerate that exit code and verify success by listing the
+          # resulting secret key instead.
+          set +e
           printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          import_rc=$?
+          set -e
           fpr="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          if [ -z "$fpr" ]; then
+            echo "::error::No secret key was imported (gpg --import exit=$import_rc)."
+            exit 1
+          fi
+          echo "Imported signing key $fpr (gpg --import exit=$import_rc)"
           echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
           echo "APT_SIGNING_KEY_FPR=$fpr" >> "$GITHUB_ENV"
 
