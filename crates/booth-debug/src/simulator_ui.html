@@ -229,6 +229,7 @@ function connectWs() {
   ws.onopen = () => {
     document.getElementById("ws-status").textContent = "🟢 connected";
     document.getElementById("ws-status").className = "ws-status ws-connected";
+    fetchState();
   };
 
   ws.onclose = () => {

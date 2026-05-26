@@ -36,6 +36,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(feature = "simulator")]
 pub mod simulator;
 
+pub mod event_spool;
 pub mod file_storage;
 pub mod observability;
 pub mod pending_uploads;
@@ -456,6 +457,20 @@ async fn run_runtime(
     };
     let session_handle = SessionHandle::default();
 
+    // Open the durable event spool for the operator forwarder.
+    let event_spool_dir = event_spool::event_spool_dir_for(Path::new(&config.audio.recordings_dir));
+    let event_spool: Option<Arc<event_spool::EventSpool>> =
+        match event_spool::EventSpool::open(&event_spool_dir) {
+            Ok(spool) => Some(Arc::new(spool)),
+            Err(err) => {
+                warn!(
+                    dir = %event_spool_dir.display(), %err,
+                    "cannot open event spool; events will not be durable across restarts"
+                );
+                None
+            }
+        };
+
     // Install the Prometheus metrics registry (idempotent) and start the
     // background tasks for booth-metrics + the operator forwarder. All of
     // this is gated on `observability.enabled` so dev runs that don't
@@ -491,11 +506,17 @@ async fn run_runtime(
                         identity.clone(),
                         config.observability.clone(),
                         session_handle.clone(),
+                        event_spool.clone(),
                     ));
                     observability_tasks.push(observability::spawn_system_pusher(
                         bus.clone(),
                         Arc::clone(&operator),
-                        identity,
+                        identity.clone(),
+                        config.observability.clone(),
+                    ));
+                    observability_tasks.push(observability::spawn_status_heartbeat(
+                        bus.clone(),
+                        Arc::clone(&operator),
                         config.observability.clone(),
                     ));
                 }
