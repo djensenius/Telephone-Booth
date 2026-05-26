@@ -1,0 +1,6 @@
+# Telephone-Booth APT repository (managed by the telephone-booth package).
+#
+# Disable upgrades from this repo by commenting out the deb line below.
+# This file is registered as a dpkg conffile, so your edits survive
+# package upgrades.
+deb [signed-by=/usr/share/keyrings/telephone-booth-archive-keyring.gpg] https://djensenius.github.io/Telephone-Booth stable main

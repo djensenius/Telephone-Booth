@@ -63,7 +63,7 @@ extended-description = "Phone-side software for the Telephone Booth art installa
 section = "sound"
 priority = "optional"
 depends = "tailscale, alsa-utils"
-recommends = "vmagent"
+recommends = "vmagent, unattended-upgrades"
 assets = [
     ["target/release/telephone-booth", "/usr/bin/telephone-booth", "755"],
     ["../../README.md", "/usr/share/doc/telephone-booth/README.md", "644"],
@@ -76,7 +76,16 @@ assets = [
     ["../../packaging/debian/env.example", "/etc/phone-booth/env", "640"],
     ["../../packaging/debian/vmagent.env.example", "/etc/phone-booth/vmagent.env", "640"],
     ["../../packaging/debian/vmagent.yaml", "/etc/phone-booth/vmagent.yaml", "644"],
+    ["../../packaging/debian/telephone-booth-archive-keyring.gpg", "/usr/share/keyrings/telephone-booth-archive-keyring.gpg", "644"],
+    ["../../packaging/debian/telephone-booth.list", "/etc/apt/sources.list.d/telephone-booth.list", "644"],
+    ["../../packaging/debian/50-telephone-booth-unattended.conf", "/etc/apt/apt.conf.d/50-telephone-booth-unattended", "644"],
     ["../../scripts/setup-tailscale-serve.sh", "/usr/share/telephone-booth/setup-tailscale-serve.sh", "755"],
 ]
-conf-files = ["/etc/phone-booth/env", "/etc/phone-booth/vmagent.env", "/etc/phone-booth/vmagent.yaml"]
+conf-files = [
+    "/etc/phone-booth/env",
+    "/etc/phone-booth/vmagent.env",
+    "/etc/phone-booth/vmagent.yaml",
+    "/etc/apt/sources.list.d/telephone-booth.list",
+    "/etc/apt/apt.conf.d/50-telephone-booth-unattended",
+]
 maintainer-scripts = "../../packaging/debian"

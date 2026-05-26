@@ -11,13 +11,43 @@ on:
         required: false
         type: boolean
         default: true
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  resolve:
+    name: resolve release inputs
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.derive.outputs.tag }}
+      draft: ${{ steps.derive.outputs.draft }}
+    steps:
+      - id: derive
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "draft=${INPUT_DRAFT:-true}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-deb:
     name: build .deb (${{ matrix.target }})
+    needs: resolve
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -39,6 +69,22 @@ jobs:
           tool: cross,cargo-deb
       - name: Cross-build release
         run: cross build -p booth-bin --release --target ${{ matrix.target }} --features pi,systemd --no-default-features
+      - name: Override keyring with production public key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          if [ -z "${APT_SIGNING_KEY:-}" ]; then
+            echo "::warning::APT_SIGNING_KEY is not set; .deb will ship the in-repo placeholder pubkey. Signed Release files will NOT verify on Pis."
+            exit 0
+          fi
+          tmpdir="$(mktemp -d)"
+          export GNUPGHOME="$tmpdir"
+          chmod 700 "$tmpdir"
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          fpr="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          gpg --batch --export "$fpr" > packaging/debian/telephone-booth-archive-keyring.gpg
+          echo "Replaced keyring with pubkey for $fpr"
+          rm -rf "$tmpdir"
       - name: Build .deb
         run: cargo deb -p booth-bin --no-build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -48,6 +94,7 @@ jobs:
 
   build-tarball:
     name: build tarball (${{ matrix.target }})
+    needs: resolve
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -75,7 +122,7 @@ jobs:
           path: dist/*.tar.gz
 
   release:
-    needs: [build-deb, build-tarball]
+    needs: [resolve, build-deb, build-tarball]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,7 +138,8 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ inputs.tag }}
-          draft: ${{ inputs.draft }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          draft: ${{ needs.resolve.outputs.draft == 'true' }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: release/*

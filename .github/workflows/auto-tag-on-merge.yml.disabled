@@ -1,0 +1,112 @@
+# DISABLED ALTERNATIVE — tag-on-every-merge release model.
+#
+# This file is intentionally named with the `.disabled` suffix so GitHub
+# Actions ignores it. It is the alternative to release-please.yml: instead of
+# batching commits into a Release PR, it bumps the patch version and tags on
+# every merge to main.
+#
+# To switch FROM release-please TO this model:
+#
+#   1. Delete (or .disable) .github/workflows/release-please.yml so the two
+#      do not race.
+#   2. Rename this file to `.github/workflows/auto-tag-on-merge.yml`.
+#   3. Delete .release-please-config.json and .release-please-manifest.json
+#      (their continued presence is harmless but misleading).
+#   4. Commit + merge to main. Each future merge will tag vX.Y.(Z+1) by
+#      default; use a commit footer `Release-Type: minor` or `Release-Type:
+#      major` to override.
+#
+# See docs/adr/0008-automated-releases.md for the full procedure and the
+# reasoning behind the default choice.
+
+name: auto-tag-on-merge
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        default: patch
+        options: [patch, minor, major]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: bump + tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: next
+        env:
+          OVERRIDE_BUMP: ${{ inputs.bump }}
+        run: |
+          set -eu
+          # Find latest vX.Y.Z tag; default to v0.0.0 if none.
+          latest="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1 || true)"
+          latest="${latest:-v0.0.0}"
+          ver="${latest#v}"
+          IFS=. read -r MA MI PA <<EOF
+          $ver
+          EOF
+
+          # Decide bump: commit footer wins; else workflow_dispatch input;
+          # else patch.
+          bump="${OVERRIDE_BUMP:-}"
+          if [ -z "$bump" ]; then
+            msg="$(git log -1 --pretty=%B)"
+            case "$msg" in
+              *"Release-Type: major"*) bump=major ;;
+              *"Release-Type: minor"*) bump=minor ;;
+              *)
+                if printf '%s' "$msg" | grep -qE '^(BREAKING CHANGE|[a-z]+!:)'; then
+                  bump=major
+                elif printf '%s' "$msg" | grep -qE '^feat(\([^)]+\))?:'; then
+                  bump=minor
+                else
+                  bump=patch
+                fi
+                ;;
+            esac
+          fi
+
+          case "$bump" in
+            major) MA=$((MA + 1)); MI=0; PA=0 ;;
+            minor) MI=$((MI + 1)); PA=0 ;;
+            patch) PA=$((PA + 1)) ;;
+            *) echo "::error::Unknown bump '$bump'"; exit 1 ;;
+          esac
+
+          new="v${MA}.${MI}.${PA}"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "tag=$new" >> "$GITHUB_OUTPUT"
+          echo "version=${MA}.${MI}.${PA}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump workspace Cargo.toml + commit
+        env:
+          NEW_VERSION: ${{ steps.next.outputs.version }}
+          NEW_TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -eu
+          sed -i -E "s/^version = \".*\"\$/version = \"${NEW_VERSION}\"/" Cargo.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): ${NEW_TAG}"
+          fi
+          git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
+          git push origin HEAD:main
+          git push origin "$NEW_TAG"

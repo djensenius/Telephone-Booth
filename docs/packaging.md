@@ -98,6 +98,32 @@ adds `booth_id` as an `external_labels` value. See
 
 ## Installing
 
+The recommended path on a fresh Pi is the APT repository (see
+[ADR 0007](adr/0007-apt-distribution.md)). One-time setup:
+
+```sh
+curl -fsSL https://djensenius.github.io/Telephone-Booth/telephone-booth-archive-keyring.gpg \
+  | sudo install -m 0644 /dev/stdin /usr/share/keyrings/telephone-booth-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/telephone-booth-archive-keyring.gpg] https://djensenius.github.io/Telephone-Booth stable main" \
+  | sudo tee /etc/apt/sources.list.d/telephone-booth.list
+sudo apt update
+sudo apt install telephone-booth
+sudo editor /etc/phone-booth/env
+sudo /usr/share/telephone-booth/setup-tailscale-serve.sh
+sudo systemctl restart telephone-booth.service telephone-booth-tailscale-serve.service
+```
+
+Once `telephone-booth` is installed, future `apt` cycles handle upgrades —
+the package itself ships the `/etc/apt/sources.list.d/telephone-booth.list`
+and matching keyring, so re-installing the source on every Pi by hand is
+only required when bootstrapping a brand-new SD card without internet
+during first boot.
+
+### Manual one-off install
+
+If you prefer to install a specific `.deb` directly (for testing a
+pre-release, or on a Pi without internet during the first boot):
+
 ```sh
 sudo apt install ./telephone-booth_0.1.0_arm64.deb
 sudo editor /etc/phone-booth/env
@@ -105,16 +131,40 @@ sudo /usr/share/telephone-booth/setup-tailscale-serve.sh
 sudo systemctl restart telephone-booth.service telephone-booth-tailscale-serve.service
 ```
 
+The package ships the APT source list and keyring as part of its assets,
+so the first manual install automatically registers the repo for future
+`apt upgrade` cycles.
+
 ## Upgrading
 
 ```sh
-sudo apt install ./telephone-booth_<new>_arm64.deb
+sudo apt update
+sudo apt upgrade telephone-booth
 sudo systemctl status telephone-booth.service
 telephone-booth tailscale-status
 ```
 
 State under `/var/lib/phone-booth` and local environment config under
-`/etc/phone-booth/env` are preserved.
+`/etc/phone-booth/env` are preserved across upgrades (those files are
+registered as dpkg conffiles).
+
+### Automatic upgrades
+
+The `telephone-booth` package `Recommends: unattended-upgrades` and ships
+`/etc/apt/apt.conf.d/50-telephone-booth-unattended`, which configures
+`unattended-upgrades` to pull updates from the project's APT origin. To
+opt in on a Pi:
+
+```sh
+sudo apt install unattended-upgrades
+sudo systemctl enable --now unattended-upgrades.service
+```
+
+`unattended-upgrades` runs daily via `apt-daily-upgrade.timer` and will
+restart `telephone-booth.service` after upgrades (systemd notifies on the
+`Type=notify` unit). To opt out, edit
+`/etc/apt/apt.conf.d/50-telephone-booth-unattended` (it is a conffile, so
+your edits survive package upgrades).
 
 ## Removing
 

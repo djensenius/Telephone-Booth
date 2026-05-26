@@ -52,7 +52,22 @@ booth pipeline — state machine, audio, and operator HTTP client — without
 any hardware attached. See [`docs/simulator.md`](./docs/simulator.md) for
 the full key bindings and modes.
 
-To run on a real Pi with a Focusrite (or any USB-Audio-Class-2 device):
+To run on a real Pi with a Focusrite (or any USB-Audio-Class-2 device),
+install from the project's signed APT repository on GitHub Pages
+(see [ADR 0007](./docs/adr/0007-apt-distribution.md)):
+
+```bash
+curl -fsSL https://djensenius.github.io/Telephone-Booth/telephone-booth-archive-keyring.gpg \
+  | sudo install -m 0644 /dev/stdin /usr/share/keyrings/telephone-booth-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/telephone-booth-archive-keyring.gpg] https://djensenius.github.io/Telephone-Booth stable main" \
+  | sudo tee /etc/apt/sources.list.d/telephone-booth.list
+sudo apt update
+sudo apt install telephone-booth
+```
+
+Future upgrades land via `sudo apt upgrade telephone-booth` (or
+automatically when `unattended-upgrades` is installed). For unreleased
+branches, the cross-compile workflow still works:
 
 ```bash
 just cross-build aarch64-unknown-linux-gnu
@@ -82,9 +97,11 @@ docs/             user, operator, and porting documentation
 assets/
 └── debug-ui/     embedded standalone debug UI (htmx)
 .github/workflows/
-├── ci.yml        fmt + clippy + tests + cross-build matrix + docs lint
-├── audit.yml     cargo-deny + cargo-audit on a schedule
-└── publish.yml   workflow_dispatch: builds release artefacts (.deb + tarballs)
+├── ci.yml             fmt + clippy + tests + cross-build matrix + docs lint
+├── audit.yml          cargo-deny + cargo-audit on a schedule
+├── publish.yml        builds release artefacts (.deb + tarballs) on tag push or dispatch
+├── publish-apt.yml    regenerates signed APT repo on gh-pages after publish
+└── release-please.yml maintains a release PR; merge it to cut a release
 ```
 
 ## Related repositories

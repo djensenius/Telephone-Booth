@@ -1,0 +1,155 @@
+name: publish-apt
+# Regenerates the APT repository on the gh-pages branch every time `publish`
+# finishes successfully (or on manual dispatch with an explicit tag). Downloads
+# the .deb assets from the corresponding GitHub Release, rebuilds the
+# Packages / Release indexes with apt-ftparchive, signs them with the project
+# signing key from the production-apt environment, and pushes the result.
+on:
+  workflow_run:
+    workflows: ["publish"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)publish to the APT repo (e.g. v0.1.0)."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-apt
+  cancel-in-progress: false
+
+jobs:
+  publish-apt:
+    name: publish APT repo
+    runs-on: ubuntu-latest
+    # production-apt is a protected GitHub Environment that holds the signing
+    # key. Restrict its deployment branches to `main` in repo settings.
+    environment: production-apt
+    permissions:
+      contents: write
+    # On workflow_run, only proceed when the upstream `publish` succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          UPSTREAM_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            # `head_branch` on a workflow_run from a tag push is the tag name.
+            tag="$UPSTREAM_HEAD_BRANCH"
+          fi
+          if [ -z "${tag:-}" ] || ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+            echo "::error::Refusing to publish: tag '$tag' does not look like vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main (for scripts/build-apt-repo.sh)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: src
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: gh-pages
+          path: pages
+        continue-on-error: true
+
+      - name: Bootstrap gh-pages if missing
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -eu
+          if [ ! -d pages/.git ]; then
+            mkdir -p pages
+            cd pages
+            git init -q -b gh-pages
+            git remote add origin "https://github.com/${{ github.repository }}.git"
+            : > .nojekyll
+            git add .nojekyll
+            git -c user.name=github-actions -c user.email=actions@github.com commit -q -m "bootstrap: orphan gh-pages branch"
+          fi
+
+      - name: Verify release is not draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -eu
+          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [ "$is_draft" = "true" ]; then
+            echo "::error::Release $TAG is still a draft; refusing to publish APT repo."
+            exit 1
+          fi
+
+      - name: Download .deb assets from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -eu
+          mkdir -p debs
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern '*.deb' --dir debs
+          ls -lh debs
+
+      - name: Install apt-utils + gnupg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends apt-utils gnupg
+
+      - name: Import signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_KEY_PASSPHRASE: ${{ secrets.APT_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -eu
+          if [ -z "${APT_SIGNING_KEY:-}" ]; then
+            echo "::error::APT_SIGNING_KEY secret is not set. Configure it in the production-apt environment."
+            exit 1
+          fi
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          fpr="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "APT_SIGNING_KEY_FPR=$fpr" >> "$GITHUB_ENV"
+
+      - name: Build APT repo
+        env:
+          APT_SIGNING_KEY_PASSPHRASE: ${{ secrets.APT_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -eu
+          src/scripts/build-apt-repo.sh \
+            --pages-dir pages \
+            --debs-dir debs \
+            --signing-key-fpr "$APT_SIGNING_KEY_FPR" \
+            --pubkey-output pages/telephone-booth-archive-keyring.gpg
+
+      - name: Commit + push gh-pages
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        working-directory: pages
+        run: |
+          set -eu
+          # Use the project signing key fingerprint as part of the commit
+          # message so it's easy to audit which key produced which state.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to gh-pages; nothing to push."
+            exit 0
+          fi
+          git commit -m "publish: $TAG (signing-key $APT_SIGNING_KEY_FPR)"
+          remote="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          # First push may need -u if the branch was bootstrapped above.
+          git push "$remote" HEAD:gh-pages

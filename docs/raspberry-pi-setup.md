@@ -124,40 +124,46 @@ should show the Pi as online.
 </details>
 
 <details>
-<summary>5. Deploy the Telephone Booth .deb</summary>
+<summary>5. Deploy the Telephone Booth client</summary>
 
-## Option A — cross-compile from your dev machine
+## Option A — APT repository (recommended)
 
-On your macOS or Linux workstation (with the repo cloned and `mise install`
-done):
+The project publishes a signed APT repository on GitHub Pages
+(see [ADR 0007](adr/0007-apt-distribution.md)). On the Pi:
+
+```sh
+curl -fsSL https://djensenius.github.io/Telephone-Booth/telephone-booth-archive-keyring.gpg \
+  | sudo install -m 0644 /dev/stdin /usr/share/keyrings/telephone-booth-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/telephone-booth-archive-keyring.gpg] https://djensenius.github.io/Telephone-Booth stable main" \
+  | sudo tee /etc/apt/sources.list.d/telephone-booth.list
+sudo apt update
+sudo apt install -y telephone-booth
+```
+
+The `postinst` script creates the `phonebooth` system user, sets up
+directories, enables and starts the service. Future upgrades land via
+`sudo apt upgrade telephone-booth`, or automatically when you also enable
+`unattended-upgrades` (see [packaging.md](packaging.md#automatic-upgrades)).
+
+## Option B — cross-compile from your dev machine
+
+For testing an unreleased branch:
 
 ```sh
 just cross-build aarch64-unknown-linux-gnu   # Pi 4 / 5
 # or: just cross-build armv7-unknown-linux-gnueabihf   # Pi 3 / Zero 2
 just deb
-```
-
-Copy the resulting package to the Pi:
-
-```sh
 scp target/aarch64-unknown-linux-gnu/debian/*.deb pi@booth.local:
-```
-
-## Option B — download from CI
-
-If a GitHub Actions release workflow has run, download the `.deb` artifact
-from the workflow run page and `scp` it to the Pi.
-
-## Install
-
-On the Pi (from your dev machine, as a one-liner):
-
-```sh
 ssh pi@booth.local "sudo apt install -y ./telephone-booth_*_arm64.deb"
 ```
 
-The `postinst` script creates the `phonebooth` system user, sets up
-directories, enables and starts the service.
+## Option C — download from GitHub Releases
+
+If you want a specific tagged release without going through APT, grab the
+`.deb` from the relevant [GitHub Release](https://github.com/djensenius/Telephone-Booth/releases),
+`scp` it to the Pi, and run `sudo apt install -y ./telephone-booth_*_arm64.deb`.
+The package's bundled APT source list still registers the repo for future
+`apt upgrade` cycles.
 
 </details>
 
