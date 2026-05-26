@@ -123,9 +123,9 @@ mode.
 
 The published `.deb` is built with `--features pi,systemd,simulator,mock`,
 so `--simulator` and `--mock` work on an installed Pi just as they do in
-development. Two ways to use them:
+development. Three ways to use them:
 
-**Interactive — over SSH:**
+**Interactive — over SSH (ad-hoc):**
 
 ```sh
 sudo systemctl stop telephone-booth          # release GPIO + audio
@@ -135,7 +135,70 @@ sudo -u phonebooth /usr/bin/telephone-booth run --simulator [--mock]
 The TUI runs in your SSH session. Quit with `q` to leave the GPIO/audio
 pins free for the systemd unit to reclaim on restart.
 
-**Autostart — via config:**
+**Persistent — tmux service (SSH-attachable):**
+
+A separate `telephone-booth-simulator.service` unit runs the simulator
+inside a tmux session. Switch between modes with the `telephone-booth-mode`
+script:
+
+```sh
+# Switch to simulator mode
+sudo telephone-booth-mode simulator
+
+# Attach from any SSH session
+sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth
+# (or: just attach)
+```
+
+Detach with `Ctrl+B, D` — the booth keeps running. The tmux socket lives
+at `/run/telephone-booth/tmux.sock` (owned by the `phonebooth` user via
+`RuntimeDirectory`).
+
+To switch back to the stock headless service:
+
+```sh
+sudo telephone-booth-mode headless
+```
+
+Check which mode is active:
+
+```sh
+sudo telephone-booth-mode status
+```
+
+**Browser — web UI controls:**
+
+When the debug surface has `allow_controls = true`, a self-contained
+simulator control page is served at:
+
+```text
+https://<your-tailscale-hostname>/v1/ui/simulator
+```
+
+The page provides:
+
+- Hook toggle (lift/hang up)
+- Dial pad (0–9, with correct pulse counts)
+- Live telemetry event stream via WebSocket
+- Current state display
+
+Authentication uses the same debug bearer token. Enter it in the page's
+login form — the token is held only in browser memory and transmitted via
+`Authorization` header (HTTP) and `Sec-WebSocket-Protocol: bearer.<token>`
+(WebSocket). It never appears in URLs.
+
+Enable controls in `/etc/phone-booth/config.toml`:
+
+```toml
+[debug]
+allow_controls = true
+```
+
+The web UI works regardless of whether the TUI simulator or the stock
+headless service is running — it injects events through the same debug
+channel.
+
+**Autostart — via config (headless, no TUI):**
 
 Both modes can be flipped on in `/etc/phone-booth/config.toml` so the
 systemd unit picks them up without editing `ExecStart`:
@@ -153,8 +216,8 @@ the full table.
 
 `runtime.simulator = true` requires a TTY for the TUI; the stock
 `telephone-booth.service` unit does **not** allocate one, so autostarting
-in simulator mode needs a systemd override that points the service at a
-console (`TTYPath=/dev/tty1` + `StandardInput=tty` +
-`StandardOutput=tty`). `runtime.mock = true` has no such requirement and
-works under the stock unit — handy for bringing up a Pi without the
-rotary phone wired in.
+in simulator mode needs either the tmux drop-in above or a custom systemd
+override that points the service at a console (`TTYPath=/dev/tty1` +
+`StandardInput=tty` + `StandardOutput=tty`). `runtime.mock = true` has no
+such requirement and works under the stock unit — handy for bringing up a
+Pi without the rotary phone wired in.

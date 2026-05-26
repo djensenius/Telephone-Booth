@@ -84,3 +84,7 @@ journal:
 diagnose-tailscale:
     @tailscale status || echo "tailscaled not installed or not running"
     @tailscale serve status 2>/dev/null || true
+
+# Attach to the simulator TUI running inside the tmux-based systemd service
+attach:
+    sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth

@@ -6,8 +6,8 @@ Requires=tailscaled.service
 [Service]
 Type=oneshot
 RemainAfterExit=true
-ExecStart=/usr/sbin/tailscale serve --bg --https=443 --set-path=/ http://127.0.0.1:8080
-ExecStop=/usr/sbin/tailscale serve reset
+ExecStart=/usr/bin/tailscale serve --bg --https=443 --set-path=/ http://127.0.0.1:8080
+ExecStop=/usr/bin/tailscale serve reset
 
 [Install]
 WantedBy=multi-user.target

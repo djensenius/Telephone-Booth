@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telephone Booth — Simulator</title>
+<style>
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --border: #0f3460;
+  --text: #e0e0e0;
+  --accent: #e94560;
+  --ok: #4ecca3;
+  --muted: #888;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); min-height: 100vh; padding: 1rem; }
+h1 { font-size: 1.3rem; margin-bottom: 1rem; }
+h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
+
+#auth-form { max-width: 24rem; margin: 4rem auto; text-align: center; }
+#auth-form input {
+  width: 100%; padding: 0.6rem; margin: 0.5rem 0;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; font-size: 1rem;
+}
+#auth-form button {
+  padding: 0.6rem 1.5rem; margin-top: 0.5rem;
+  background: var(--accent); color: #fff; border: none;
+  border-radius: 4px; cursor: pointer; font-size: 1rem;
+}
+
+#app { display: none; max-width: 48rem; margin: 0 auto; }
+
+.status-bar {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0.6rem 1rem; margin-bottom: 1rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+}
+.status-bar .state { font-weight: bold; font-size: 1.1rem; }
+.status-bar .ws-status { margin-left: auto; font-size: 0.85rem; }
+.ws-connected { color: var(--ok); }
+.ws-disconnected { color: var(--accent); }
+
+.controls {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;
+}
+.hook-section, .dial-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 1rem;
+}
+.hook-btn {
+  width: 100%; padding: 1rem; font-size: 1.1rem;
+  background: var(--border); color: var(--text); border: none;
+  border-radius: 4px; cursor: pointer; transition: background 0.15s;
+}
+.hook-btn:hover { background: var(--accent); }
+.hook-btn.off-hook { background: var(--ok); color: #111; }
+
+.dial-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;
+}
+.dial-btn {
+  padding: 0.8rem; font-size: 1.2rem; font-weight: bold;
+  background: var(--border); color: var(--text); border: none;
+  border-radius: 4px; cursor: pointer; transition: background 0.15s;
+}
+.dial-btn:hover { background: var(--accent); }
+.dial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.events-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 1rem; max-height: 20rem; overflow-y: auto;
+}
+.event-line {
+  font-family: ui-monospace, monospace; font-size: 0.8rem;
+  padding: 0.15rem 0; border-bottom: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.event-line:last-child { border-bottom: none; }
+
+.error-toast {
+  position: fixed; top: 1rem; right: 1rem;
+  background: var(--accent); color: #fff; padding: 0.6rem 1rem;
+  border-radius: 4px; display: none; font-size: 0.85rem; z-index: 999;
+}
+</style>
+</head>
+<body>
+
+<div id="auth-form">
+  <h1>Telephone Booth Simulator</h1>
+  <p style="color: var(--muted); margin-bottom: 1rem;">Enter your debug token to connect.</p>
+  <input type="password" id="token-input" placeholder="Bearer token" autocomplete="off">
+  <br>
+  <button onclick="authenticate()">Connect</button>
+</div>
+
+<div id="app">
+  <h1>Telephone Booth Simulator</h1>
+  <div class="status-bar">
+    <span class="state" id="state-display">—</span>
+    <span class="ws-status" id="ws-status">⚪ connecting…</span>
+  </div>
+
+  <div class="controls">
+    <div class="hook-section">
+      <h2>Hook</h2>
+      <button class="hook-btn" id="hook-btn" onclick="toggleHook()">Lift Receiver</button>
+    </div>
+    <div class="dial-section">
+      <h2>Dial</h2>
+      <div class="dial-grid">
+        <button class="dial-btn" onclick="dial(1)">1</button>
+        <button class="dial-btn" onclick="dial(2)">2</button>
+        <button class="dial-btn" onclick="dial(3)">3</button>
+        <button class="dial-btn" onclick="dial(4)">4</button>
+        <button class="dial-btn" onclick="dial(5)">5</button>
+        <button class="dial-btn" onclick="dial(6)">6</button>
+        <button class="dial-btn" onclick="dial(7)">7</button>
+        <button class="dial-btn" onclick="dial(8)">8</button>
+        <button class="dial-btn" onclick="dial(9)">9</button>
+        <button class="dial-btn" style="grid-column: 2" onclick="dial(0)">0</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="events-section" id="events">
+    <h2>Events</h2>
+  </div>
+</div>
+
+<div class="error-toast" id="error-toast"></div>
+
+<script>
+"use strict";
+
+let token = "";
+let hookOff = false;
+let ws = null;
+const MAX_EVENTS = 100;
+
+function authenticate() {
+  token = document.getElementById("token-input").value.trim();
+  if (!token) return;
+  document.getElementById("auth-form").style.display = "none";
+  document.getElementById("app").style.display = "block";
+  fetchState();
+  connectWs();
+}
+
+function baseUrl() {
+  return window.location.origin;
+}
+
+function headers() {
+  return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
+}
+
+async function fetchState() {
+  try {
+    const res = await fetch(baseUrl() + "/v1/state", { headers: headers() });
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    updateState(data.state);
+  } catch (e) {
+    showError("Failed to fetch state: " + e.message);
+  }
+}
+
+function updateState(state) {
+  document.getElementById("state-display").textContent = state || "—";
+  // Infer hook state from booth state
+  if (state === "idle") {
+    hookOff = false;
+    updateHookBtn();
+  } else if (state && state !== "idle") {
+    hookOff = true;
+    updateHookBtn();
+  }
+}
+
+function updateHookBtn() {
+  const btn = document.getElementById("hook-btn");
+  if (hookOff) {
+    btn.textContent = "Hang Up";
+    btn.classList.add("off-hook");
+  } else {
+    btn.textContent = "Lift Receiver";
+    btn.classList.remove("off-hook");
+  }
+}
+
+async function toggleHook() {
+  hookOff = !hookOff;
+  updateHookBtn();
+  const event = hookOff ? "HookOff" : "HookOn";
+  try {
+    const res = await fetch(baseUrl() + "/v1/simulate/event", {
+      method: "POST", headers: headers(), body: JSON.stringify(event),
+    });
+    if (!res.ok) throw new Error(res.status);
+  } catch (e) {
+    showError("Hook toggle failed: " + e.message);
+  }
+}
+
+async function dial(digit) {
+  // Rotary: digit 0 = 10 pulses, otherwise N pulses
+  const count = digit === 0 ? 10 : digit;
+  try {
+    const res = await fetch(baseUrl() + "/v1/simulate/pulse", {
+      method: "POST", headers: headers(), body: JSON.stringify({ count }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    addEvent("dial " + digit + " (" + count + " pulses)");
+  } catch (e) {
+    showError("Dial failed: " + e.message);
+  }
+}
+
+function connectWs() {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const url = proto + "//" + window.location.host + "/v1/ws/telemetry";
+  ws = new WebSocket(url, ["bearer." + token]);
+
+  ws.onopen = () => {
+    document.getElementById("ws-status").textContent = "🟢 connected";
+    document.getElementById("ws-status").className = "ws-status ws-connected";
+  };
+
+  ws.onclose = () => {
+    document.getElementById("ws-status").textContent = "🔴 disconnected";
+    document.getElementById("ws-status").className = "ws-status ws-disconnected";
+    setTimeout(connectWs, 3000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+
+  ws.onmessage = (msg) => {
+    try {
+      const record = JSON.parse(msg.data);
+      handleRecord(record);
+    } catch (_) { /* ignore malformed */ }
+  };
+}
+
+function handleRecord(record) {
+  // Update state if this is a state-change telemetry event
+  if (record.event) {
+    const ev = record.event;
+    if (ev.type === "state_change" || ev.StateChange) {
+      const sc = ev.StateChange || ev;
+      if (sc.to) updateState(sc.to);
+    }
+  }
+  addEvent(summarizeRecord(record));
+}
+
+function summarizeRecord(record) {
+  if (record.event) {
+    const ev = record.event;
+    // Try to produce a short human-readable summary
+    if (typeof ev === "string") return ev;
+    if (ev.type) return ev.type + (ev.detail ? ": " + ev.detail : "");
+    const key = Object.keys(ev)[0];
+    if (key) return key + ": " + JSON.stringify(ev[key]);
+    return JSON.stringify(ev);
+  }
+  if (record.log) return "[log] " + record.log.message;
+  return JSON.stringify(record).slice(0, 120);
+}
+
+function addEvent(text) {
+  const container = document.getElementById("events");
+  const el = document.createElement("div");
+  el.className = "event-line";
+  const now = new Date().toLocaleTimeString();
+  el.textContent = now + "  " + text;
+  // Insert after the h2
+  if (container.children.length > 1) {
+    container.insertBefore(el, container.children[1]);
+  } else {
+    container.appendChild(el);
+  }
+  // Trim old events
+  while (container.children.length > MAX_EVENTS + 1) {
+    container.removeChild(container.lastChild);
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById("error-toast");
+  el.textContent = msg;
+  el.style.display = "block";
+  setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+
+// Support Enter key in token field
+document.getElementById("token-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") authenticate();
+});
+</script>
+</body>
+</html>

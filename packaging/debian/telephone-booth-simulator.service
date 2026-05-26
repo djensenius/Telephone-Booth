@@ -1,0 +1,26 @@
+[Unit]
+Description=Telephone Booth simulator (tmux-attached)
+After=network-online.target sound.target
+Wants=network-online.target
+Conflicts=telephone-booth.service
+
+[Service]
+Type=forking
+User=phonebooth
+Group=audio
+SupplementaryGroups=gpio dialout
+RuntimeDirectory=telephone-booth
+ExecStartPre=/usr/bin/telephone-booth check
+ExecStart=/usr/share/telephone-booth/telephone-booth-simulator-tmux.sh
+ExecStop=/usr/bin/tmux -S /run/telephone-booth/tmux.sock kill-session -t telephone-booth
+Restart=on-failure
+RestartSec=5s
+EnvironmentFile=/etc/phone-booth/env
+ProtectHome=true
+NoNewPrivileges=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/var/lib/phone-booth /var/log/phone-booth
+
+[Install]
+WantedBy=multi-user.target
