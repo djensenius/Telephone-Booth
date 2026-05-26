@@ -76,12 +76,58 @@ pub async fn run_simulator(
 
     let (adapters, injector) =
         build_simulator_adapters(&config, &bus, mock_io, RuntimeMode::Simulator)?;
+
+    // Simulator mode is, by definition, the surface where injecting events is
+    // the whole point — so light up the embedded debug/web simulator alongside
+    // the TUI and pre-enable `allow_controls`. Both surfaces inject through
+    // the same `event_tx` and observe the same `TelemetryBus`, so they stay
+    // in lock-step automatically. Real (headless) mode is unaffected: it
+    // takes a different code path through `main::run` and the
+    // `runtime_mode = Real` guard inside `ensure_controls` keeps blocking
+    // `/v1/simulate/*` with the "headless" banner.
+    let mut runtime_config = config;
+    if !runtime_config.debug.allow_controls {
+        tracing::info!(
+            "simulator mode: enabling [debug] allow_controls so the embedded \
+             web simulator can inject events alongside the TUI"
+        );
+        runtime_config.debug.allow_controls = true;
+    }
+
+    // Surface what the web simulator URL will be (or why it won't be
+    // reachable) BEFORE the runtime starts. The debug surface logs its own
+    // `MissingToken` error at `error!` level if it can't start, but that's
+    // easy to miss in the redirected simulator log — and the user has every
+    // reason to expect the web UI to work in simulator mode now that the
+    // docs say so. Give them an actionable hint either way.
+    //
+    // The token can come from either the top-level `debug_token` field
+    // (which `run_runtime` copies into `debug.token`) or directly from the
+    // `[debug] token` setting, so check both before deciding the surface
+    // will fail.
+    let token_configured =
+        runtime_config.debug.token.is_some() || runtime_config.debug_token.is_some();
+    if !token_configured && !runtime_config.debug.allow_tokenless {
+        tracing::warn!(
+            "web simulator disabled: set [debug] token = \"<secret>\" in \
+             config (or BOOTH_DEBUG_TOKEN / BOOTH_DEBUG_TOKEN_FILE), or set \
+             [debug] allow_tokenless = true for local-only dev, to enable \
+             the web UI at http://{}/v1/ui/simulator",
+            runtime_config.debug.loopback_bind,
+        );
+    } else {
+        tracing::info!(
+            "web simulator: http://{}/v1/ui/simulator",
+            runtime_config.debug.loopback_bind,
+        );
+    }
+
     let handle = spawn_runtime(
-        config,
+        runtime_config,
         adapters,
         bus.clone(),
         RuntimeOptions {
-            start_debug: false,
+            start_debug: true,
             listen_signals: false,
             notify_systemd: false,
             runtime_mode: RuntimeMode::Simulator,

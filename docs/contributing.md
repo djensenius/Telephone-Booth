@@ -25,6 +25,12 @@ fix(pi): handle USB-audio device disappearing mid-recording
 docs(authentik): clarify required groups claim path
 ```
 
+**Default to `fix:` (patch bump)** unless the change genuinely introduces
+new user-visible functionality (`feat:` → minor) or a breaking change
+(`feat!:` / `BREAKING CHANGE:` → major). When in doubt, prefer `fix:` so
+release-please proposes a patch release. `docs:`, `refactor:`, `chore:`,
+`ci:`, and `test:` do not bump the version at all.
+
 ## Before pushing
 
 ```sh

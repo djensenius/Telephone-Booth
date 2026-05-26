@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "booth-bin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -327,6 +327,7 @@ dependencies = [
  "futures-util",
  "parking_lot",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -341,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "booth-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "booth-hal",
  "heapless",
@@ -354,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "booth-debug"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "booth-core",
@@ -382,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "booth-hal"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "heapless",
@@ -393,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "booth-metrics"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "booth-hal",
  "booth-telemetry",
@@ -408,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "booth-mock"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "booth-hal",
@@ -422,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "booth-pi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -451,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "booth-telemetry"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "booth-hal",
  "serde",

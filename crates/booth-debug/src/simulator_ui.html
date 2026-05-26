@@ -69,6 +69,26 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
 }
 .dial-btn:hover { background: var(--accent); }
 .dial-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.dial-btn.pressed, .hook-btn.pressed {
+  background: var(--accent); color: #fff;
+}
+
+.shortcut-hint {
+  margin-top: 0.5rem; color: var(--muted); font-size: 0.75rem; text-align: center;
+}
+.shortcut-hint kbd {
+  display: inline-block; padding: 0 0.35rem; margin: 0 0.1rem;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  font-family: ui-monospace, monospace; font-size: 0.7rem; color: var(--text);
+}
+
+.mode-banner {
+  display: none; margin-bottom: 1rem; padding: 0.75rem 1rem;
+  border-radius: 6px; font-size: 0.9rem; line-height: 1.4;
+  background: #3a2424; border: 1px solid var(--accent); color: var(--text);
+}
+.mode-banner.visible { display: block; }
+.mode-banner strong { color: var(--accent); }
 
 .events-section {
   background: var(--surface); border: 1px solid var(--border);
@@ -105,6 +125,8 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
     <span class="ws-status" id="ws-status">⚪ connecting…</span>
   </div>
 
+  <div class="mode-banner" id="mode-banner"></div>
+
   <div class="controls">
     <div class="hook-section">
       <h2>Hook</h2>
@@ -113,18 +135,27 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
     <div class="dial-section">
       <h2>Dial</h2>
       <div class="dial-grid">
-        <button class="dial-btn" onclick="dial(1)">1</button>
-        <button class="dial-btn" onclick="dial(2)">2</button>
-        <button class="dial-btn" onclick="dial(3)">3</button>
-        <button class="dial-btn" onclick="dial(4)">4</button>
-        <button class="dial-btn" onclick="dial(5)">5</button>
-        <button class="dial-btn" onclick="dial(6)">6</button>
-        <button class="dial-btn" onclick="dial(7)">7</button>
-        <button class="dial-btn" onclick="dial(8)">8</button>
-        <button class="dial-btn" onclick="dial(9)">9</button>
-        <button class="dial-btn" style="grid-column: 2" onclick="dial(0)">0</button>
+        <button class="dial-btn" id="dial-1" onclick="dial(1)">1</button>
+        <button class="dial-btn" id="dial-2" onclick="dial(2)">2</button>
+        <button class="dial-btn" id="dial-3" onclick="dial(3)">3</button>
+        <button class="dial-btn" id="dial-4" onclick="dial(4)">4</button>
+        <button class="dial-btn" id="dial-5" onclick="dial(5)">5</button>
+        <button class="dial-btn" id="dial-6" onclick="dial(6)">6</button>
+        <button class="dial-btn" id="dial-7" onclick="dial(7)">7</button>
+        <button class="dial-btn" id="dial-8" onclick="dial(8)">8</button>
+        <button class="dial-btn" id="dial-9" onclick="dial(9)">9</button>
+        <button class="dial-btn" id="dial-0" style="grid-column: 2" onclick="dial(0)">0</button>
       </div>
     </div>
+  </div>
+
+  <div class="shortcut-hint">
+    Shortcuts:
+    <kbd>0</kbd>–<kbd>9</kbd> dial
+    ·
+    <kbd>Space</kbd> or <kbd>H</kbd> toggle hook
+    ·
+    <kbd>?</kbd> help
   </div>
 
   <div class="events-section" id="events">
@@ -140,6 +171,7 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
 let token = "";
 let hookOff = false;
 let ws = null;
+let controlsEnabled = true;
 const MAX_EVENTS = 100;
 
 function authenticate() {
@@ -147,6 +179,7 @@ function authenticate() {
   if (!token) return;
   document.getElementById("auth-form").style.display = "none";
   document.getElementById("app").style.display = "block";
+  fetchConfig();
   fetchState();
   connectWs();
 }
@@ -157,6 +190,58 @@ function baseUrl() {
 
 function headers() {
   return { "Authorization": "Bearer " + token, "Content-Type": "application/json" };
+}
+
+async function fetchConfig() {
+  // `/v1/config` returns the redacted DebugConfigRedacted projection, which
+  // includes `debug.runtimeMode` and `debug.allowControls`. Both are needed
+  // to decide whether the local controls should be live or surfaced as
+  // read-only with a "headless mode" banner.
+  try {
+    const res = await fetch(baseUrl() + "/v1/config", { headers: headers() });
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    const debug = data.debug || {};
+    applyControlsPolicy(debug.runtimeMode, debug.allowControls);
+  } catch (e) {
+    showError("Failed to fetch config: " + e.message);
+  }
+}
+
+function applyControlsPolicy(runtimeMode, allowControls) {
+  const banner = document.getElementById("mode-banner");
+  const mode = runtimeMode || "real";
+  // Server-side policy in `ensure_controls`: controls require both
+  // allow_controls = true AND runtime_mode != Real.
+  if (mode === "real") {
+    controlsEnabled = false;
+    banner.innerHTML =
+      "🛡️ Booth is running in <strong>headless / real-hardware mode</strong>. " +
+      "Hook and dial controls are disabled — synthetic events cannot be " +
+      "injected while real GPIO and audio are live. The event stream and " +
+      "state display remain available.";
+    banner.classList.add("visible");
+  } else if (!allowControls) {
+    controlsEnabled = false;
+    banner.innerHTML =
+      "ℹ️ Controls are disabled because <strong>[debug] allow_controls = false</strong>. " +
+      "Enable it in the booth's config to use the hook and dial.";
+    banner.classList.add("visible");
+  } else {
+    controlsEnabled = true;
+    banner.classList.remove("visible");
+    banner.innerHTML = "";
+  }
+  refreshControlsDisabled();
+}
+
+function refreshControlsDisabled() {
+  const hook = document.getElementById("hook-btn");
+  if (hook) hook.disabled = !controlsEnabled;
+  for (let i = 0; i <= 9; i++) {
+    const btn = document.getElementById("dial-" + i);
+    if (btn) btn.disabled = !controlsEnabled;
+  }
 }
 
 async function fetchState() {
@@ -194,31 +279,48 @@ function updateHookBtn() {
 }
 
 async function toggleHook() {
+  if (!controlsEnabled) return;
   hookOff = !hookOff;
   updateHookBtn();
-  const event = hookOff ? "HookOff" : "HookOn";
+  // `booth_core::Event` is a serde-tagged enum (`tag = "event",
+  // rename_all = "snake_case"`), so the wire shape is
+  // `{ "event": "hook_off" }`, not the bare variant name.
+  const event = hookOff ? { event: "hook_off" } : { event: "hook_on" };
   try {
     const res = await fetch(baseUrl() + "/v1/simulate/event", {
       method: "POST", headers: headers(), body: JSON.stringify(event),
     });
-    if (!res.ok) throw new Error(res.status);
+    if (!res.ok) throw new Error(await describeDenial(res));
   } catch (e) {
     showError("Hook toggle failed: " + e.message);
   }
 }
 
 async function dial(digit) {
+  if (!controlsEnabled) return;
   // Rotary: digit 0 = 10 pulses, otherwise N pulses
   const count = digit === 0 ? 10 : digit;
   try {
     const res = await fetch(baseUrl() + "/v1/simulate/pulse", {
       method: "POST", headers: headers(), body: JSON.stringify({ count }),
     });
-    if (!res.ok) throw new Error(res.status);
+    if (!res.ok) throw new Error(await describeDenial(res));
     addEvent("dial " + digit + " (" + count + " pulses)");
   } catch (e) {
     showError("Dial failed: " + e.message);
   }
+}
+
+// Best-effort: a 403 from `/v1/simulate/*` ships a JSON body with `reason`
+// and `detail` fields (see ensure_controls in booth-debug). Surface that
+// instead of just the status code so the error toast tells the user *why*.
+async function describeDenial(res) {
+  try {
+    const body = await res.json();
+    if (body && body.detail) return body.detail;
+    if (body && body.reason) return body.reason;
+  } catch (_) { /* not JSON */ }
+  return String(res.status);
 }
 
 function connectWs() {
@@ -251,29 +353,55 @@ function connectWs() {
 }
 
 function handleRecord(record) {
-  // Update state if this is a state-change telemetry event
-  if (record.event) {
-    const ev = record.event;
-    if (ev.type === "state_change" || ev.StateChange) {
-      const sc = ev.StateChange || ev;
-      if (sc.to) updateState(sc.to);
-    }
+  // TelemetryRecord is `#[serde(flatten)]` so the variant tag (`kind`) and the
+  // variant's payload fields land at the top level alongside `id` and `ts`.
+  if (!record || typeof record !== "object") return;
+  if (record.kind === "state_transition" && record.to) {
+    updateState(record.to);
   }
   addEvent(summarizeRecord(record));
 }
 
 function summarizeRecord(record) {
-  if (record.event) {
-    const ev = record.event;
-    // Try to produce a short human-readable summary
-    if (typeof ev === "string") return ev;
-    if (ev.type) return ev.type + (ev.detail ? ": " + ev.detail : "");
-    const key = Object.keys(ev)[0];
-    if (key) return key + ": " + JSON.stringify(ev[key]);
-    return JSON.stringify(ev);
+  if (!record || !record.kind) {
+    return JSON.stringify(record).slice(0, 120);
   }
-  if (record.log) return "[log] " + record.log.message;
-  return JSON.stringify(record).slice(0, 120);
+  switch (record.kind) {
+    case "log":
+      return "[" + (record.level || "log") + "] " + (record.message || "");
+    case "state_transition":
+      return "state: " + record.from + " → " + record.to
+        + (record.cause ? " (" + record.cause + ")" : "");
+    case "digit_dialed":
+      return "digit " + record.digit + " (" + record.pulses + " pulses)";
+    case "gpio_edge":
+      return "gpio " + record.role + "=" + (record.level ? 1 : 0);
+    case "audio_level":
+      return "audio peak=" + formatNumber(record.peak)
+        + " rms=" + formatNumber(record.rms);
+    case "audio_device_change":
+      return "audio device → " + record.name + " (" + record.channel + ")";
+    case "operator_request":
+      return "→ operator " + record.route + " (" + record.id + ")";
+    case "operator_response":
+      return "← operator " + record.status + " " + record.duration_ms + "ms ("
+        + record.id + ")";
+    case "error":
+      return "error: " + (record.message || "");
+    default: {
+      const extras = Object.keys(record).filter(
+        (k) => k !== "id" && k !== "ts" && k !== "kind",
+      );
+      if (extras.length === 0) return record.kind;
+      const tail = extras.map((k) => k + "=" + JSON.stringify(record[k])).join(" ");
+      return (record.kind + " " + tail).slice(0, 200);
+    }
+  }
+}
+
+function formatNumber(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "?";
+  return value.toFixed(2);
 }
 
 function addEvent(text) {
@@ -304,6 +432,63 @@ function showError(msg) {
 // Support Enter key in token field
 document.getElementById("token-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") authenticate();
+});
+
+function flashButton(id) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.classList.add("pressed");
+  setTimeout(() => btn.classList.remove("pressed"), 150);
+}
+
+function showShortcutHelp() {
+  showError(
+    "Shortcuts — 0-9: dial digit · Space or H: toggle hook · ?: this help",
+  );
+}
+
+// Global keyboard shortcuts for the simulator. Only active once the auth form
+// is dismissed and the user is not typing into a form control.
+document.addEventListener("keydown", (e) => {
+  const authVisible = document.getElementById("auth-form").style.display !== "none";
+  if (authVisible) return;
+  const tag = e.target && e.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA"
+    || (e.target && e.target.isContentEditable)) {
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  // 0-9 (top row or numpad) — dial that digit.
+  let digit = null;
+  if (typeof e.code === "string") {
+    if (/^Digit\d$/.test(e.code)) digit = parseInt(e.code.slice(5), 10);
+    else if (/^Numpad\d$/.test(e.code)) digit = parseInt(e.code.slice(6), 10);
+  }
+  if (digit === null && /^\d$/.test(e.key)) {
+    digit = parseInt(e.key, 10);
+  }
+  if (digit !== null) {
+    e.preventDefault();
+    flashButton("dial-" + digit);
+    dial(digit);
+    return;
+  }
+
+  // Space or H — toggle the hook. `preventDefault` on Space stops the page
+  // from scrolling and stops a focused dial button from re-firing.
+  if (e.code === "Space" || e.key === " " || e.key === "h" || e.key === "H") {
+    e.preventDefault();
+    flashButton("hook-btn");
+    toggleHook();
+    return;
+  }
+
+  // ? — show a brief help toast.
+  if (e.key === "?") {
+    e.preventDefault();
+    showShortcutHelp();
+  }
 });
 </script>
 </body>

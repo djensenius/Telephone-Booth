@@ -553,6 +553,10 @@ async fn run_runtime(
         if let Some(token) = config.debug_token.clone() {
             debug_config.token = Some(DebugToken(token));
         }
+        // Surface the effective runtime mode so the debug surface can both
+        // block `/v1/simulate/*` on real hardware and tell the web UI which
+        // mode it's looking at (for the "headless" banner).
+        debug_config.runtime_mode = options.runtime_mode;
         let debug_bus = bus.clone();
         let debug_cmd_tx = cmd_tx.clone();
         let metrics_render: Option<booth_debug::MetricsRender> =

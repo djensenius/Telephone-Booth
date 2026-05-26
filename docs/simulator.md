@@ -87,6 +87,12 @@ tail -f /tmp/telephone-booth-sim.log
 
 The current log path is shown in the footer of the TUI.
 
+On Unix the simulator also re-points the process's `stderr` (FD 2) at the
+same log file. That way C-level libraries like `alsa-lib` — which write
+diagnostics directly to FD 2, bypassing `tracing` — also land in the log
+instead of punching through the TUI buffer. If you see `ALSA lib pcm_*.c`
+spew on the framebuffer, you're running an old build; pull the latest.
+
 ## How it differs from `--mock` (no `--simulator`)
 
 | Mode                          | GPIO       | Audio      | Operator  | Interactive |
@@ -146,8 +152,8 @@ script:
 sudo telephone-booth-mode simulator
 
 # Attach from any SSH session
-sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth
-# (or: just attach)
+just attach
+# (long form: sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth)
 ```
 
 Detach with `Ctrl+B, D` — the booth keeps running. The tmux socket lives
@@ -160,10 +166,12 @@ To switch back to the stock headless service:
 sudo telephone-booth-mode headless
 ```
 
-Check which mode is active:
+Check which mode is active (and whether anyone is currently attached to
+the simulator tmux session):
 
 ```sh
 sudo telephone-booth-mode status
+# (or, from a developer checkout: just status)
 ```
 
 **Browser — web UI controls:**
@@ -175,6 +183,20 @@ simulator control page is served at:
 https://<your-tailscale-hostname>/v1/ui/simulator
 ```
 
+In **simulator mode** (`telephone-booth-mode simulator` or `--simulator`),
+the booth automatically:
+
+- Starts the embedded debug surface (same Tailscale-served endpoint as the
+  headless booth uses for read-only telemetry).
+- Pre-enables `[debug] allow_controls` so the hook and dial buttons work
+  out of the box — no config edit required.
+
+The TUI and the web simulator share a single state machine and a single
+`TelemetryBus`, so injecting a hook lift from the browser is reflected in
+the TUI's event log in real time and vice versa. You can drive the booth
+from either surface (or both) and the operator console stays in sync via
+its usual `PUT /v1/status` + `PUT /v1/system` push path.
+
 The page provides:
 
 - Hook toggle (lift/hang up)
@@ -182,21 +204,40 @@ The page provides:
 - Live telemetry event stream via WebSocket
 - Current state display
 
+**Keyboard shortcuts** (active once you've authenticated and aren't typing
+into a text field):
+
+| Key                       | Action                          |
+| ------------------------- | ------------------------------- |
+| `0`–`9` (top row, numpad) | Dial that digit                 |
+| `Space` or `H`            | Toggle hook (lift / hang up)    |
+| `?`                       | Show a brief help toast         |
+
 Authentication uses the same debug bearer token. Enter it in the page's
 login form — the token is held only in browser memory and transmitted via
 `Authorization` header (HTTP) and `Sec-WebSocket-Protocol: bearer.<token>`
 (WebSocket). It never appears in URLs.
 
-Enable controls in `/etc/phone-booth/config.toml`:
+Enable controls in `/etc/phone-booth/config.toml` (only needed for the
+`--mock` / headless-with-mocks flavour; simulator mode auto-enables this):
 
 ```toml
 [debug]
 allow_controls = true
 ```
 
-The web UI works regardless of whether the TUI simulator or the stock
-headless service is running — it injects events through the same debug
-channel.
+**Controls are blocked against a real-hardware booth.** Even when
+`allow_controls = true`, `/v1/simulate/event` and `/v1/simulate/pulse`
+return `403` (with `{"reason": "headless_real_hardware"}`) whenever the
+booth is running in `RuntimeMode::Real` — i.e. the regular
+`telephone-booth.service` wired to actual GPIO, audio, and operator HTTP.
+This prevents synthetic events from racing with hardware events on a live
+booth. The web UI detects this via `/v1/config` and shows a "headless /
+real-hardware mode" banner with the hook and dial buttons disabled; the
+event stream and state display stay live. Controls are only accepted in
+`RuntimeMode::Mock` or `RuntimeMode::Simulator` — see
+[`crates/booth-hal/src/lib.rs`](../crates/booth-hal/src/lib.rs) for the
+enum definition.
 
 **Autostart — via config (headless, no TUI):**
 

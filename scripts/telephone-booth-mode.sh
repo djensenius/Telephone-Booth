@@ -56,8 +56,24 @@ show_status() {
     head_active=$(systemctl is-active "${HEADLESS_UNIT}" 2>/dev/null || true)
 
     if [[ "$sim_active" == "active" ]]; then
-        echo "Mode: simulator (tmux)"
+        echo "Mode:   simulator (tmux)"
         echo "Attach: sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth"
+        echo "        (or: just attach)"
+        echo "Detach: Ctrl+B, D"
+
+        local socket="/run/telephone-booth/tmux.sock"
+        local session="telephone-booth"
+        if [[ -S "$socket" ]] && tmux -S "$socket" has-session -t "$session" 2>/dev/null; then
+            local clients
+            clients=$(tmux -S "$socket" list-clients -t "$session" 2>/dev/null | wc -l | tr -d ' ')
+            if [[ "$clients" == "0" ]]; then
+                echo "tmux:   session up, no clients attached"
+            else
+                echo "tmux:   session up, ${clients} client(s) attached"
+            fi
+        else
+            echo "tmux:   session not running yet (service may still be starting)"
+        fi
     elif [[ "$head_active" == "active" ]]; then
         echo "Mode: headless"
     else

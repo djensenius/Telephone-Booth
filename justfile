@@ -85,6 +85,10 @@ diagnose-tailscale:
     @tailscale status || echo "tailscaled not installed or not running"
     @tailscale serve status 2>/dev/null || true
 
-# Attach to the simulator TUI running inside the tmux-based systemd service
+# Attach to the simulator TUI tmux session on the Pi (detach with Ctrl+B, D)
 attach:
     sudo tmux -S /run/telephone-booth/tmux.sock attach -t telephone-booth
+
+# Show booth mode (simulator vs headless) and tmux attach state on the Pi
+status:
+    sudo telephone-booth-mode status

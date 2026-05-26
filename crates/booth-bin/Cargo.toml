@@ -55,6 +55,13 @@ futures-util = { workspace = true, optional = true }
 time = { workspace = true, features = ["formatting"] }
 uuid = { workspace = true }
 
+# `rustix::stdio::dup2_stderr` lets us point the process's FD 2 at the
+# simulator log file so that C-level writers (alsa-lib in particular)
+# can't corrupt the TUI by spewing directly to the terminal. Already in
+# the lockfile transitively, so this adds no new build cost.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "stdio"] }
+
 [package.metadata.deb]
 name = "telephone-booth"
 maintainer = "David Jensenius"

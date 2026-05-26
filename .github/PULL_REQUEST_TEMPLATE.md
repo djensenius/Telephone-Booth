@@ -4,8 +4,12 @@ Reminders before opening this PR:
 - Do NOT include a `Co-authored-by: Copilot ...` trailer in commits.
 - Branch name follows `<github-username>/<topic>` for personal work or
   `feat|fix|chore|docs/<topic>` for shared branches.
-- Conventional Commit style for commit subjects is preferred.
-- See `.github/copilot-instructions.md` for the full conventions.
+- Conventional Commit style for commit subjects is preferred. Default to
+  `fix:` (patch bump) unless the change is genuinely a `feat:` (new
+  user-visible functionality → minor) or breaking (`feat!:` /
+  `BREAKING CHANGE:` → major).
+- See `.github/copilot-instructions.md` for the full conventions, including
+  the "ship it" workflow.
 -->
 
 ## Summary
