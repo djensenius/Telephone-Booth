@@ -20,6 +20,14 @@ authors = ["David Jensenius"]
 repository = "https://github.com/djensenius/Telephone-Booth"
 homepage = "https://github.com/djensenius/Telephone-Booth"
 
+# Release profile shipped in the .deb. We let the Rust linker strip
+# symbols during the build (which knows the target's stripping ABI),
+# so cargo-deb does not need to invoke a host `strip` on a
+# cross-compiled binary. See `publish.yml` which passes
+# `cargo deb --no-strip`.
+[profile.release]
+strip = "symbols"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
