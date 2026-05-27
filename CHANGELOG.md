@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/djensenius/Telephone-Booth/compare/v0.3.1...v0.3.2) (2026-05-27)
+
+
+### Bug Fixes
+
+* **release:** drop component/package-name so release-please can tag merged PRs ([#72](https://github.com/djensenius/Telephone-Booth/issues/72)) ([3c7259e](https://github.com/djensenius/Telephone-Booth/commit/3c7259e14a3695c27788cc8ecb3f7ab7e9fa7a22))
+* **release:** explicit publish→publish-apt dispatch chain ([#74](https://github.com/djensenius/Telephone-Booth/issues/74)) ([74ef222](https://github.com/djensenius/Telephone-Booth/commit/74ef222e33b00dcffce3d747b584ee4a8b3f08e1))
+
 ## [0.3.1](https://github.com/djensenius/Telephone-Booth/compare/v0.3.0...v0.3.1) (2026-05-26)
 
 
