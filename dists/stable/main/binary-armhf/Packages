@@ -103,3 +103,24 @@ Description: telephone-booth binary: wires HAL adapters to the booth-core state 
  Phone-side software for the Telephone Booth art installation. Drives a rotary
  phone via GPIO and talks to the operator backend.
 
+Package: telephone-booth
+Architecture: armhf
+Version: 0.3.2-1
+Priority: optional
+Section: sound
+Maintainer: David Jensenius
+Installed-Size: 12543
+Depends: alsa-utils, tailscale
+Recommends: tmux, vmagent, unattended-upgrades
+Filename: pool/main/t/telephone-booth/telephone-booth_0.3.2-1_armhf.deb
+Size: 3831492
+MD5sum: dce8f018989e2d364a831841614f8337
+SHA1: 71ce0b9517557af5b810ab48d29ee7e015a70a5c
+SHA256: cb698590086171686a25b148b0b984687576dc5d2351f92f366c77c035bbdd99
+SHA512: 17a3bfc7018a7d28472c51761b3aafeb60d1a68a00e39e67912aec86158f366950e4b98fc96965f45d9796a9b6a089c98042ced7e59324c230de472d2d8f7751
+Homepage: https://github.com/djensenius/Telephone-Booth
+Description: telephone-booth binary: wires HAL adapters to the booth-core state machine and
+ runs the loop.
+ Phone-side software for the Telephone Booth art installation. Drives a rotary
+ phone via GPIO and talks to the operator backend.
+
