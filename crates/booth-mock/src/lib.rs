@@ -315,7 +315,7 @@ pub struct MockOperatorState {
     /// Raw `/v1/events` batch bodies received, in order of arrival.
     pub event_batches: Vec<String>,
     /// Live system snapshots received, with their booth_id label.
-    pub system_snapshots: Vec<(String, SystemSnapshot)>,
+    pub system_snapshots: Vec<(String, String, SystemSnapshot)>,
     /// Artificial latency injected before each operator response.
     /// Useful for testing that slow network calls don't block critical effects.
     pub latency: Option<Duration>,
@@ -509,14 +509,15 @@ impl OperatorClient for MockOperatorClient {
     async fn put_system_snapshot(
         &self,
         booth_id: &str,
+        version: &str,
         snapshot: &SystemSnapshot,
     ) -> Result<(), OperatorError> {
         let (request_id, started) = self.begin_request("PUT /mock/system");
-        self.inner
-            .lock()
-            .await
-            .system_snapshots
-            .push((booth_id.to_string(), snapshot.clone()));
+        self.inner.lock().await.system_snapshots.push((
+            booth_id.to_string(),
+            version.to_string(),
+            snapshot.clone(),
+        ));
         let result = Ok(());
         self.finish_request(&request_id, started, &result);
         result

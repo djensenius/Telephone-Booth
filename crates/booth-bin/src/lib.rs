@@ -1907,6 +1907,7 @@ mod tests {
         async fn put_system_snapshot(
             &self,
             _booth_id: &str,
+            _version: &str,
             _snapshot: &SystemSnapshot,
         ) -> Result<(), OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))

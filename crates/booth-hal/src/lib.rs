@@ -407,11 +407,14 @@ pub trait OperatorClient: Send + Sync {
 
     /// Push the latest live system snapshot to the operator. The operator
     /// keeps only the most recent snapshot per booth in-memory; this is
-    /// **not** persisted. Default implementation returns
+    /// **not** persisted. `version` is the running `telephone-booth`
+    /// client version (e.g. `0.3.2`) — the operator surfaces it on the
+    /// live system panel. Default implementation returns
     /// [`OperatorError::Unsupported`].
     async fn put_system_snapshot(
         &self,
         _booth_id: &str,
+        _version: &str,
         _snapshot: &SystemSnapshot,
     ) -> Result<(), OperatorError> {
         Err(OperatorError::Unsupported(

@@ -522,6 +522,7 @@ impl OperatorClient for PiOperatorClient {
     async fn put_system_snapshot(
         &self,
         booth_id: &str,
+        version: &str,
         snapshot: &SystemSnapshot,
     ) -> Result<(), OperatorError> {
         #[cfg(feature = "operator")]
@@ -531,15 +532,20 @@ impl OperatorClient for PiOperatorClient {
                 #[serde(rename = "boothId")]
                 booth_id: &'a str,
                 snapshot: &'a SystemSnapshot,
+                version: &'a str,
             }
-            let body = Body { booth_id, snapshot };
+            let body = Body {
+                booth_id,
+                snapshot,
+                version,
+            };
             self.send_empty(reqwest::Method::PUT, "/v1/system", Some(&body))
                 .await
         }
 
         #[cfg(not(feature = "operator"))]
         {
-            let _ = (booth_id, snapshot);
+            let _ = (booth_id, version, snapshot);
             unsupported()
         }
     }
