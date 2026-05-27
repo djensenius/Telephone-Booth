@@ -89,13 +89,103 @@ two equally supported options:
   Prometheus ecosystem protocols.
 
 What the booth does **not** support out of the box is direct scraping
-of `/metrics` by a remote Prometheus — the route is bound to loopback
-on purpose, so the scrape has to originate on the booth itself. The
-`vmagent` sidecar exists precisely to bridge that gap. If you would
-rather not run `vmagent`, you would need to add a non-loopback bind
-for `/metrics` (with bearer auth) and accept the Tailscale-ACL surface
-that comes with it. See [ADR 0006](adr/0006-observability-stack.md)
-for the trade-offs we weighed before landing on the sidecar.
+of `/metrics` by a remote Prometheus over an arbitrary network — the
+route is bound to loopback on purpose, so the scrape has to originate
+on the booth itself. The `vmagent` sidecar exists precisely to bridge
+that gap. If you would rather not run `vmagent`, you would need to add
+a non-loopback bind for `/metrics` (with bearer auth) and accept the
+Tailscale-ACL surface that comes with it. See
+[ADR 0006](adr/0006-observability-stack.md) for the trade-offs we
+weighed before landing on the sidecar.
+
+### Scraping the booth from a Prometheus elsewhere on your tailnet
+
+If you already run a Prometheus (or VictoriaMetrics, or any other
+Prometheus-compatible TSDB) on another host in the same Tailscale
+tailnet as the booth, you don't have to run the `vmagent` sidecar at
+all — `tailscale serve` is already proxying the booth's loopback HTTP
+listener on port 443 of the booth's MagicDNS name (see
+[`docs/tailscale.md`](tailscale.md)), and the `/metrics` route lives on
+that same loopback router. From a tailnet peer, the booth's metrics
+are therefore reachable at:
+
+```text
+https://<booth-host>.<your-tailnet>.ts.net/metrics
+```
+
+Tailscale issues real Let's Encrypt certificates for MagicDNS names, so
+no cert pinning or `tls_config: insecure_skip_verify: true` is needed —
+default HTTPS verification works.
+
+Add this to your remote Prometheus's `scrape_configs` (one entry per
+booth, or use file/DNS-based service discovery if you have many):
+
+```yaml
+scrape_configs:
+  - job_name: telephone-booth
+    metrics_path: /metrics
+    scheme: https
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+          # MagicDNS hostnames — one per booth.
+          - booth-01.your-tailnet.ts.net
+          - booth-02.your-tailnet.ts.net
+        labels:
+          job: booth
+    # Promote the MagicDNS short name to a `booth_id` label so the
+    # shipped Grafana dashboards (which key off `booth_id`) work
+    # without further relabelling. The booth also sets `booth_id`
+    # internally on every series; the relabel below only matters
+    # for older booths that predate that label or for booths where
+    # `observability.booth_id` doesn't match the MagicDNS name.
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^.]+)\..*'
+        target_label: instance
+        replacement: '$1'
+```
+
+The Prometheus host needs Tailscale ACL permission to reach
+`tag:booth:443`. The minimal ACL stanza, assuming you've tagged your
+Prometheus host(s) with `tag:prometheus`:
+
+```jsonc
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:prometheus"],
+      "dst": ["tag:booth:443"]
+    }
+  ]
+}
+```
+
+A few things to be aware of:
+
+- **The `/metrics` route deliberately skips bearer auth.** Tailscale
+  ACLs are the gate — anyone on the tailnet who can reach the booth
+  on `:443` can read its metrics. This matches the rest of the
+  loopback debug surface (see `crates/booth-debug/src/lib.rs`). Lock
+  down `tag:booth:443` to your Prometheus / admin hosts in the ACL if
+  that's not what you want.
+- **`booth_id` is set by the booth itself** from
+  `observability.booth_id` (see [`docs/configuration.md`](configuration.md#observability)).
+  Make sure each booth has a unique value so multi-booth dashboards
+  separate cleanly.
+- **You can run both paths simultaneously.** Scraping over Tailscale
+  and `remote_write` via `vmagent` are independent — useful while
+  you're migrating. If you decide the Tailscale scrape is your only
+  ingestion path, disable the sidecar on each booth with
+  `sudo systemctl disable --now telephone-booth-vmagent.service` so
+  it stops trying to push to a `remote_write` URL you no longer
+  operate.
+- **Scrape interval.** vmagent ships with `scrape_interval: 10s`; the
+  example above uses `15s` to match Prometheus's default. Either is
+  fine — the booth's metric set is small enough that 10–60 s
+  intervals all stay well within budget.
 
 ## Telemetry events
 
@@ -290,6 +380,19 @@ operator).
   remote_write endpoint. Check `journalctl -u telephone-booth-vmagent`.
   Then `curl -s http://127.0.0.1:8429/api/v1/status/config` on the
   booth to confirm vmagent loaded the scrape config.
+- **Remote Prometheus scrape returns 404 / connection refused** —
+  `tailscale serve` isn't proxying the loopback listener, or the
+  booth's debug surface is down. From the Prometheus host run
+  `curl -fsS https://<booth>.<your-tailnet>.ts.net/metrics | head` and
+  compare with `curl -fsS http://127.0.0.1:8080/metrics | head` on the
+  booth itself. If the second works and the first does not, re-run
+  `sudo /usr/share/telephone-booth/setup-tailscale-serve.sh` on the
+  booth and confirm `sudo tailscale serve status` lists port 443 → 8080.
+- **Remote Prometheus scrape returns 403 / TLS errors** — Tailscale
+  ACL is blocking the Prometheus host, or the host isn't on the
+  tailnet. Confirm the ACL grants the Prometheus host (or its tag)
+  access to `tag:booth:443` and that `tailscale status` on the
+  Prometheus host shows it as online.
 - **Operator UI shows stale system info** — check that
   `operator_forward.enabled = true` and the operator API is reachable.
   The booth logs `system_pusher: PUT /v1/system failed` when it can't
