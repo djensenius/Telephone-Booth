@@ -38,6 +38,14 @@ configured for a single-component Rust workspace.
   Commits: `feat` → minor, `fix`/`perf` → patch, `feat!` or `BREAKING
   CHANGE:` → major. `bump-minor-pre-major` is true so `feat:` lands as
   `0.x` minors until we cut `1.0.0`.
+- **Do not** set `component`, `package-name`, or a
+  `pull-request-title-pattern` containing `${component}` / `${version}`
+  on the root package. With `separate-pull-requests: false`,
+  release-please emits grouped Release PR titles
+  (`chore: release main`); declaring a component makes the action
+  refuse to tag the merged PR ("untagged, merged release PRs
+  outstanding - aborting") and the release silently does not ship. See
+  the release-please invariants in `.github/copilot-instructions.md`.
 - Manifest: `.release-please-manifest.json` seeded with `0.1.0`.
 - Changelog: `CHANGELOG.md` at the repo root. `feat`, `fix`, `perf`,
   `docs`, `build`, `deps`, `revert` are user-visible; `chore`, `refactor`,

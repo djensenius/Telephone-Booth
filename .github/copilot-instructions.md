@@ -201,6 +201,50 @@ drive the change all the way to a released version. Concretely:
 Only consider "ship it" done once steps 1-6 are complete — not when the
 feature PR merges.
 
+### release-please invariants (do not break these)
+
+The release pipeline is brittle because release-please silently no-ops
+when its config and the Release PR title disagree. Past regressions
+(notably the missing v0.3.1 cut) traced back to violating one of these:
+
+- **Never add `component` or `package-name` to the single root package
+  in `.release-please-config.json`** while `separate-pull-requests` is
+  `false`. With grouped manifest PRs the title is
+  `chore: release main` (no component, no version). If the package
+  declares a component, release-please parses the merged PR's
+  component as `undefined`, doesn't match the configured value, logs
+  `⚠ There are untagged, merged release PRs outstanding - aborting`,
+  exits 0, and **no tag is created**. The downstream
+  `Dispatch publish workflow` step is skipped silently — CI shows
+  green but nothing ships.
+- **Never set a `pull-request-title-pattern` that references
+  `${component}` or `${version}`** for this repo. The grouped-PR title
+  ignores per-package patterns; warnings like
+  `⚠ pullRequestTitlePattern miss the part of '${component}'` are a
+  symptom that someone added one back. If you genuinely need to
+  customise the grouped title, use `group-pull-request-title-pattern`
+  (default: `chore: release ${branch}`).
+- **Keep the `# x-release-please-version` marker on the workspace
+  `version = "..."` line in the root `Cargo.toml`.** Without
+  `package-name` set, release-please updates `extra-files` via that
+  generic marker. Removing the marker silently stops version bumps in
+  `Cargo.toml`.
+- **`release-type` stays `simple` per ADR 0008.** Switching to `rust`
+  is a separate, deliberate change with its own ADR — do not bundle it
+  with an unrelated fix.
+- **Confirm a release actually shipped before declaring "ship it"
+  done.** A successful `release-please` workflow run is **not**
+  sufficient evidence. Check `gh release list` for the new tag and
+  watch `publish.yml` + `publish-apt.yml` complete. If the
+  release-please run logs include `untagged, merged release PRs
+  outstanding - aborting`, the release did **not** happen — recover
+  by either (a) merging a config fix and letting the next push
+  re-trigger tagging, or (b) manually creating the tag/release on the
+  merged Release PR's squash commit and dispatching `publish.yml`
+  yourself, then relabel the stuck Release PR from
+  `autorelease: pending` to `autorelease: tagged` so future runs
+  don't keep aborting.
+
 ## Documentation
 
 - Markdown is linted with `markdownlint-cli2` per `.markdownlint-cli2.yaml`.
