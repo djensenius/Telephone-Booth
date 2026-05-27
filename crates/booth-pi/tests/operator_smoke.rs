@@ -13,7 +13,7 @@
 
 use std::error::Error;
 
-use booth_hal::{BoothStatus, OperatorError, RuntimeMode};
+use booth_hal::{BoothStatus, OperatorClient, OperatorError, RuntimeMode, SystemSnapshot};
 use booth_pi::operator::default_headers;
 use booth_pi::{OperatorConfig, PiOperatorClient, UploadError};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -556,6 +556,27 @@ fn validate_upload_url_host_check_is_case_insensitive() {
     let result =
         booth_pi::validate_upload_url("https://myaccount.blob.core.windows.net/c/b?sv=x", &hosts);
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn put_system_snapshot_includes_booth_id_and_version() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("PUT"))
+        .and(path("/v1/system"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(header("content-type", "application/json"))
+        .and(body_string_contains("\"boothId\":\"booth-test\""))
+        .and(body_string_contains("\"version\":\"9.9.9-test\""))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let snapshot = SystemSnapshot::default();
+    client
+        .put_system_snapshot("booth-test", "9.9.9-test", &snapshot)
+        .await?;
+    Ok(())
 }
 
 #[tokio::test]
