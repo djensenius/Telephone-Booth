@@ -90,28 +90,32 @@ jobs:
         # dispatched immediately after the upstream `publish.yml` finishes
         # uploading, GitHub's release-asset listing API can briefly return
         # an empty / partial set before the assets are visible.
+        # `gh release download --pattern '*.deb'` exits 0 with no files
+        # in that empty-listing window, so the retry condition has to
+        # check that at least one .deb was actually downloaded, not just
+        # that the gh command exited cleanly.
         run: |
           set -eu
           mkdir -p debs
           attempts=0
           max_attempts=6
-          until gh release download "$TAG" \
-                --repo "${{ github.repository }}" \
-                --pattern '*.deb' \
-                --dir debs; do
+          while :; do
             attempts=$((attempts + 1))
+            rm -f debs/*.deb 2>/dev/null || true
+            if gh release download "$TAG" \
+                 --repo "${{ github.repository }}" \
+                 --pattern '*.deb' \
+                 --dir debs \
+               && ls debs/*.deb >/dev/null 2>&1; then
+              break
+            fi
             if [ "$attempts" -ge "$max_attempts" ]; then
               echo "::error::Failed to download .deb assets for $TAG after $max_attempts attempts."
               exit 1
             fi
-            echo "Download attempt $attempts failed; retrying in 10s…"
+            echo "Download attempt $attempts produced no .deb assets; retrying in 10s…"
             sleep 10
-            rm -f debs/*.deb 2>/dev/null || true
           done
-          if ! ls debs/*.deb >/dev/null 2>&1; then
-            echo "::error::No .deb assets found for $TAG."
-            exit 1
-          fi
           ls -lh debs
 
       - name: Install apt-utils + gnupg
