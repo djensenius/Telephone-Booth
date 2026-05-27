@@ -68,9 +68,11 @@ configured for a single-component Rust workspace.
    `.deb`s + macOS tarball and attaches them to the Release that
    release-please just created. `softprops/action-gh-release` updates
    the existing Release rather than failing on the duplicate tag.
-6. On successful completion of `publish.yml`, `publish-apt.yml` fires
-   via `workflow_run`, regenerates the APT indexes, and pushes
-   `gh-pages`.
+6. On successful completion of `publish.yml`, its final `dispatch-apt`
+   job calls `gh workflow run publish-apt.yml --ref main -f tag=vX.Y.Z`,
+   which regenerates the APT indexes and pushes `gh-pages`. The job is
+   gated on `draft != 'true'` so draft releases never touch the public
+   APT repo.
 7. Pis pick up the new version on their next `apt update` (or
    automatically via `unattended-upgrades`).
 
@@ -93,10 +95,17 @@ still keeps its `push: tags: ['v*']` trigger so that human-pushed tags
 allowed under the anti-recursion rule, so the chain works end-to-end
 with only `GITHUB_TOKEN` and no special tokens to rotate.
 
-The downstream `publish-apt.yml` is `workflow_run`-triggered, which is
-also unaffected by the recursion rule (it observes another workflow's
-completion rather than a repository event), so no special handling is
-needed there.
+The downstream `publish-apt.yml` used to be `workflow_run`-triggered,
+but that trigger only fires when the upstream ran on the default
+branch — and `publish.yml` is always dispatched against the release
+tag ref, not `main`. The result was that the APT repo silently
+stopped updating after every release-please-driven cut. Today,
+`publish.yml`'s final `dispatch-apt` job calls
+`gh workflow run publish-apt.yml --ref main -f tag=vX.Y.Z` explicitly,
+which is `workflow_dispatch` and therefore exempt from the
+anti-recursion rule. `publish-apt.yml` keeps only its
+`workflow_dispatch` trigger so manual re-runs against a specific tag
+still work.
 
 If we ever want a Release PR merge to also re-run other branch-watching
 workflows (e.g. `ci.yml`), we will need to switch to a GitHub App token

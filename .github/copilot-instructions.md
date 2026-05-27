@@ -194,9 +194,19 @@ drive the change all the way to a released version. Concretely:
    Release PR** to cut the new tag + GitHub Release. By default this will
    be a patch bump because of the `fix:` default above.
 6. After the Release PR merges, watch `publish.yml` and `publish-apt.yml`
-   to confirm the `.deb`s and APT repository update succeed. If either
-   fails, re-dispatch it (`gh workflow run publish.yml -f tag=vX.Y.Z
-   -f draft=false`) or open a follow-up fix PR.
+   to confirm the `.deb`s and APT repository update succeed. The chain
+   is:
+
+   ```text
+   release-please.yml ─► (creates tag, dispatches) ─► publish.yml ─► (final job dispatches) ─► publish-apt.yml
+   ```
+
+   If `publish.yml` fails, re-dispatch it
+   (`gh workflow run publish.yml --ref vX.Y.Z -f tag=vX.Y.Z -f draft=false`);
+   it will re-dispatch `publish-apt.yml` itself on success. If only
+   `publish-apt.yml` failed, re-run just that one against `main` so the
+   `production-apt` environment's branch restriction is satisfied
+   (`gh workflow run publish-apt.yml --ref main -f tag=vX.Y.Z`).
 
 Only consider "ship it" done once steps 1-6 are complete — not when the
 feature PR merges.
@@ -232,6 +242,18 @@ when its config and the Release PR title disagree. Past regressions
 - **`release-type` stays `simple` per ADR 0008.** Switching to `rust`
   is a separate, deliberate change with its own ADR — do not bundle it
   with an unrelated fix.
+- **`publish.yml` MUST end with a `dispatch-apt` job that calls
+  `gh workflow run publish-apt.yml`.** That explicit chain replaces a
+  brittle `workflow_run` trigger: because release-please's tag was
+  created with `GITHUB_TOKEN` (which suppresses downstream workflow
+  triggers) and publish.yml is normally dispatched against the tag
+  ref (not the default branch), a `workflow_run` trigger on
+  publish-apt.yml does not fire reliably. Do not re-add
+  `workflow_run` to publish-apt.yml without re-deriving why that
+  decision was reversed.
+- **The `dispatch-apt` job is gated on `draft != 'true'`.** Draft
+  releases must not update the public APT repo; the human has to
+  publish the draft and re-dispatch publish-apt manually.
 - **Confirm a release actually shipped before declaring "ship it"
   done.** A successful `release-please` workflow run is **not**
   sufficient evidence. Check `gh release list` for the new tag and
@@ -241,9 +263,15 @@ when its config and the Release PR title disagree. Past regressions
   by either (a) merging a config fix and letting the next push
   re-trigger tagging, or (b) manually creating the tag/release on the
   merged Release PR's squash commit and dispatching `publish.yml`
-  yourself, then relabel the stuck Release PR from
-  `autorelease: pending` to `autorelease: tagged` so future runs
-  don't keep aborting.
+  yourself (`gh workflow run publish.yml --ref vX.Y.Z
+  -f tag=vX.Y.Z -f draft=false` — `publish.yml` will re-dispatch
+  `publish-apt.yml` automatically on success). If only `publish-apt`
+  needs a re-run (e.g., transient gh-pages push failure), always
+  dispatch it against `main` so the `production-apt` environment's
+  branch restriction is satisfied:
+  `gh workflow run publish-apt.yml --ref main -f tag=vX.Y.Z`. Finally,
+  relabel the stuck Release PR from `autorelease: pending` to
+  `autorelease: tagged` so future runs don't keep aborting.
 
 ## Documentation
 

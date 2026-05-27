@@ -81,23 +81,34 @@ keyring — what's checked in is what Pis get.
 ### CI flow
 
 ```text
-push: tags: ['v*']           push: tags: ['v*']
-  │                            │
-  ▼                            ▼
-publish.yml builds .deb     publish.yml builds tarball
-  │                            │
-  └────────┬───────────────────┘
-           ▼
+release-please.yml (push: main)
+  │
+  ▼
+release-please-action creates tag vX.Y.Z + Release
+  │
+  ▼ workflow_dispatch (anti-recursion exempt)
+publish.yml resolve job (workflow_dispatch with --ref vX.Y.Z)
+  │
+  ├──► build-deb matrix (arm64, armv7 via cross)
+  ├──► build-tarball matrix (aarch64-apple-darwin)
+  ▼
 publish.yml release job ─► uploads .deb + tarball to the Release
-           │
-           ▼ workflow_run on completion
-publish-apt.yml
-  ├── verifies release is not draft
-  ├── downloads .deb from the Release (gh release download)
+  │
+  ▼ dispatch-apt job: gh workflow run publish-apt.yml --ref main -f tag=vX.Y.Z
+publish-apt.yml (workflow_dispatch)
+  ├── validates tag format
+  ├── downloads .deb from the Release (gh release download, with retry)
   ├── regenerates Packages + Release with apt-ftparchive
   ├── signs Release + InRelease with the production GPG key
   └── pushes pool/ + dists/ to gh-pages
 ```
+
+The chain is **explicit `workflow_dispatch` at every hop**, not
+`workflow_run`. `workflow_run` only fires when the upstream ran on the
+default branch, and `publish.yml` is normally dispatched against the
+release tag ref — so a `workflow_run` trigger on `publish-apt.yml`
+silently never fired and the APT repo went stale. See ADR 0008 for
+the full rationale.
 
 The signing key lives in the `production-apt` GitHub Environment, which
 should be configured in repo settings to allow deployments only from `main`

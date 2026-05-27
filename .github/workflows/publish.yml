@@ -19,7 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.ref }}
+  # Serialize per release tag, regardless of whether we got here via a
+  # tag push (github.ref_name = "vX.Y.Z") or a workflow_dispatch with an
+  # explicit `tag` input. Without this, a manual dispatch run keyed by
+  # `refs/heads/main` would race with a tag-push run keyed by
+  # `refs/tags/vX.Y.Z` for the same artifacts.
+  group: publish-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -147,3 +152,68 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release/*
+
+  dispatch-apt:
+    name: dispatch APT publish
+    needs: [resolve, release]
+    runs-on: ubuntu-latest
+    # Don't refresh the public APT repo for draft releases — wait for the
+    # human to publish the draft and trigger publish-apt manually if needed.
+    if: ${{ needs.resolve.outputs.draft != 'true' }}
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch publish-apt workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          REPO: ${{ github.repository }}
+        # The downstream `publish-apt` workflow is always dispatched against
+        # `main` so it runs against the default-branch-pinned scripts and
+        # satisfies the `production-apt` GitHub Environment's branch
+        # restriction. After dispatch, we poll the workflow API to confirm
+        # a fresh run was actually created — otherwise a transient API
+        # failure here could silently break the chain just like the
+        # removed `workflow_run` trigger used to.
+        run: |
+          set -eu
+          echo "publish succeeded for $TAG; dispatching publish-apt.yml on main"
+          # Capture the current most-recent publish-apt run ID so we can
+          # detect the new one. `gh run list` is sorted newest-first.
+          previous_id="$(gh run list \
+            --repo "$REPO" \
+            --workflow publish-apt.yml \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // 0')"
+          echo "previous publish-apt run id: $previous_id"
+
+          gh workflow run publish-apt.yml \
+            --repo "$REPO" \
+            --ref main \
+            -f "tag=$TAG"
+
+          # Poll for the new run. GitHub takes a few seconds to register
+          # the dispatch; give it up to 60 seconds.
+          new_id=""
+          for _ in $(seq 1 30); do
+            sleep 2
+            candidate="$(gh run list \
+              --repo "$REPO" \
+              --workflow publish-apt.yml \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // 0')"
+            if [ "$candidate" != "$previous_id" ] && [ "$candidate" != "0" ]; then
+              new_id="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$new_id" ]; then
+            echo "::error::publish-apt.yml did not register a new run within 60s."
+            echo "::error::Recover with: gh workflow run publish-apt.yml --ref main -f tag=$TAG"
+            exit 1
+          fi
+          echo "publish-apt.yml run dispatched: id=$new_id"
+          echo "::notice::publish-apt run $new_id dispatched for $TAG"
