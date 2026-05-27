@@ -220,6 +220,10 @@ Every outgoing event carries:
 - `boot_id` — UUIDv4 minted at runtime start. Lets cross-reboot ordering
   fall back to wall clock instead of the per-process monotonic clock.
 - `occurred_at` — booth wall-clock RFC3339 at publish time.
+- `version` — the running `telephone-booth` client version (from
+  `CARGO_PKG_VERSION`, e.g. `0.3.2`). Also included in the body of
+  `PUT /v1/system` so operators can see at a glance which booth build is
+  online.
 
 ## `SystemSnapshot` fields
 

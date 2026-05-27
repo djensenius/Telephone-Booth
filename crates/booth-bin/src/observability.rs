@@ -119,6 +119,10 @@ pub struct RuntimeIdentity {
     pub booth_id: String,
     /// UUIDv4 minted on this process start.
     pub boot_id: String,
+    /// Running `telephone-booth` client version (e.g. `0.3.2`). Stamped
+    /// on every event + system snapshot so operators can see which booth
+    /// build is online.
+    pub version: &'static str,
     /// Used to compute monotonic nanoseconds relative to process start.
     pub start: Instant,
 }
@@ -130,6 +134,7 @@ impl RuntimeIdentity {
         Self {
             booth_id: booth_id.into(),
             boot_id: Uuid::new_v4().to_string(),
+            version: env!("CARGO_PKG_VERSION"),
             start: Instant::now(),
         }
     }
@@ -415,7 +420,7 @@ pub fn spawn_system_pusher(
                             continue;
                         }
                         if let Err(err) = operator
-                            .put_system_snapshot(&identity.booth_id, &snapshot)
+                            .put_system_snapshot(&identity.booth_id, identity.version, &snapshot)
                             .await
                         {
                             warn!(%err, "PUT /v1/system failed");
@@ -673,7 +678,7 @@ fn envelope(
     let occurred_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| String::new());
-    let mut map = serde_json::Map::with_capacity(8);
+    let mut map = serde_json::Map::with_capacity(9);
     map.insert("eventId".to_string(), Value::String(event_id));
     map.insert(
         "boothId".to_string(),
@@ -685,6 +690,10 @@ fn envelope(
     );
     map.insert("type".to_string(), Value::String(kind.to_string()));
     map.insert("occurredAt".to_string(), Value::String(occurred_at));
+    map.insert(
+        "version".to_string(),
+        Value::String(identity.version.to_string()),
+    );
     if let Some(id) = session_id {
         map.insert("sessionId".to_string(), Value::String(id));
     }
@@ -895,5 +904,22 @@ mod tests {
         let event_id = env.get("eventId").and_then(|v| v.as_str()).unwrap();
         assert!(event_id.starts_with(&identity.boot_id));
         assert!(event_id.ends_with(":0"));
+    }
+
+    #[test]
+    fn envelope_includes_client_version() {
+        let identity = RuntimeIdentity::new("booth-test");
+        let mut seq = 0;
+        let env = envelope(
+            &identity,
+            "call_started",
+            Some("sess-1".to_string()),
+            None,
+            Value::Null,
+            next_event_seq(&mut seq),
+        );
+        let version = env.get("version").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(version, identity.version);
     }
 }
