@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/djensenius/Telephone-Booth/compare/v0.3.2...v0.3.3) (2026-05-27)
+
+
+### Bug Fixes
+
+* stamp client version on telemetry events and system snapshots ([#75](https://github.com/djensenius/Telephone-Booth/issues/75)) ([6792847](https://github.com/djensenius/Telephone-Booth/commit/6792847c37b1bc5436b1cde502e56cd740d07d4a))
+
 ## [0.3.2](https://github.com/djensenius/Telephone-Booth/compare/v0.3.1...v0.3.2) (2026-05-27)
 
 
