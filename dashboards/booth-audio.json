@@ -8,23 +8,33 @@
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-      "fieldConfig": { "defaults": { "unit": "none", "min": -120, "max": 0 } },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
-          "expr": "booth_audio_input_dbfs{booth_id=~\"$booth\"}",
-          "legendFormat": "input {{booth_id}}",
+          "expr": "booth_audio_peak_amplitude{booth_id=~\"$booth\",channel=\"input\"}",
+          "legendFormat": "input peak {{booth_id}}",
           "refId": "A"
         },
         {
-          "expr": "booth_audio_output_dbfs{booth_id=~\"$booth\"}",
-          "legendFormat": "output {{booth_id}}",
+          "expr": "booth_audio_peak_amplitude{booth_id=~\"$booth\",channel=\"output\"}",
+          "legendFormat": "output peak {{booth_id}}",
           "refId": "B"
+        },
+        {
+          "expr": "booth_audio_rms_amplitude{booth_id=~\"$booth\",channel=\"input\"}",
+          "legendFormat": "input rms {{booth_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "booth_audio_rms_amplitude{booth_id=~\"$booth\",channel=\"output\"}",
+          "legendFormat": "output rms {{booth_id}}",
+          "refId": "D"
         }
       ],
-      "title": "Audio levels (dBFS)",
+      "title": "Audio levels (linear amplitude, peak & rms)",
       "type": "timeseries"
     },
     {
@@ -67,12 +77,12 @@
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
-          "expr": "rate(booth_events_dropped_total{booth_id=~\"$booth\"}[5m])",
-          "legendFormat": "{{reason}} {{booth_id}}",
+          "expr": "sum by (source, booth_id) (rate(booth_errors_total{booth_id=~\"$booth\"}[5m]))",
+          "legendFormat": "{{source}} {{booth_id}}",
           "refId": "A"
         }
       ],
-      "title": "Forwarder events dropped per second",
+      "title": "Booth errors per second by source",
       "type": "timeseries"
     }
   ],
@@ -83,11 +93,11 @@
     "list": [
       {
         "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-        "definition": "label_values(booth_audio_input_dbfs, booth_id)",
+        "definition": "label_values(booth_info, booth_id)",
         "label": "Booth",
         "name": "booth",
         "options": [],
-        "query": "label_values(booth_audio_input_dbfs, booth_id)",
+        "query": "label_values(booth_info, booth_id)",
         "refresh": 2,
         "regex": "",
         "type": "query"

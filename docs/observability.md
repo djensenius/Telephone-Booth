@@ -262,7 +262,6 @@ error messages) ever become labels.
 | `booth_upload_failures_total`           | `reason`                            | `UploadFailed` events; small bounded enum. |
 | `booth_operator_requests_total`         | `route`, `status_class`             | `OperatorResponse` events.                |
 | `booth_errors_total`                    | `source`                            | `Error` events; `source` is a bounded enum. |
-| `booth_events_dropped_total`            | `reason`                            | Forwarder buffer overflow.                |
 | `booth_network_receive_bytes_total`     | `iface`                             | sysinfo per-interface counters.           |
 | `booth_network_transmit_bytes_total`    | `iface`                             | sysinfo per-interface counters.           |
 
@@ -270,7 +269,7 @@ error messages) ever become labels.
 
 | Metric                              | Labels                              |
 | ----------------------------------- | ----------------------------------- |
-| `booth_cpu_usage_ratio`             | `cpu` (`overall` or core index)     |
+| `booth_cpu_usage_ratio`             | (none) — overall host CPU usage ratio in `[0.0, 1.0]`. Per-core series is collected in `SystemSnapshot` but is not yet exported as Prometheus labels. |
 | `booth_load_average`                | `window` (`1m`, `5m`, `15m`)        |
 | `booth_cpu_temperature_celsius`     | (none)                              |
 | `booth_memory_used_bytes`           | (none)                              |
@@ -278,9 +277,8 @@ error messages) ever become labels.
 | `booth_disk_used_bytes`             | `mountpoint`                        |
 | `booth_disk_total_bytes`            | `mountpoint`                        |
 | `booth_uptime_seconds`              | (none)                              |
-| `booth_audio_input_dbfs`            | (none)                              |
-| `booth_audio_output_dbfs`           | (none)                              |
-| `booth_event_forward_inflight`      | (none)                              |
+| `booth_audio_peak_amplitude`        | `channel` (`input`, `output`) — linear peak amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
+| `booth_audio_rms_amplitude`         | `channel` (`input`, `output`) — linear RMS amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_info`                        | `mode` (`real`, `mock`, `simulator`) — always 1.0; lets Grafana / VictoriaMetrics filter dashboards by runtime mode (e.g. `booth_calls_total * on(booth_id) group_left() booth_info{mode="real"}` to exclude mock / simulator booths). Cardinality is bounded to 3. |
 
 ### Histograms
