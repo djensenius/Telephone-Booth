@@ -647,6 +647,10 @@ pub struct NetworkStats {
     pub receive_bytes_total: u64,
     /// Cumulative transmitted bytes since boot.
     pub transmit_bytes_total: u64,
+    /// IP addresses bound to this interface (IPv4 and IPv6), without the
+    /// network prefix. Empty when the platform doesn't expose them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
 }
 
 /// Stats for the booth process itself.
@@ -1105,5 +1109,41 @@ mod tests {
             json.contains("\"runtimeMode\":\"simulator\""),
             "snapshot should carry simulator mode, got: {json}"
         );
+    }
+
+    #[test]
+    fn network_stats_deserializes_without_addresses() {
+        let json = r#"{"interface":"eth0","receiveBytesTotal":10,"transmitBytesTotal":20}"#;
+        let parsed: NetworkStats = serde_json::from_str(json).expect("deserialize legacy");
+        assert_eq!(parsed.interface, "eth0");
+        assert!(parsed.addresses.is_empty());
+    }
+
+    #[test]
+    fn network_stats_omits_empty_addresses() {
+        let stats = NetworkStats {
+            interface: "eth0".to_string(),
+            receive_bytes_total: 0,
+            transmit_bytes_total: 0,
+            addresses: Vec::new(),
+        };
+        let json = serde_json::to_string(&stats).expect("serialize stats");
+        assert!(
+            !json.contains("addresses"),
+            "empty addresses should be omitted, got: {json}"
+        );
+    }
+
+    #[test]
+    fn network_stats_round_trips_addresses() {
+        let stats = NetworkStats {
+            interface: "wlan0".to_string(),
+            receive_bytes_total: 1,
+            transmit_bytes_total: 2,
+            addresses: vec!["192.168.1.10".to_string(), "fe80::1".to_string()],
+        };
+        let json = serde_json::to_string(&stats).expect("serialize stats");
+        let parsed: NetworkStats = serde_json::from_str(&json).expect("deserialize stats");
+        assert_eq!(stats, parsed);
     }
 }

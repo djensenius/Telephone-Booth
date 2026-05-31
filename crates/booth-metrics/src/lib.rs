@@ -284,6 +284,7 @@ impl SystemSampler {
                 .system
                 .refresh_memory_specifics(MemoryRefreshKind::everything());
             state.disks.refresh();
+            state.networks.refresh_list();
             state.networks.refresh();
 
             snapshot.cpu = Some(cpu_stats(&state.system));
@@ -677,6 +678,16 @@ fn network_stats(networks: &Networks) -> Vec<NetworkStats> {
             interface: name.clone(),
             receive_bytes_total: data.total_received(),
             transmit_bytes_total: data.total_transmitted(),
+            addresses: {
+                let mut addresses: Vec<String> = data
+                    .ip_networks()
+                    .iter()
+                    .map(|ip| ip.addr.to_string())
+                    .collect();
+                addresses.sort();
+                addresses.dedup();
+                addresses
+            },
         })
         .collect()
 }
