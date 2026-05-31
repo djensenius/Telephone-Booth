@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/djensenius/Telephone-Booth/compare/v0.3.3...v0.4.0) (2026-05-31)
+
+
+### Features
+
+* expose per-interface IP addresses in system snapshots ([#77](https://github.com/djensenius/Telephone-Booth/issues/77)) ([f588f7c](https://github.com/djensenius/Telephone-Booth/commit/f588f7c9d0d66f09b30952c18c38dead13c1fdd7))
+
 ## [0.3.3](https://github.com/djensenius/Telephone-Booth/compare/v0.3.2...v0.3.3) (2026-05-27)
 
 
