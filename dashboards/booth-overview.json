@@ -177,18 +177,18 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "fieldConfig": { "defaults": { "unit": "short" } },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
       "id": 7,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
-          "expr": "rate(booth_calls_started_total{booth_id=~\"$booth\"}[5m])",
+          "expr": "sum by (booth_id) (increase(booth_calls_started_total{booth_id=~\"$booth\"}[24h]))",
           "legendFormat": "{{booth_id}}",
           "refId": "A"
         }
       ],
-      "title": "Calls per second",
+      "title": "Calls per day (rolling 24h)",
       "type": "timeseries"
     },
     {
