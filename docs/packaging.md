@@ -64,7 +64,9 @@ sudo journalctl -u telephone-booth.service -f
 ```
 
 `telephone-booth-tailscale-serve.service` is a oneshot unit that persists
-Tailscale's serve config:
+Tailscale's serve config. It waits for the `tailscaled` backend to report
+ready before applying the serve config, so it comes up cleanly after a
+reboot without a manual restart:
 
 ```sh
 sudo systemctl status telephone-booth-tailscale-serve.service
