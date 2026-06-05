@@ -8,7 +8,7 @@ data flow and the metric catalog.
 
 | File                          | Title                          | Focus                                                                 |
 | ----------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `booth-overview.json`         | Booth — Overview               | CPU temp, load, memory, uptime, network throughput, calls/sec.        |
+| `booth-overview.json`         | Booth — Overview               | CPU temp, load, memory, uptime, network throughput, calls/day.        |
 | `booth-call-activity.json`    | Booth — Call activity          | Calls per outcome, dialed digit histogram, recording + upload timing. |
 | `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events.|
 | `booth-combined.json`         | Telephone Booth (tabbed)       | All of the above combined into one dashboard with three tabs (Grafana 12+, schema v2). |
