@@ -8,11 +8,20 @@ data flow and the metric catalog.
 
 | File                          | Title                          | Focus                                                                 |
 | ----------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `booth-overview.json`         | Booth — Overview               | CPU temp, load, memory, uptime, network throughput, calls/sec.        |
+| `booth-overview.json`         | Booth — Overview               | CPU temp, load, memory, uptime, network throughput, calls/day.        |
 | `booth-call-activity.json`    | Booth — Call activity          | Calls per outcome, dialed digit histogram, recording + upload timing. |
 | `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events.|
+| `booth-combined.json`         | Telephone Booth (tabbed)       | All of the above combined into one dashboard with three tabs (Grafana 12+, schema v2). |
 
-All three dashboards use a `$booth` template variable populated from the
+The three single-focus dashboards use the classic dashboard schema
+(`schemaVersion: 39`) and import into any modern Grafana.
+`booth-combined.json` is the same panels reorganised into one dashboard
+with a tab per section, using Grafana's newer dashboard schema
+(`dashboard.grafana.app/v2`). Use it if you prefer one dashboard
+with tabs; keep the three classic files if you run an older Grafana or
+provision dashboards individually.
+
+All of them use a `$booth` template variable populated from the
 `booth_id` label, so they work out of the box for single- and
 multi-booth deployments.
 
@@ -71,6 +80,36 @@ providers:
     options:
       path: /var/lib/grafana/provisioning/dashboards/booth
 ```
+
+### The combined tabbed dashboard (`booth-combined.json`)
+
+`booth-combined.json` uses Grafana's newer dashboard schema (v2,
+`dashboard.grafana.app/v2`) so the three sections render as tabs.
+The file is the bare dashboard **spec** (the v2 "JSON model"), which is
+what the UI import expects. A few things to know:
+
+- **Requires Grafana 12+** with the new dashboard layouts. Older
+  Grafana versions don't understand `TabsLayout` and will reject it.
+- **Import via the UI:** Dashboards → New → Import → paste the file.
+- **File provisioning** wants the Kubernetes-style envelope, not the
+  bare spec. Wrap it first:
+
+  ```sh
+  jq '{apiVersion:"dashboard.grafana.app/v2", kind:"Dashboard", \
+       metadata:{name:"booth-combined"}, spec:.}' booth-combined.json
+  ```
+
+- **`annotations` errors on import:** the classic schema's
+  `"annotations": { "list": [] }` is *invalid* in schema v2. In v2,
+  annotations are a list of `AnnotationQuery` objects (already set
+  correctly here). If you hit `annotations … invalid`, you're pasting
+  classic JSON into the v2 path — use `booth-combined.json` as-is rather
+  than copying fields from the classic files.
+- **Datasource:** unlike the classic files (which hard-code the
+  `VictoriaMetrics` uid), the combined dashboard exposes a **Datasource**
+  dropdown (a `DatasourceVariable` for `prometheus`). Pick your
+  Prometheus/VictoriaMetrics datasource there and the `$booth` selector
+  and all panels follow it — no uid editing required.
 
 ## Editing
 
