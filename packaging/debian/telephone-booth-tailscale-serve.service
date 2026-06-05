@@ -6,8 +6,14 @@ Requires=tailscaled.service
 [Service]
 Type=oneshot
 RemainAfterExit=true
+# After=tailscaled.service only waits for tailscaled to *start*, not to finish
+# connecting. At boot the serve config can be applied before the tailnet/MagicDNS
+# HTTPS cert is ready, which fails the oneshot with no retry. Block until the
+# backend reports ready (bounded to ~60s) so the proxy survives reboots cleanly.
+ExecStartPre=/bin/sh -c 'for _ in $(seq 1 30); do /usr/bin/tailscale status >/dev/null 2>&1 && exit 0; sleep 2; done; echo "tailscaled not ready after 60s" >&2; exit 1'
 ExecStart=/usr/bin/tailscale serve --bg --https=443 --set-path=/ http://127.0.0.1:8080
 ExecStop=/usr/bin/tailscale serve reset
+TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target
