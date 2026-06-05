@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/djensenius/Telephone-Booth/compare/v0.4.0...v0.4.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* **packaging:** wait for tailscaled ready before tailscale serve ([#79](https://github.com/djensenius/Telephone-Booth/issues/79)) ([edfec52](https://github.com/djensenius/Telephone-Booth/commit/edfec52691f9a5529aa90d2fc51f6d52ee351888))
+
 ## [0.4.0](https://github.com/djensenius/Telephone-Booth/compare/v0.3.3...v0.4.0) (2026-05-31)
 
 
