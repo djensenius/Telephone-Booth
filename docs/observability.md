@@ -187,6 +187,104 @@ A few things to be aware of:
   fine — the booth's metric set is small enough that 10–60 s
   intervals all stay well within budget.
 
+### Host metrics with node_exporter
+
+The booth's `/metrics` route only exposes the application's own
+counters and gauges (see the [metrics catalog](#metrics-catalog)). It
+does **not** export OS-level vitals such as per-core CPU, filesystem
+fullness, network throughput, or load average. If you want those
+alongside the booth metrics — for example to alert on a full SD card or
+a thermally throttled Pi — install Prometheus
+[`node_exporter`](https://github.com/prometheus/node_exporter) on the
+booth host and scrape it from the same remote Prometheus.
+
+Raspberry Pi OS is Debian-based, so the packaged build is the simplest
+install — it ships a hardened systemd unit and survives `apt` upgrades:
+
+```bash
+sudo apt-get update
+sudo apt-get install prometheus-node-exporter
+```
+
+By default the Debian package listens on `0.0.0.0:9100`. Keep it off the
+public/LAN interfaces and let Tailscale be the gate, exactly like the
+booth's own `/metrics` route — bind it to loopback and expose it over
+the tailnet with `tailscale serve`. Edit
+`/etc/default/prometheus-node-exporter`:
+
+```text
+# /etc/default/prometheus-node-exporter
+ARGS="--web.listen-address=127.0.0.1:9100"
+```
+
+```bash
+sudo systemctl restart prometheus-node-exporter
+# Publish loopback :9100 on the tailnet as HTTPS :9100 (real Let's
+# Encrypt cert via MagicDNS, same as the booth's port 443 router).
+sudo tailscale serve --bg --https=9100 http://127.0.0.1:9100
+```
+
+`node_exporter` is now reachable from any tailnet peer at:
+
+```text
+https://<booth-host>.<your-tailnet>.ts.net:9100/metrics
+```
+
+Grant the Prometheus host ACL permission to reach the new port — extend
+the `tag:booth` stanza from the previous section:
+
+```jsonc
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:prometheus"],
+      "dst": ["tag:booth:443", "tag:booth:9100"]
+    }
+  ]
+}
+```
+
+Then add a second scrape job to the remote Prometheus, next to the
+`telephone-booth` job. Relabel `node_*` series with the same `booth_id`
+the application metrics use so host and app series join cleanly in
+Grafana:
+
+```yaml
+scrape_configs:
+  - job_name: telephone-booth-node
+    metrics_path: /metrics
+    scheme: https
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+          # MagicDNS hostnames with the node_exporter port.
+          - booth-01.your-tailnet.ts.net:9100
+          - booth-02.your-tailnet.ts.net:9100
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^.]+)\..*'
+        target_label: booth_id
+        replacement: '$1'
+```
+
+A few notes:
+
+- **Loopback bind + `tailscale serve` keeps the trust model identical**
+  to the booth's `/metrics` route: WireGuard encrypts the hop, the
+  MagicDNS cert satisfies HTTPS verification (no `insecure_skip_verify`),
+  and Tailscale ACLs — not bearer auth — gate access. Lock
+  `tag:booth:9100` down to your Prometheus/admin hosts.
+- **This is independent of the `vmagent` sidecar.** `node_exporter`
+  publishes host vitals; `vmagent` (when enabled) pushes the booth's
+  application metrics. Run either, both, or neither.
+- **Off-the-shelf dashboards work.** The community
+  [Node Exporter Full](https://grafana.com/grafana/dashboards/1860)
+  board keys off `instance`/`job`; the `booth_id` relabel above also
+  lets you cross-filter against the booth's own dashboards in
+  `dashboards/`.
+
 ## Telemetry events
 
 Every event on the booth telemetry bus is also forwarded to the operator
