@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/djensenius/Telephone-Booth/compare/v0.4.1...v0.4.2) (2026-06-09)
+
+
+### Documentation
+
+* add payphone hardware reference + handset/wiring detail ([#83](https://github.com/djensenius/Telephone-Booth/issues/83)) ([453828a](https://github.com/djensenius/Telephone-Booth/commit/453828abb032d903f8fa9bbc68d9668cd3e10add))
+
 ## [0.4.1](https://github.com/djensenius/Telephone-Booth/compare/v0.4.0...v0.4.1) (2026-06-05)
 
 
