@@ -6,47 +6,166 @@ Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
 ## Rotary phone wiring
 
+The reference booth is built from a vintage **three-slot coin payphone**
+(Western Electric / Northern Electric, `233`-type network, `P-13E961` rotary
+dial). The telephone network and coin mechanism are **not used** — the
+client bypasses them entirely. You only tap three switch contacts for GPIO and
+the two handset capsules for audio (see
+[Handset transmitter and receiver](#handset-transmitter-and-receiver)).
+
+For a full subsystem breakdown of the physical phone — the network block, coin
+relay, signal gong, terminal designations, and links to the original `233G`
+service manuals — see [`payphone-reference.md`](payphone-reference.md).
+
 The booth uses three GPIO inputs against ground, debounced in software:
 
 | Function       | Default BCM pin | Physical pin | Wire color (typical) |
 | -------------- | --------------- | ------------ | --------------------- |
 | Hook switch    | BCM 17          | 11           | green                 |
 | Rotary pulse   | BCM 27          | 13           | yellow                |
-| Rotary "dialing" gate | BCM 22   | 15           | blue                  |
+| Rotary gate (off-normal) | BCM 22 | 15           | blue                  |
 
 Ground is physical pin 9 (any GND pin on the header works).
 
-All three inputs are configured with the Pi's internal pull-up resistor by default
-(`rppal` `PullUp`, overridable to `PullDown`) and read **active-low** when wired
-as contacts to ground (closed = 0). The state machine treats:
+All three inputs are configured with the Pi's internal pull-up resistor by
+default (`rppal` `PullUp`, overridable to `PullDown`) and read **active-low**
+when wired as contacts to ground (closed = 0). The runtime maps each pin's
+debounced logical level to a `booth-core` event:
 
-- Hook switch closed → `HookOn`; open → `HookOff`.
-- Rotary "dialing" gate **closed** while the user spins the dial; on the
-  trailing edge the runtime emits `DigitClosed(N)` for the count of pulses
-  collected while the gate was closed.
-- Each pulse (closing of the pulse contact while the gate is closed) is
-  emitted as `RotaryPulse` after a 5 ms debounce.
+- **Hook switch** — level high → `HookOn` (handset resting / idle); level low →
+  `HookOff` (handset lifted). Tap the switchhook leaf contacts in the upper
+  housing.
+- **Rotary pulse** — the dial's *impulse* contacts, which open once per click as
+  the finger wheel returns. Each closing edge is emitted as `RotaryPulse` after
+  a 5 ms debounce. Pulses are counted and the digit is decoded after a 350 ms
+  idle gap (`PULSE_GROUP_TIMEOUT_MS`): 1–9 pulses → that digit, 10 pulses → `0`,
+  more than 10 → the group is discarded and the booth returns to dial tone.
+- **Rotary gate (off-normal)** — the dial's *off-normal* / shunt contacts, which
+  stay closed while the wheel is away from rest. The current runtime **reads
+  this pin for the debug pin matrix and telemetry but does not use it to decode
+  digits** (`event_from_gpio` returns `None` for `RotaryRead`); decoding relies
+  on the pulse count plus the 350 ms timeout above. Wiring it is therefore
+  optional — handy for debugging, not required to dial. (The legacy Node.js
+  client *did* close each digit on this contact's trailing edge; the Rust client
+  deliberately does not.)
 
-If your phone wiring is reversed, set `gpio.invert.<role> = true` in the
-config file — see [`configuration.md`](configuration.md). The ignored
-`booth-pi` loopback test documents a hardware smoke test using an output pin
-wired to one of these inputs.
+Only **hook** and **pulse** are functionally required. Because polarity depends
+on which leaf of each contact you tap, bring the booth up with the
+[debug pin matrix](debug-panel.md) open, watch the live levels while you lift the
+handset and dial, and if any signal reads inverted flip `gpio.pull` or
+`gpio.invert.<role> = true` — see [`configuration.md`](configuration.md). The
+ignored `booth-pi` loopback test documents a hardware smoke test using an output
+pin wired to one of these inputs.
 
 ### Pin mapping defaults
 
-The defaults above (BCM 17/27/22 → physical 11/13/15) match the wiring of
-the original Node.js installation, so existing booths can be re-flashed
-without re-soldering. Every pin is overridable:
+The defaults (hook → BCM 17 / physical 11, rotary pulse → BCM 27 / physical 13,
+rotary gate → BCM 22 / physical 15) are the recommended wiring for a fresh
+build. Every pin is overridable:
 
 ```toml
 # /etc/phone-booth/config.toml
 [gpio]
-hook_bcm        = 17
+hook_bcm         = 17
 rotary_pulse_bcm = 27
-rotary_gate_bcm  = 22
-pull             = "up"      # or "down"
+rotary_gate_bcm  = 22       # alias: rotary_read_bcm; optional (see above)
+pull             = "up"     # or "down"
 debounce_ms      = 5
 ```
+
+### Reusing a legacy Node.js booth harness
+
+> **Heads-up:** the Rust defaults do **not** match the original Node.js wiring.
+> An earlier version of this page claimed they did — they don't. The hook and
+> gate wires are swapped between the two.
+
+The legacy Node.js client (`legacy-node-v1` tag) addressed the header by
+**physical** pin number and assigned different roles:
+
+| Physical pin | Legacy Node.js role       | Rust default role        |
+| ------------ | ------------------------- | ------------------------ |
+| 11           | Rotary gate ("channel")   | **Hook switch** (BCM 17) |
+| 13           | Rotary pulse              | Rotary pulse (BCM 27)    |
+| 15           | Hook switch ("hangupper") | **Rotary gate** (BCM 22) |
+
+Pulse (pin 13) matches, but hook and gate are reversed. If you re-flash an
+existing booth **without** re-soldering its harness, the old hook wire lands on
+the (ignored) gate pin and hook detection silently fails. Either move the two
+wires, or keep the harness and remap the roles in config:
+
+```toml
+# Reuse a legacy Node.js harness unchanged:
+[gpio]
+hook_bcm         = 22       # physical 15 — where the legacy hook wire already is
+rotary_pulse_bcm = 27       # physical 13 — unchanged
+rotary_read_bcm  = 17       # physical 11 — legacy gate wire (read-only anyway)
+pull             = "up"
+```
+
+## Handset transmitter and receiver
+
+The mouthpiece **transmitter** and the earpiece **receiver** are two *different*
+elements, and both are wired to the **audio interface**, not to GPIO:
+
+- the **transmitter** is the *microphone* — it feeds the interface's input;
+- the **receiver** (earpiece) is the *speaker* — it is driven from the
+  interface's headphone / line output.
+
+On a vintage handset both are removable capsules under the screw-off caps. You
+do not need the phone's `233`-type network for either — run two wires from each
+capsule straight to the interface.
+
+### Transmitter (microphone) options
+
+Vintage handsets use a **carbon transmitter** (e.g. Western Electric `T1`): a
+capsule of carbon granules whose resistance varies with sound pressure. It needs
+a DC bias current to work at all, is electrically noisy and low-fidelity, drifts
+as the granules pack, and will not plug straight into a modern mic input. In
+rough order of audio quality (and increasing departure from "all original"):
+
+1. **Swap in an electret capsule** (recommended). Remove the carbon button and
+   drop a small electret microphone into the cap. Power it from a mic input that
+   supplies plug-in bias, or from a tiny electret preamp module (e.g. `MAX9814`,
+   Adafruit electret amp) feeding a line input. Cleanest result for the least
+   money, and what most booth rebuilds do.
+2. **Fit a dynamic element** into the `XLR` / mic input. No bias needed, robust,
+   good quality; the capsule is larger so it may need creative mounting.
+3. **Buy a drop-in replacement capsule.** Reproduction transmitter elements sold
+   for vintage phones are pin-compatible and self-contained (usually electret
+   inside), so they work without external bias — near plug-and-play.
+4. **Keep the original carbon element and bias it** (most authentic, lo-fi).
+   Feed it ~3–9 V DC through a current-limiting resistor and couple the audio out
+   through a `~600:600 Ω` line transformer (or a DC-blocking capacitor) into a
+   line input. Expect hiss and the occasional "tap the handset to wake it up".
+5. **Replace the handset guts with a USB / VoIP handset module** (most reliable,
+   least authentic) — a fallback if the period element does not matter to you.
+
+Set the interface input gain per [Microphone level](#microphone-level) once the
+element is chosen.
+
+### Receiver (earpiece) quality and level
+
+The receiver is a *separate*, low-sensitivity element with a deliberately narrow
+(telephone-band, ~300–3400 Hz) response — that "small and tinny" timbre is
+period-correct, not a fault. Most vintage receivers are a few tens to a few
+hundred ohms, and a UAC2 headphone output (designed for 16–300 Ω loads) can
+drive them **directly**, just quietly. To dial in level and quality:
+
+- **Direct drive** (simplest): wire the receiver to the headphone / line out and
+  raise the level in `alsamixer` or the OS mixer. Add a small series resistor (a
+  few hundred ohms) if it is too loud or to protect a fragile coil.
+- **Add a small mono amplifier** (e.g. `PAM8302`, `LM386`) between a line out and
+  the receiver if direct drive is too quiet; tame the output with a series
+  resistor or an L-pad so the interface is not run at full tilt.
+- **Replace the receiver element** with a modern 8–32 Ω mini speaker / driver for
+  louder, fuller sound — at the cost of authenticity.
+- **Shape the audio at the source.** Because the booth plays fixed clips, the
+  most reliable EQ is baked into the clips: a gentle band-pass / presence lift
+  around 300–3400 Hz plus a high-pass to kill rumble maximizes intelligibility on
+  a tiny element without fighting ALSA.
+
+Keep playback levels modest into an original receiver — a high-power speaker amp
+can cook a vintage voice-coil.
 
 ## USB audio device
 

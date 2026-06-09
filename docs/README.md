@@ -15,6 +15,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 - [Getting started](getting-started.md) — clone → mise install → `just dev`
 - [Simulator TUI](simulator.md) — interactive `--simulator` flag for local testing without a phone
 - [Hardware](hardware.md) — wiring the rotary phone + GPIO pinout
+- [Payphone reference](payphone-reference.md) — physical 3-slot payphone subsystem breakdown + service-manual links
 - [Configuration](configuration.md) — every config key, its default, env-var equivalent
 
 ## Running it
