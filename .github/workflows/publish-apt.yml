@@ -14,6 +14,13 @@ on:
         description: "Release tag to (re)publish to the APT repo (e.g. v0.1.0)."
         required: true
         type: string
+      source_repo:
+        description: >-
+          owner/repo to pull the release .debs from. Defaults to this repo.
+          Used so sibling projects (e.g. the operator CLI) can publish their
+          .debs into this shared APT repo. Must be under the same owner.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +43,8 @@ jobs:
         id: tag
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          INPUT_SOURCE_REPO: ${{ inputs.source_repo }}
+          DEFAULT_REPO: ${{ github.repository }}
         run: |
           set -eu
           tag="$INPUT_TAG"
@@ -43,7 +52,18 @@ jobs:
             echo "::error::Refusing to publish: tag '$tag' does not look like vMAJOR.MINOR.PATCH"
             exit 1
           fi
+          source_repo="${INPUT_SOURCE_REPO:-}"
+          [ -z "$source_repo" ] && source_repo="$DEFAULT_REPO"
+          # Only ingest releases from repos under the same owner so the
+          # workflow can't be pointed at an arbitrary third-party release.
+          owner="${DEFAULT_REPO%%/*}"
+          case "$source_repo" in
+            "$owner"/*) : ;;
+            *) echo "::error::source_repo '$source_repo' must be under the '$owner' owner."; exit 1 ;;
+          esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "source_repo=$source_repo" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag from $source_repo"
 
       - name: Checkout main (for scripts/build-apt-repo.sh)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -74,9 +94,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_REPO: ${{ steps.tag.outputs.source_repo }}
         run: |
           set -eu
-          is_draft="$(gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          is_draft="$(gh release view "$TAG" --repo "$SOURCE_REPO" --json isDraft --jq .isDraft)"
           if [ "$is_draft" = "true" ]; then
             echo "::error::Release $TAG is still a draft; refusing to publish APT repo."
             exit 1
@@ -86,6 +107,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_REPO: ${{ steps.tag.outputs.source_repo }}
         # Retry on transient asset-visibility lag: when publish-apt is
         # dispatched immediately after the upstream `publish.yml` finishes
         # uploading, GitHub's release-asset listing API can briefly return
@@ -103,7 +125,7 @@ jobs:
             attempts=$((attempts + 1))
             rm -f debs/*.deb 2>/dev/null || true
             if gh release download "$TAG" \
-                 --repo "${{ github.repository }}" \
+                 --repo "$SOURCE_REPO" \
                  --pattern '*.deb' \
                  --dir debs \
                && ls debs/*.deb >/dev/null 2>&1; then
@@ -156,15 +178,20 @@ jobs:
           APT_SIGNING_KEY_PASSPHRASE: ${{ secrets.APT_SIGNING_KEY_PASSPHRASE }}
         run: |
           set -eu
+          # amd64 is added so the operator CLI's x86_64 .debs (published into
+          # this shared repo from the sibling repo) get an index; the booth
+          # itself ships only arm64/armhf, so its amd64 index stays empty.
           src/scripts/build-apt-repo.sh \
             --pages-dir pages \
             --debs-dir debs \
+            --arch amd64 \
             --signing-key-fpr "$APT_SIGNING_KEY_FPR" \
             --pubkey-output pages/telephone-booth-archive-keyring.gpg
 
       - name: Commit + push gh-pages
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_REPO: ${{ steps.tag.outputs.source_repo }}
         working-directory: pages
         run: |
           set -eu
@@ -177,7 +204,7 @@ jobs:
             echo "No changes to gh-pages; nothing to push."
             exit 0
           fi
-          git commit -m "publish: $TAG (signing-key $APT_SIGNING_KEY_FPR)"
+          git commit -m "publish: $TAG from $SOURCE_REPO (signing-key $APT_SIGNING_KEY_FPR)"
           remote="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           # First push may need -u if the branch was bootstrapped above.
           git push "$remote" HEAD:gh-pages
