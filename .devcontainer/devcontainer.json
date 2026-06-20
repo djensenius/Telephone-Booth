@@ -1,0 +1,32 @@
+{
+  "name": "Telephone-Booth",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu26.04",
+  "features": {
+    "ghcr.io/devcontainers-extra/features/mise:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24.16.0"
+    }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config && mise trust && mise install --jobs=1 && mise exec -- cargo fetch",
+  "forwardPorts": [
+    8080,
+    8443
+  ],
+  "portsAttributes": {
+    "8080": {
+      "label": "Debug surface loopback"
+    },
+    "8443": {
+      "label": "Debug surface LAN TLS"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "DavidAnson.vscode-markdownlint",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  }
+}
