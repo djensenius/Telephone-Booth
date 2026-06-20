@@ -1,6 +1,6 @@
 {
   "name": "Telephone-Booth",
-  "image": "mcr.microsoft.com/vscode/devcontainers/base:ubuntu26.04",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu26.04",
   "features": {
     "ghcr.io/djensenius/dfj-container/dfj-container:latest": {}
   },
