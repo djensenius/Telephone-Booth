@@ -2,9 +2,12 @@
   "name": "Telephone-Booth",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu26.04",
   "features": {
-    "ghcr.io/djensenius/dfj-container/dfj-container:latest": {}
+    "ghcr.io/devcontainers-extra/features/mise:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24.16.0"
+    }
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config && mise install && cargo fetch",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config && mise trust && mise install --jobs=1 && mise exec -- cargo fetch",
   "forwardPorts": [
     8080,
     8443
