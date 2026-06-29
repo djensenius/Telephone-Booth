@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/djensenius/Telephone-Booth/compare/v0.4.2...v0.4.3) (2026-06-29)
+
+
+### Bug Fixes
+
+* **deps:** bump quinn-proto and anyhow to patch RUSTSEC advisories ([#90](https://github.com/djensenius/Telephone-Booth/issues/90)) ([e37c76c](https://github.com/djensenius/Telephone-Booth/commit/e37c76cea204c866761c84978c129dcca5e6bcd0))
+
 ## [0.4.2](https://github.com/djensenius/Telephone-Booth/compare/v0.4.1...v0.4.2) (2026-06-09)
 
 
