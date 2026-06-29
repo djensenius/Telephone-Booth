@@ -91,9 +91,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "arrayvec"
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "booth-bin"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "booth-core"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "booth-hal",
  "heapless",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "booth-debug"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "axum",
  "booth-core",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "booth-hal"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "heapless",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "booth-metrics"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "booth-hal",
  "booth-telemetry",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "booth-mock"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "async-trait",
  "booth-hal",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "booth-pi"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "booth-telemetry"
-version = "0.3.2"
+version = "0.4.2"
 dependencies = [
  "booth-hal",
  "serde",
@@ -2494,9 +2494,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
