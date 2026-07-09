@@ -9,6 +9,10 @@ rebuilds it from the filesystem; CI fails if it drifts.
 
 - [Project overview](overview.md) — what this is, who it's for, architecture at a glance
 
+## About the work
+
+- [Artist statement & bio](artist-statement.md) — the installation's concept, site-specific context, and artist bio
+
 ## Setup & Development
 
 - [Raspberry Pi setup](raspberry-pi-setup.md) — from-scratch Pi provisioning (OS, audio, Tailscale, deploy, wiring)
