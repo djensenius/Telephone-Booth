@@ -42,6 +42,14 @@ enum Command {
         #[cfg(feature = "simulator")]
         #[arg(long)]
         simulator: bool,
+        /// Launch a read-only TUI monitor over the real hardware. Streams live
+        /// telemetry (state, decoded digits, audio levels, operator calls) in a
+        /// scrolling log while you dial the physical phone. Reserves the same
+        /// GPIO/audio as the systemd service, so stop `telephone-booth.service`
+        /// first. Pair with `--mock` to monitor mock adapters instead.
+        #[cfg(feature = "simulator")]
+        #[arg(long)]
+        tui: bool,
     },
     /// Print the effective merged config as TOML with tokens redacted.
     PrintConfig {
@@ -83,11 +91,21 @@ async fn run_cli() -> Result<()> {
             mock,
             #[cfg(feature = "simulator")]
             simulator,
+            #[cfg(feature = "simulator")]
+            tui,
         } => {
             let config = load_config(config.as_deref())?;
             // CLI flag can only force a mode on; the config setting provides
             // the autostart baseline for systemd units.
             let mock = mock || config.runtime.mock;
+            // An explicit `--tui` takes precedence over the simulator autostart
+            // baseline, so a user asking for the read-only hardware monitor is
+            // never silently redirected into the interactive simulator.
+            #[cfg(feature = "simulator")]
+            if tui {
+                let (log_path, _guard) = install_simulator_tracing(&config.telemetry.journal_level);
+                return booth_bin::simulator::run_monitor(config, mock, log_path).await;
+            }
             #[cfg(feature = "simulator")]
             let simulator = simulator || config.runtime.simulator;
             #[cfg(feature = "simulator")]

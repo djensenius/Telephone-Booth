@@ -130,6 +130,11 @@ both the on-board LEDs and the live software levels as you lift the handset and
 dial. If a signal reads inverted, flip `gpio.pull` or set
 `gpio.invert.<role> = true` — see [`configuration.md`](configuration.md).
 
+For a full-screen console dashboard directly on the Pi (rather than the web
+pin matrix), stop the service and run the read-only hardware monitor:
+`sudo systemctl stop telephone-booth && sudo -u phonebooth /usr/bin/telephone-booth run --tui`.
+See [`simulator.md`](simulator.md#read-only-hardware-monitor---tui).
+
 ## Handset transmitter and receiver
 
 The mouthpiece **transmitter** and the earpiece **receiver** are two *different*
