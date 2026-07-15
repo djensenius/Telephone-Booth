@@ -624,12 +624,19 @@ async fn run_runtime(
     }
 
     notify_ready(options.notify_systemd);
+    let mut watchdog = arm_watchdog(options.notify_systemd);
 
     let mut state = State::default();
     let mut shutdown = shutdown_signal(options.listen_signals);
 
     loop {
         tokio::select! {
+            () = watchdog_tick(&mut watchdog) => {
+                // Emitted from inside the loop: if the loop is wedged in
+                // handle_event this branch never fires, so systemd stops
+                // seeing keepalives and restarts the process.
+                ping_watchdog();
+            }
             event = event_rx.recv() => {
                 let Some(event) = event else {
                     warn!("event channel closed");
@@ -1730,6 +1737,103 @@ fn notify_ready(enabled: bool) {
     }
 }
 
+/// Decide how often to send `WATCHDOG=1` keepalives, following the
+/// `sd_watchdog_enabled(3)` contract.
+///
+/// systemd exports `WATCHDOG_USEC` (the hard timeout in microseconds) and,
+/// optionally, `WATCHDOG_PID` (the PID the watchdog is armed for) when a unit
+/// sets `WatchdogSec=`. The service should ping at roughly **half** that
+/// interval so a single missed tick doesn't trip the timeout. Returns `None`
+/// when the watchdog is not armed for this process, in which case no keepalive
+/// task should be spawned.
+#[cfg(all(feature = "systemd", unix))]
+fn watchdog_interval(
+    usec: Option<&str>,
+    watchdog_pid: Option<&str>,
+    current_pid: u32,
+) -> Option<Duration> {
+    // Only honor the watchdog if it is armed for us specifically. An unset
+    // `WATCHDOG_PID` means "the process that received the environment", which
+    // is this process.
+    if let Some(pid) = watchdog_pid
+        && pid.trim().parse::<u32>().ok()? != current_pid
+    {
+        return None;
+    }
+    let usec: u64 = usec?.trim().parse().ok()?;
+    // Ping at half the timeout so a single missed tick doesn't trip it. Floor
+    // division keeps the interval strictly below the timeout (never equal),
+    // and a zero result — a sub-2µs timeout that can't be halved into a
+    // non-zero, sub-timeout interval — disarms the keepalive rather than
+    // spinning a zero-duration Tokio interval.
+    let half = usec / 2;
+    if half == 0 {
+        return None;
+    }
+    Some(Duration::from_micros(half))
+}
+
+/// A systemd watchdog keepalive timer, ticked from inside the runtime's main
+/// `select!` loop so that a wedged event loop stops pinging and lets systemd
+/// restart the process — which is the entire point of the watchdog. Driving
+/// the ping from a detached task would keep asserting liveness even while
+/// `handle_event` is blocked, defeating the supervision.
+struct Watchdog {
+    ticker: tokio::time::Interval,
+}
+
+/// Arm the systemd watchdog keepalive, returning `None` when it is not armed
+/// for this process (or the `systemd` feature is disabled). The returned
+/// [`Watchdog`] is ticked from the runtime loop via [`watchdog_tick`].
+fn arm_watchdog(enabled: bool) -> Option<Watchdog> {
+    #[cfg(all(feature = "systemd", unix))]
+    {
+        if !enabled {
+            return None;
+        }
+        let interval = watchdog_interval(
+            env::var("WATCHDOG_USEC").ok().as_deref(),
+            env::var("WATCHDOG_PID").ok().as_deref(),
+            std::process::id(),
+        )?;
+        info!(
+            interval_ms = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX),
+            "arming systemd watchdog keepalive"
+        );
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Some(Watchdog { ticker })
+    }
+    #[cfg(not(all(feature = "systemd", unix)))]
+    {
+        let _ = enabled;
+        None
+    }
+}
+
+/// Await the next watchdog tick. When the watchdog is not armed this pends
+/// forever, so the corresponding `select!` branch simply never fires.
+async fn watchdog_tick(watchdog: &mut Option<Watchdog>) {
+    match watchdog {
+        Some(watchdog) => {
+            watchdog.ticker.tick().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Send a single `WATCHDOG=1` keepalive to systemd. No-op when the `systemd`
+/// feature is disabled; only ever called from the runtime loop when the
+/// watchdog is armed.
+fn ping_watchdog() {
+    #[cfg(all(feature = "systemd", unix))]
+    {
+        if let Err(err) = send_systemd_notify("WATCHDOG=1") {
+            warn!(%err, "failed to send systemd watchdog keepalive");
+        }
+    }
+}
+
 /// Derive the metadata storage directory from the recordings directory.
 ///
 /// Places it as a sibling: `<recordings_dir>/../metadata/`.
@@ -2186,5 +2290,80 @@ mod tests {
             msg.contains("BOOTH_RUNTIME_MOCK"),
             "error should mention the env var, got: {msg}"
         );
+    }
+
+    #[cfg(all(feature = "systemd", unix))]
+    mod watchdog {
+        use super::super::watchdog_interval;
+        use std::time::Duration;
+
+        #[test]
+        fn none_when_usec_absent() {
+            assert_eq!(watchdog_interval(None, None, 42), None);
+        }
+
+        #[test]
+        fn none_when_usec_zero() {
+            assert_eq!(watchdog_interval(Some("0"), None, 42), None);
+        }
+
+        #[test]
+        fn none_when_usec_unparsable() {
+            assert_eq!(watchdog_interval(Some("soon"), None, 42), None);
+        }
+
+        #[test]
+        fn halves_the_timeout_when_armed_for_this_process() {
+            // 30s timeout -> ping every 15s.
+            assert_eq!(
+                watchdog_interval(Some("30000000"), None, 42),
+                Some(Duration::from_secs(15))
+            );
+        }
+
+        #[test]
+        fn honors_matching_watchdog_pid() {
+            assert_eq!(
+                watchdog_interval(Some("10000000"), Some("42"), 42),
+                Some(Duration::from_secs(5))
+            );
+        }
+
+        #[test]
+        fn none_when_watchdog_pid_is_another_process() {
+            assert_eq!(watchdog_interval(Some("10000000"), Some("99"), 42), None);
+        }
+
+        #[test]
+        fn none_when_watchdog_pid_unparsable() {
+            assert_eq!(watchdog_interval(Some("10000000"), Some("nope"), 42), None);
+        }
+
+        #[test]
+        fn small_timeout_pings_at_half_without_a_floor() {
+            // A 100us timeout pings every 50us — strictly below the timeout,
+            // with no artificial floor that could exceed it.
+            assert_eq!(
+                watchdog_interval(Some("100"), None, 42),
+                Some(Duration::from_micros(50))
+            );
+        }
+
+        #[test]
+        fn half_stays_strictly_below_the_timeout() {
+            // 100ms timeout -> 50ms ping (never 100ms, which would race the
+            // deadline).
+            assert_eq!(
+                watchdog_interval(Some("100000"), None, 42),
+                Some(Duration::from_millis(50))
+            );
+        }
+
+        #[test]
+        fn none_when_timeout_cannot_be_halved() {
+            // A 1us timeout halves to zero; disarm rather than spin a
+            // zero-duration interval.
+            assert_eq!(watchdog_interval(Some("1"), None, 42), None);
+        }
     }
 }

@@ -102,6 +102,34 @@ rotary_read_bcm  = 17       # physical 11 — legacy gate wire (read-only anyway
 pull             = "up"
 ```
 
+### GPIO screw terminal HAT (optional but recommended)
+
+Soldering directly to the 40-pin header is fiddly and unforgiving inside a
+booth. A **GPIO screw-terminal breakout HAT** — the reference build uses the
+52Pi *GPIO Screw Terminal HAT* (`SKU EP-01129`) — makes the phone leads
+tool-free to land and easy to re-seat.
+
+It is a **pure passthrough**: every screw terminal is one standard 40-pin BCM
+GPIO, brought straight out with no remapping. Your pin assignments (and the
+config keys below) are therefore **unchanged** — you just screw each wire into
+the terminal whose silkscreen matches the BCM number instead of soldering to a
+header pin. Each terminal has an LED indicator beside it that follows the pin's
+level, which is handy for eyeballing the contacts while you wire.
+
+Landing the reference wiring on the HAT:
+
+| Phone lead               | Screw terminal (BCM silkscreen) | Config key                     |
+| ------------------------ | ------------------------------- | ------------------------------ |
+| Hook switch              | `IO17`                          | `hook_bcm = 17`                |
+| Rotary pulse             | `IO27`                          | `rotary_pulse_bcm = 27`        |
+| Rotary gate (off-normal) | `IO22` (optional)               | `rotary_gate_bcm = 22`         |
+| Ground (common return)   | any `GND`                       | —                              |
+
+Bring the booth up with the [debug pin matrix](debug-panel.md) open and watch
+both the on-board LEDs and the live software levels as you lift the handset and
+dial. If a signal reads inverted, flip `gpio.pull` or set
+`gpio.invert.<role> = true` — see [`configuration.md`](configuration.md).
+
 ## Handset transmitter and receiver
 
 The mouthpiece **transmitter** and the earpiece **receiver** are two *different*

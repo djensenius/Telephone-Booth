@@ -63,6 +63,14 @@ sudo systemctl status telephone-booth.service
 sudo journalctl -u telephone-booth.service -f
 ```
 
+The runtime sends `READY=1` once it is up and then a `WATCHDOG=1` keepalive
+every ~15 s (half of `WatchdogSec`). The keepalive is emitted from inside the
+runtime's main event loop — not a detached task — so if that loop ever wedges
+the pings stop and systemd restarts the service, which is the whole point of
+the watchdog. The keepalive is only compiled into binaries built with the
+`systemd` feature (the published `.deb` is); a binary built without it under a
+`WatchdogSec=` unit would be killed every 30 s.
+
 `telephone-booth-tailscale-serve.service` is a oneshot unit that persists
 Tailscale's serve config. It waits for the `tailscaled` backend to report
 ready before applying the serve config, so it comes up cleanly after a
