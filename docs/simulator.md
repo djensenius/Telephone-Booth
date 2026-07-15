@@ -101,10 +101,54 @@ spew on the framebuffer, you're running an old build; pull the latest.
 | `run --mock`                  | Mock       | Mock       | Mock      | no          |
 | `run --simulator`             | Mock       | Pi (cpal)  | Pi (HTTP) | TUI         |
 | `run --simulator --mock`      | Mock       | Mock       | Mock      | TUI         |
+| `run --tui`                   | Pi (rppal) | Pi (cpal)  | Pi (HTTP) | TUI (read-only) |
+| `run --tui --mock`            | Mock       | Mock       | Mock      | TUI (read-only) |
 
 `run --mock` (no simulator) just runs the headless event loop with mocks —
 useful for integration tests but with no way to inject hook lifts or dial
 pulses interactively.
+
+## Read-only hardware monitor (`--tui`)
+
+`run --tui` launches the *same* TUI surface as the simulator, but wired to the
+**real** HAL adapters instead of a mocked GPIO port. It injects nothing — you
+dial the physical rotary phone and watch the live telemetry scroll by. This is
+the on-Pi equivalent of "watching `journalctl -f`", but with the booth state,
+decoded digits, audio meters, and operator calls laid out in a live dashboard.
+
+```sh
+# On the Pi, over SSH — monitor the real hardware:
+sudo systemctl stop telephone-booth          # release GPIO + audio first!
+sudo -u phonebooth /usr/bin/telephone-booth run --tui
+```
+
+Because the monitor drives the real `rppal` GPIO, `cpal` audio, and `reqwest`
+operator adapters, it **reserves the same GPIO pins and audio device as the
+`telephone-booth.service` unit**. The two cannot run at once — stop the service
+before starting the monitor, and quit the monitor (`q`) before restarting the
+service.
+
+Only quit keys are active in monitor mode:
+
+| Key                  | Action                                         |
+|----------------------|------------------------------------------------|
+| `q`, `Esc`, `Ctrl+C` | Shut the runtime down and exit the monitor.    |
+
+Hook and dial keys are ignored (the header/footer say so) — there is no
+injector, so events come only from the physical phone. The header reads
+`Telephone Booth Monitor   [real I/O]` and the hook indicator follows the real
+receiver via the hardware's hook GPIO edges.
+
+`run --tui --mock` is also accepted (monitor the mock adapters), but that is
+mostly a curiosity — `--simulator --mock` is the interactive equivalent.
+
+### Monitor vs. web pin matrix
+
+For attaching to an *already-running* service without stopping it, use the
+read-only web debug surface instead (`/v1/ui/simulator`, served over
+Tailscale). The `--tui` monitor is for when you want a full-screen console
+dashboard on the Pi itself and are happy to take exclusive control of the
+hardware.
 
 ## Implementation notes
 
@@ -124,6 +168,13 @@ Plain `--mock` runs report `runtimeMode: "mock"` the same way.
 The terminal is set up via `ratatui` + `crossterm` and is restored from a
 `Drop` guard so a panic or fatal error cannot leave the terminal in raw
 mode.
+
+The read-only monitor (`run_monitor`) shares the same `SimulatorState`,
+render loop, and terminal guard via the internal `drive_tui` helper, but
+passes no `GpioInjector` and spawns the runtime with
+`runtime_mode: RuntimeMode::Real` (or `Mock` with `--mock`). Keypresses other
+than quit are no-ops, and the hook indicator is driven from real
+`GpioEdge` telemetry rather than injected edges.
 
 ## Running on the Raspberry Pi
 

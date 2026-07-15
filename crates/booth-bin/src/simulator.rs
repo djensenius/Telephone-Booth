@@ -1,13 +1,19 @@
-//! Interactive TUI that drives the phone runtime through a mocked GPIO port.
+//! Interactive TUI that drives the phone runtime through a mocked GPIO port,
+//! plus a read-only monitor variant for real hardware.
 //!
-//! The simulator gives developers a way to exercise the full booth pipeline —
-//! the state machine, audio playback/capture, and the operator HTTP client —
-//! from a development machine that has no rotary phone hardware attached.
+//! The simulator ([`run_simulator`]) gives developers a way to exercise the
+//! full booth pipeline — the state machine, audio playback/capture, and the
+//! operator HTTP client — from a development machine that has no rotary phone
+//! hardware attached. Hardware events (hook lift, dial pulses) are synthesized
+//! by keypresses and injected into a [`booth_mock::MockGpioPort`]. Audio and
+//! the operator client are either real (`PiAudioSink`/`PiAudioSource`/
+//! `PiOperatorClient`) or mock, depending on whether `--mock` was passed
+//! alongside `--simulator`.
 //!
-//! Hardware events (hook lift, dial pulses) are synthesized by keypresses and
-//! injected into a [`booth_mock::MockGpioPort`]. Audio and the operator
-//! client are either real (`PiAudioSink`/`PiAudioSource`/`PiOperatorClient`)
-//! or mock, depending on whether `--mock` was passed alongside `--simulator`.
+//! The monitor ([`run_monitor`]) reuses the same TUI surface but builds the
+//! *real* HAL adapters and injects nothing: it is a live, read-only view of
+//! the booth as you dial the physical phone, useful for on-Pi bring-up before
+//! a USB console/keyboard-driven simulator is available.
 
 #![cfg(feature = "simulator")]
 
@@ -134,8 +140,66 @@ pub async fn run_simulator(
         },
     );
 
+    let state = SimulatorState::new(mock_io, false, log_path);
+    drive_tui(handle, &bus, state, Some(injector)).await
+}
+
+/// Run the read-only hardware monitor TUI to completion.
+///
+/// Unlike [`run_simulator`], this builds the *real* HAL adapters (or the mock
+/// adapters when `mock` is `true`) and never injects synthetic GPIO events —
+/// the operator dials the physical rotary phone and the TUI streams the live
+/// telemetry (state transitions, decoded digits, audio levels, operator
+/// calls) in a scrolling event log.
+///
+/// It reserves the same GPIO pins and audio device as the packaged
+/// `telephone-booth.service`, so the systemd service must be stopped first
+/// (`sudo systemctl stop telephone-booth`) to avoid contention. `log_path` is
+/// surfaced in the footer and is set by `install_simulator_tracing`.
+pub async fn run_monitor(
+    config: RuntimeConfig,
+    mock: bool,
+    log_path: Option<String>,
+) -> Result<()> {
+    let bus = TelemetryBus::new(config.ring_buffer_capacity());
+    let runtime_mode = if mock {
+        RuntimeMode::Mock
+    } else {
+        RuntimeMode::Real
+    };
+
+    let adapters = if mock {
+        crate::build_mock_adapters(&bus).0
+    } else {
+        crate::build_pi_adapters(&config, &bus, runtime_mode)?
+    };
+
+    let handle = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: true,
+            listen_signals: false,
+            notify_systemd: false,
+            runtime_mode,
+        },
+    );
+
+    let state = SimulatorState::new(mock, true, log_path);
+    drive_tui(handle, &bus, state, None).await
+}
+
+/// Shared TUI event loop for the interactive simulator and the read-only
+/// monitor. When `injector` is `Some`, hook/dial keypresses synthesize GPIO
+/// edges; when `None`, the TUI is read-only and only responds to quit keys.
+async fn drive_tui(
+    handle: crate::RuntimeHandle,
+    bus: &TelemetryBus,
+    mut state: SimulatorState,
+    injector: Option<booth_mock::GpioInjector>,
+) -> Result<()> {
     let mut terminal = TerminalGuard::enter().context("enter terminal alternate screen")?;
-    let mut state = SimulatorState::new(mock_io, log_path);
     let mut telemetry_rx = bus.subscribe();
     let mut events = EventStream::new();
     let mut ticker = interval(RENDER_TICK);
@@ -149,7 +213,7 @@ pub async fn run_simulator(
             key = events.next() => {
                 match key {
                     Some(Ok(CtEvent::Key(key))) => {
-                        if matches!(state.handle_key(key, &injector).await, Action::Quit) {
+                        if matches!(state.handle_key(key, injector.as_ref()).await, Action::Quit) {
                             let _ = handle.commands.send(RuntimeCommand::Shutdown).await;
                             break Ok(());
                         }
@@ -180,7 +244,7 @@ pub async fn run_simulator(
     // exits when it sees Shutdown above.
     match tokio::time::timeout(Duration::from_secs(2), handle.join).await {
         Ok(Ok(Ok(final_state))) => {
-            tracing::info!(state = final_state.tag(), "simulator runtime stopped");
+            tracing::info!(state = final_state.tag(), "tui runtime stopped");
         }
         Ok(Ok(Err(err))) => tracing::warn!(error = %err, "runtime exited with error"),
         Ok(Err(join_err)) => tracing::warn!(error = %join_err, "runtime task panicked"),
@@ -245,8 +309,18 @@ enum Action {
 
 struct SimulatorState {
     mock_io: bool,
+    /// When `true`, the TUI is a read-only monitor over real hardware: hook and
+    /// dial keypresses are ignored (there is no injector) and the header/footer
+    /// reflect a live-hardware view instead of the interactive simulator.
+    read_only: bool,
     log_path: Option<String>,
     hook_on_hook: bool,
+    /// Whether we have observed the physical hook position yet. The monitor
+    /// starts without knowing it (`PiGpioPort` emits only interrupts, so there
+    /// is no initial snapshot); the header shows "unknown" until the first
+    /// hook edge arrives. The interactive simulator always knows it (it starts
+    /// the mocked dial on-hook).
+    hook_known: bool,
     current_state: String,
     booth_status: String,
     audio_in: LevelView,
@@ -270,41 +344,69 @@ struct HistoryEntry {
 }
 
 impl SimulatorState {
-    fn new(mock_io: bool, log_path: Option<String>) -> Self {
+    fn new(mock_io: bool, read_only: bool, log_path: Option<String>) -> Self {
+        let status_line = if read_only {
+            "Live hardware monitor — dial the real phone to see events.".to_string()
+        } else {
+            "Press [h] or space to lift the receiver.".to_string()
+        };
         Self {
             mock_io,
+            read_only,
             log_path,
             hook_on_hook: true,
+            hook_known: !read_only,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
             audio_in: LevelView::default(),
             audio_out: LevelView::default(),
             history: VecDeque::with_capacity(EVENT_HISTORY),
-            status_line: "Press [h] or space to lift the receiver.".to_string(),
+            status_line,
             lagged_records: 0,
             started_at: Instant::now(),
         }
     }
 
-    async fn handle_key(&mut self, key: KeyEvent, injector: &booth_mock::GpioInjector) -> Action {
+    async fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        injector: Option<&booth_mock::GpioInjector>,
+    ) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('c') if ctrl => return Action::Quit,
-            KeyCode::Char('h' | ' ') => self.toggle_hook(injector).await,
+            KeyCode::Char('h' | ' ') => {
+                if let Some(injector) = injector {
+                    self.toggle_hook(injector).await;
+                } else {
+                    self.note_read_only();
+                }
+            }
             KeyCode::Char(c @ '0'..='9') => {
-                if self.hook_on_hook {
-                    self.set_status(
-                        "Lift the receiver before dialing (press [h] or space).",
-                        Style::default().fg(Color::Yellow),
-                    );
-                } else if let Some(digit) = c.to_digit(10).and_then(|d| u8::try_from(d).ok()) {
-                    self.dial_digit(digit, injector).await;
+                if let Some(injector) = injector {
+                    if self.hook_on_hook {
+                        self.set_status(
+                            "Lift the receiver before dialing (press [h] or space).",
+                            Style::default().fg(Color::Yellow),
+                        );
+                    } else if let Some(digit) = c.to_digit(10).and_then(|d| u8::try_from(d).ok()) {
+                        self.dial_digit(digit, injector).await;
+                    }
+                } else {
+                    self.note_read_only();
                 }
             }
             _ => {}
         }
         Action::Continue
+    }
+
+    fn note_read_only(&mut self) {
+        self.set_status(
+            "Live hardware monitor — use the real phone (input is read-only).",
+            Style::default().fg(Color::Yellow),
+        );
     }
 
     async fn toggle_hook(&mut self, injector: &booth_mock::GpioInjector) {
@@ -443,6 +545,14 @@ impl SimulatorState {
                 });
             }
             TelemetryEvent::GpioEdge(edge) => {
+                // Track hook position from real hardware edges so the read-only
+                // monitor's header reflects the physical receiver. Per the
+                // active-low pull-up wiring (docs/hardware.md), a high level on
+                // the hook pin means the receiver is resting (on-hook).
+                if edge.role == PinRole::Hook {
+                    self.hook_on_hook = edge.level;
+                    self.hook_known = true;
+                }
                 self.history.push_front(HistoryEntry {
                     ts,
                     text: format!("gpio edge {:?} level={}", edge.role, edge.level),
@@ -579,16 +689,20 @@ impl SimulatorState {
 
     fn render_header(&self, frame: &mut ratatui::Frame<'_>, area: Rect) {
         let mode = if self.mock_io { "mock I/O" } else { "real I/O" };
-        let hook = if self.hook_on_hook {
+        let title = if self.read_only {
+            "Telephone Booth Monitor"
+        } else {
+            "Telephone Booth Simulator"
+        };
+        let hook = if !self.hook_known {
+            "unknown"
+        } else if self.hook_on_hook {
             "on-hook"
         } else {
             "off-hook"
         };
         let header = Line::from(vec![
-            Span::styled(
-                "Telephone Booth Simulator",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("   "),
             Span::styled(format!("[{mode}]"), Style::default().fg(Color::DarkGray)),
             Span::raw("   state="),
@@ -601,7 +715,9 @@ impl SimulatorState {
             Span::raw("   hook="),
             Span::styled(
                 hook,
-                Style::default().fg(if self.hook_on_hook {
+                Style::default().fg(if !self.hook_known {
+                    Color::DarkGray
+                } else if self.hook_on_hook {
                     Color::Yellow
                 } else {
                     Color::Cyan
@@ -652,7 +768,11 @@ impl SimulatorState {
     }
 
     fn render_footer(&self, frame: &mut ratatui::Frame<'_>, area: Rect) {
-        let controls = "Controls: [h]/space toggle hook   [0-9] dial digit   [q]/Esc/Ctrl+C quit";
+        let controls = if self.read_only {
+            "Controls: [q]/Esc/Ctrl+C quit   (live hardware — dial the real phone)"
+        } else {
+            "Controls: [h]/space toggle hook   [0-9] dial digit   [q]/Esc/Ctrl+C quit"
+        };
         let log_line = self.log_path.as_ref().map_or_else(
             || "Log: <stdout>".to_string(),
             |path| format!("Log: {path}"),
