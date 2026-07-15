@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/djensenius/Telephone-Booth/compare/v0.4.3...v0.5.0) (2026-07-15)
+
+
+### Features
+
+* systemd watchdog keepalives + read-only hardware monitor TUI ([#95](https://github.com/djensenius/Telephone-Booth/issues/95)) ([e016d44](https://github.com/djensenius/Telephone-Booth/commit/e016d4496632f1989956d91439d61d420ce36a4f))
+
+
+### Documentation
+
+* add artist statement and bio for St. Anne's installation ([#92](https://github.com/djensenius/Telephone-Booth/issues/92)) ([8cbd51b](https://github.com/djensenius/Telephone-Booth/commit/8cbd51bfbb09ffaa28e95ee1de3449beff23d1e5))
+* GPIO screw-terminal HAT wiring, --tui monitor guide, watchdog behaviour. ([e016d44](https://github.com/djensenius/Telephone-Booth/commit/e016d4496632f1989956d91439d61d420ce36a4f))
+
 ## [0.4.3](https://github.com/djensenius/Telephone-Booth/compare/v0.4.2...v0.4.3) (2026-06-29)
 
 
