@@ -15,8 +15,12 @@ ongoing operational issues, see the [runbook](runbook.md).
 
 ## Rotary dial seems to skip or stick
 
-- **Debounce too short for your dial.** The default is `gpio.debounce_ms = 25`;
-  if pulses still merge or double-count, try `30` or `40`.
+- **Debounce mistuned for your dial.** The default is `gpio.debounce_ms = 25`.
+  The two failure modes pull in opposite directions, so tune by symptom:
+  raise it (e.g. `30`–`40`) when a single click is *double-counted* (digits
+  read too high); lower it (e.g. `10`–`15`) when distinct pulses *merge* or go
+  missing (digits read too low). Don't raise it to fix merged pulses — a longer
+  window makes merging worse.
 - **Pulse + gate swapped.** Check the live telemetry: with the receiver
   off-hook and the dial untouched, the `rotary_gate` line should read
   `high`; pulling a digit should toggle `gate` low, then `pulse` low
