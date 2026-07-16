@@ -452,8 +452,8 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
     // Surface the decoded digit and the action it triggers in the logs and on
     // the telemetry bus (the runtime turns `Effect::Log` into an `info!` line).
     let action = match digit {
-        1 => "playing a random question",
-        2 => "playing a random message",
+        1 => "fetching a random question",
+        2 => "fetching a random message",
         _ => "playing operator instructions",
     };
     effects.insert(
@@ -545,12 +545,13 @@ mod tests {
             (s, _) = handle(s, Event::RotaryPulse);
         }
         let (_, effects) = handle(s, Event::Tick);
+        // The digit log is prepended so it lands before the resulting effects.
         assert!(
-            effects.iter().any(|e| matches!(
-                e,
+            matches!(
+                &effects[0],
                 Effect::Log { message } if message.contains("dialed digit 3")
-            )),
-            "expected a Log effect naming the dialed digit, got {effects:?}"
+            ),
+            "expected the first effect to be a Log naming the dialed digit, got {effects:?}"
         );
     }
 }
