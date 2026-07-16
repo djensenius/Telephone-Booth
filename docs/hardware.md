@@ -36,10 +36,12 @@ debounced logical level to a `booth-core` event:
   `HookOff` (handset lifted). Tap the switchhook leaf contacts in the upper
   housing.
 - **Rotary pulse** — the dial's *impulse* contacts, which open once per click as
-  the finger wheel returns. Each closing edge is emitted as `RotaryPulse` after
-  a 5 ms debounce. Pulses are counted and the digit is decoded after a 350 ms
-  idle gap (`PULSE_GROUP_TIMEOUT_MS`): 1–9 pulses → that digit, 10 pulses → `0`,
-  more than 10 → the group is discarded and the booth returns to dial tone.
+  the finger wheel returns. Each break (opening) edge is emitted as `RotaryPulse`
+  after a 25 ms debounce. Because the impulse contact is normally closed, the
+  default `invert.rotary_pulse = true` counts these break pulses. Pulses are
+  counted and the digit is decoded after a 350 ms idle gap
+  (`PULSE_GROUP_TIMEOUT_MS`): 1–9 pulses → that digit, 10 pulses → `0`, more than
+  10 → the group is discarded and the booth returns to dial tone.
 - **Rotary gate (off-normal)** — the dial's *off-normal* / shunt contacts, which
   stay closed while the wheel is away from rest. The current runtime **reads
   this pin for the debug pin matrix and telemetry but does not use it to decode
@@ -70,7 +72,7 @@ hook_bcm         = 17
 rotary_pulse_bcm = 27
 rotary_gate_bcm  = 22       # alias: rotary_read_bcm; optional (see above)
 pull             = "up"     # or "down"
-debounce_ms      = 5
+debounce_ms      = 25
 ```
 
 ### Reusing a legacy Node.js booth harness

@@ -104,10 +104,14 @@ impl Default for GpioPull {
 }
 
 /// Per-role GPIO level inversion settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpioInvertConfig {
     /// Invert rotary pulse levels.
-    #[serde(default)]
+    ///
+    /// Defaults to `true`: the booth's rotary dial uses a normally-closed
+    /// impulse contact that pulses by *opening*, so dial pulses are counted on
+    /// the break (open) edge rather than the make (close) edge.
+    #[serde(default = "default_invert_rotary_pulse")]
     pub rotary_pulse: bool,
     /// Invert rotary read / dialing gate levels.
     #[serde(default, alias = "rotary_gate")]
@@ -115,6 +119,16 @@ pub struct GpioInvertConfig {
     /// Invert hook switch levels.
     #[serde(default)]
     pub hook: bool,
+}
+
+impl Default for GpioInvertConfig {
+    fn default() -> Self {
+        Self {
+            rotary_pulse: default_invert_rotary_pulse(),
+            rotary_read: false,
+            hook: false,
+        }
+    }
 }
 
 fn default_rotary_pulse() -> u8 {
@@ -127,10 +141,13 @@ fn default_hook() -> u8 {
     17
 }
 fn default_debounce_ms() -> u64 {
-    5
+    25
 }
 fn default_channel_capacity() -> u16 {
     64
+}
+fn default_invert_rotary_pulse() -> bool {
+    true
 }
 
 impl Default for GpioConfig {

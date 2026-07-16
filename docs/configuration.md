@@ -21,9 +21,9 @@ hook_bcm         = 17        # physical pin 11
 rotary_pulse_bcm = 27        # physical pin 13
 rotary_gate_bcm  = 22        # physical pin 15
 pull             = "up"      # "up" | "down"
-debounce_ms      = 5
+debounce_ms      = 25
 invert.hook      = false
-invert.rotary_pulse = false
+invert.rotary_pulse = true
 invert.rotary_gate  = false
 
 [audio]

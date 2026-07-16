@@ -11,9 +11,9 @@ fn default_gpio_config_matches_documented_wiring() {
     assert_eq!(config.bcm_for(PinRole::RotaryPulse), 27);
     assert_eq!(config.bcm_for(PinRole::RotaryRead), 22);
     assert_eq!(config.pull, GpioPull::Up);
-    assert_eq!(config.debounce_ms, 5);
+    assert_eq!(config.debounce_ms, 25);
 
     assert!(!config.inverted(PinRole::Hook));
-    assert!(!config.inverted(PinRole::RotaryPulse));
+    assert!(config.inverted(PinRole::RotaryPulse));
     assert!(!config.inverted(PinRole::RotaryRead));
 }
