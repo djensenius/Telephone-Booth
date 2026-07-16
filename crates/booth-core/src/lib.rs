@@ -422,7 +422,7 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
 
 /// Decode a digit (0..=9) into the appropriate transition out of `Dialing`.
 fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
-    match digit {
+    let (state, mut effects) = match digit {
         1 => (
             // Stay in DialTone until the operator hands us a question.
             State::DialTone,
@@ -440,13 +440,29 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
                 Effect::PutStatus(BoothStatus::PlayingInstructions),
             ],
         ),
-        _ => (
-            State::Error {
-                reason: alloc::format!("invalid digit {digit}"),
-            },
-            vec![Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy))],
-        ),
-    }
+        _ => {
+            return (
+                State::Error {
+                    reason: alloc::format!("invalid digit {digit}"),
+                },
+                vec![Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy))],
+            );
+        }
+    };
+    // Surface the decoded digit and the action it triggers in the logs and on
+    // the telemetry bus (the runtime turns `Effect::Log` into an `info!` line).
+    let action = match digit {
+        1 => "fetching a random question",
+        2 => "fetching a random message",
+        _ => "playing operator instructions",
+    };
+    effects.insert(
+        0,
+        Effect::Log {
+            message: alloc::format!("dialed digit {digit}: {action}"),
+        },
+    );
+    (state, effects)
 }
 
 #[cfg(test)]
@@ -520,5 +536,22 @@ mod tests {
         }
         let (_, effects) = handle(s, Event::Tick);
         assert!(effects.contains(&Effect::FetchRandomMessage));
+    }
+
+    #[test]
+    fn dialing_a_digit_logs_the_digit() {
+        let mut s = State::DialTone;
+        for _ in 0..3 {
+            (s, _) = handle(s, Event::RotaryPulse);
+        }
+        let (_, effects) = handle(s, Event::Tick);
+        // The digit log is prepended so it lands before the resulting effects.
+        assert!(
+            matches!(
+                &effects[0],
+                Effect::Log { message } if message.contains("dialed digit 3")
+            ),
+            "expected the first effect to be a Log naming the dialed digit, got {effects:?}"
+        );
     }
 }
