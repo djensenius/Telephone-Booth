@@ -17,8 +17,8 @@ ongoing operational issues, see the [runbook](runbook.md).
 
 - **Debounce mistuned for your dial.** The default is `gpio.debounce_ms = 25`.
   The two failure modes pull in opposite directions, so tune by symptom:
-  raise it (e.g. `30`–`40`) when a single click is *double-counted* (digits
-  read too high); lower it (e.g. `10`–`15`) when distinct pulses *merge* or go
+  raise it (e.g. `30`–`40`) when a single click is _double-counted_ (digits
+  read too high); lower it (e.g. `10`–`15`) when distinct pulses _merge_ or go
   missing (digits read too low). Don't raise it to fix merged pulses — a longer
   window makes merging worse.
 - **Pulse + gate swapped.** Check the live telemetry: with the receiver
