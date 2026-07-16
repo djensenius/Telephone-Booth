@@ -3,9 +3,9 @@ hook_bcm = 17
 rotary_pulse_bcm = 27
 rotary_gate_bcm = 22
 pull = "up"
-debounce_ms = 5
+debounce_ms = 25
 invert.hook = false
-invert.rotary_pulse = false
+invert.rotary_pulse = true
 invert.rotary_gate = false
 
 [audio]

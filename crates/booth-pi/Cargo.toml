@@ -56,4 +56,5 @@ operator = ["dep:reqwest"]
 pi = ["audio", "operator", "dep:rppal"]
 
 [dev-dependencies]
+toml = { workspace = true }
 wiremock = "0.6"

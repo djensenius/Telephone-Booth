@@ -15,13 +15,20 @@ ongoing operational issues, see the [runbook](runbook.md).
 
 ## Rotary dial seems to skip or stick
 
-- **Debounce too short for your dial.** Try `gpio.debounce_ms = 8` or `10`.
+- **Debounce mistuned for your dial.** The default is `gpio.debounce_ms = 25`.
+  The two failure modes pull in opposite directions, so tune by symptom:
+  raise it (e.g. `30`–`40`) when a single click is _double-counted_ (digits
+  read too high); lower it (e.g. `10`–`15`) when distinct pulses _merge_ or go
+  missing (digits read too low). Don't raise it to fix merged pulses — a longer
+  window makes merging worse.
 - **Pulse + gate swapped.** Check the live telemetry: with the receiver
   off-hook and the dial untouched, the `rotary_gate` line should read
   `high`; pulling a digit should toggle `gate` low, then `pulse` low
   N times.
-- **Phones with reverse-polarity contacts.** Set
-  `gpio.invert.rotary_pulse` and/or `gpio.invert.rotary_gate` to `true`.
+- **Phones with reverse-polarity contacts.** `gpio.invert.rotary_pulse`
+  defaults to `true` (counting the break pulses of a normally-closed impulse
+  contact). If your dial reads one digit too high or fires a phantom leading
+  `1`, flip it to `false`; adjust `gpio.invert.rotary_gate` similarly.
 
 ## "No audio device found" at startup
 
