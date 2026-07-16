@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/djensenius/Telephone-Booth/compare/v0.5.0...v0.6.0) (2026-07-16)
+
+
+### Features
+
+* **core:** log the decoded digit when a number is dialed ([#96](https://github.com/djensenius/Telephone-Booth/issues/96)) ([c0ec7e8](https://github.com/djensenius/Telephone-Booth/commit/c0ec7e89a7e2cf21c8073a11eafff75359a585e1))
+
 ## [0.5.0](https://github.com/djensenius/Telephone-Booth/compare/v0.4.3...v0.5.0) (2026-07-15)
 
 
