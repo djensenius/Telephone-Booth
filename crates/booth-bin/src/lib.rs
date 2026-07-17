@@ -763,17 +763,54 @@ fn publish_transition(bus: &TelemetryBus, from: &State, to: &State, event: &Even
 }
 
 async fn gpio_task(
-    mut gpio: Box<dyn GpioPort>,
+    initial: Box<dyn GpioPort>,
     mut rebuild: Option<GpioRebuild>,
     event_tx: mpsc::Sender<Event>,
     bus: TelemetryBus,
 ) {
+    let mut current: Option<Box<dyn GpioPort>> = Some(initial);
     let mut backoff = GPIO_REBUILD_BACKOFF_BASE;
+
     loop {
+        let Some(mut gpio) = current.take() else {
+            // No live adapter. A lost stream is terminal for the previous
+            // adapter, which has already been dropped above so its pins and
+            // interrupts are released before we reopen them (rppal refuses to
+            // reserve a pin that is still owned, and a late `Drop` would clear
+            // the fresh registrations). Rebuild with capped exponential backoff
+            // instead of polling the known-closed adapter in a tight loop.
+            let Some(rebuild) = rebuild.as_mut() else {
+                warn!("no gpio rebuild available; stopping gpio task");
+                break;
+            };
+            tokio::time::sleep(backoff).await;
+            backoff = backoff.saturating_mul(2).min(GPIO_REBUILD_BACKOFF_MAX);
+            match rebuild() {
+                Ok(new_gpio) => {
+                    info!("rebuilt gpio adapter after stream loss");
+                    // Re-registered interrupts only fire on *future* edges, so
+                    // reconcile the current hook level: a lift or hang-up during
+                    // the outage would otherwise be lost until the next toggle.
+                    if !reconcile_hook(new_gpio.as_ref(), &event_tx, &bus).await {
+                        break;
+                    }
+                    current = Some(new_gpio);
+                }
+                Err(rebuild_err) => {
+                    bus.publish(TelemetryEvent::Error {
+                        source: "gpio".to_string(),
+                        message: format!("gpio rebuild failed: {rebuild_err}"),
+                    });
+                    warn!(%rebuild_err, "failed to rebuild gpio adapter");
+                }
+            }
+            continue;
+        };
+
         match gpio.next_edge().await {
             Ok(edge) => {
-                // A healthy edge means the current adapter is alive; reset the
-                // recovery backoff so a future loss starts from the base delay.
+                // A healthy edge means the adapter is alive; reset the recovery
+                // backoff so a future loss starts from the base delay.
                 backoff = GPIO_REBUILD_BACKOFF_BASE;
                 bus.publish(TelemetryEvent::GpioEdge(edge));
                 if let Some(event) = event_from_gpio(edge)
@@ -781,41 +818,49 @@ async fn gpio_task(
                 {
                     break;
                 }
+                current = Some(gpio);
             }
             Err(err) => {
-                // A lost edge stream is terminal for this adapter: its channel
-                // stays closed, so polling again would return an error
-                // instantly, forever. Emit exactly one error per failed
-                // recovery attempt (not per poll) and rebuild the adapter with
-                // capped exponential backoff instead of flooding telemetry.
+                // Emit exactly one error per loss (not per poll) and drop the
+                // dead adapter by *not* restoring `current`, so the next
+                // iteration rebuilds from released pins.
                 bus.publish(TelemetryEvent::Error {
                     source: "gpio".to_string(),
                     message: err.to_string(),
                 });
                 warn!(%err, "gpio stream lost");
-
-                let Some(rebuild) = rebuild.as_mut() else {
-                    warn!("no gpio rebuild available; stopping gpio task");
-                    break;
-                };
-
-                tokio::time::sleep(backoff).await;
-                backoff = backoff.saturating_mul(2).min(GPIO_REBUILD_BACKOFF_MAX);
-
-                match rebuild() {
-                    Ok(new_gpio) => {
-                        gpio = new_gpio;
-                        info!("rebuilt gpio adapter after stream loss");
-                    }
-                    Err(rebuild_err) => {
-                        bus.publish(TelemetryEvent::Error {
-                            source: "gpio".to_string(),
-                            message: format!("gpio rebuild failed: {rebuild_err}"),
-                        });
-                        warn!(%rebuild_err, "failed to rebuild gpio adapter");
-                    }
-                }
             }
+        }
+    }
+}
+
+/// Re-emit the current hook level after the GPIO adapter is rebuilt so the core
+/// state machine resyncs with any lift or hang-up that happened while the edge
+/// stream was down. Re-registered interrupts only observe future transitions,
+/// and the core treats a redundant hook event as an idempotent no-op, so it is
+/// safe to always emit. Returns `false` only when the event receiver is gone
+/// (the runtime is shutting down) so the caller can stop.
+async fn reconcile_hook(
+    gpio: &dyn GpioPort,
+    event_tx: &mpsc::Sender<Event>,
+    bus: &TelemetryBus,
+) -> bool {
+    match gpio.snapshot(PinRole::Hook).await {
+        Ok(level) => {
+            let edge = GpioEdge {
+                role: PinRole::Hook,
+                level,
+                at_monotonic_ns: 0,
+            };
+            bus.publish(TelemetryEvent::GpioEdge(edge));
+            if let Some(event) = event_from_gpio(edge) {
+                return event_tx.send(event).await.is_ok();
+            }
+            true
+        }
+        Err(err) => {
+            warn!(%err, "failed to reconcile hook state after gpio rebuild");
+            true
         }
     }
 }
@@ -2167,7 +2212,9 @@ mod tests {
             }
 
             async fn snapshot(&self, _role: PinRole) -> Result<bool, GpioError> {
-                Ok(false)
+                // A rebuilt adapter reports the handset lifted; reconciliation
+                // should surface that as a HookOn before edges resume.
+                Ok(true)
             }
         }
 
@@ -2189,8 +2236,10 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(16);
         let task = tokio::spawn(gpio_task(first, Some(rebuild), event_tx, bus.clone()));
 
-        // Pre-loss Hook edge, then the post-rebuild RotaryPulse edge.
+        // Pre-loss Hook edge, the reconciled hook level after rebuild, then the
+        // post-rebuild RotaryPulse edge.
         assert_eq!(event_rx.recv().await, Some(booth_core::Event::HookOff));
+        assert_eq!(event_rx.recv().await, Some(booth_core::Event::HookOn));
         assert_eq!(event_rx.recv().await, Some(booth_core::Event::RotaryPulse));
 
         task.abort();
