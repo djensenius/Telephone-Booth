@@ -19,8 +19,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
-    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioPort, OperatorClient,
-    OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
+    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioError, GpioPort,
+    OperatorClient, OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
 };
 use booth_pi::{
     AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
@@ -50,6 +50,14 @@ const EFFECT_CHANNEL: usize = 256;
 const COMMAND_CHANNEL: usize = 64;
 const OPERATOR_ATTEMPTS: u32 = 3;
 const OPERATOR_BACKOFF_BASE: Duration = Duration::from_millis(100);
+
+/// First delay before rebuilding the GPIO adapter after its edge stream is
+/// lost. Doubles on each consecutive failed recovery, capped at
+/// [`GPIO_REBUILD_BACKOFF_MAX`], so a persistently broken interrupt device
+/// cannot flood telemetry with error events.
+const GPIO_REBUILD_BACKOFF_BASE: Duration = Duration::from_millis(200);
+/// Maximum delay between GPIO rebuild attempts.
+const GPIO_REBUILD_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 static OPERATOR_REQUEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -178,10 +186,17 @@ impl Default for RuntimeOptions {
 /// Object-safe HAL adapters consumed by the runtime.
 pub struct RuntimeAdapters {
     gpio: Box<dyn GpioPort>,
+    gpio_rebuild: Option<GpioRebuild>,
     audio_sink: Box<dyn AudioSink>,
     audio_source: Box<dyn AudioSource>,
     operator: Arc<dyn OperatorClient>,
 }
+
+/// Factory that re-opens the GPIO pins and re-registers interrupts after the
+/// edge stream is lost, letting the runtime's GPIO task self-heal a transient
+/// interrupt/driver failure without restarting the whole process. Returns a
+/// fresh [`GpioPort`], or the [`GpioError`] that prevented reopening the pins.
+pub type GpioRebuild = Box<dyn FnMut() -> StdResult<Box<dyn GpioPort>, GpioError> + Send>;
 
 impl RuntimeAdapters {
     /// Build a runtime adapter bundle from trait objects.
@@ -193,10 +208,21 @@ impl RuntimeAdapters {
     ) -> Self {
         Self {
             gpio,
+            gpio_rebuild: None,
             audio_sink,
             audio_source,
             operator,
         }
+    }
+
+    /// Attach a [`GpioRebuild`] factory so the runtime can rebuild the GPIO
+    /// adapter after an edge-stream loss instead of dropping input until the
+    /// next restart. Adapters without hardware to reopen (mock/simulator) can
+    /// leave this unset, in which case a lost stream terminates the GPIO task.
+    #[must_use]
+    pub fn with_gpio_rebuild(mut self, rebuild: GpioRebuild) -> Self {
+        self.gpio_rebuild = Some(rebuild);
+        self
     }
 }
 
@@ -312,12 +338,21 @@ pub fn build_pi_adapters(
         .map_err(|err| anyhow!("create operator client: {err}"))?
         .with_runtime_mode(runtime_mode);
 
+    // Rebuild closure for the runtime's self-healing GPIO task: re-open the
+    // pins and re-register interrupts from the same config after a stream loss.
+    let gpio_config = config.gpio.clone();
+    let gpio_rebuild: GpioRebuild = Box::new(move || {
+        booth_pi::gpio::PiGpioPort::new(gpio_config.clone())
+            .map(|port| Box::new(port) as Box<dyn GpioPort>)
+    });
+
     Ok(RuntimeAdapters::new(
         Box::new(gpio),
         Box::new(audio_sink),
         Box::new(audio_source),
         Arc::new(operator),
-    ))
+    )
+    .with_gpio_rebuild(gpio_rebuild))
 }
 
 /// Build runtime adapters backed by `booth-mock`.
@@ -432,6 +467,7 @@ async fn run_runtime(
 ) -> Result<State> {
     let RuntimeAdapters {
         gpio,
+        gpio_rebuild,
         audio_sink,
         audio_source,
         operator,
@@ -527,7 +563,7 @@ async fn run_runtime(
         }
     }
 
-    let gpio_task = tokio::spawn(gpio_task(gpio, event_tx.clone(), bus.clone()));
+    let gpio_task = tokio::spawn(gpio_task(gpio, gpio_rebuild, event_tx.clone(), bus.clone()));
     let audio_task = tokio::spawn(audio_task(
         audio_sink,
         audio_rx,
@@ -726,25 +762,105 @@ fn publish_transition(bus: &TelemetryBus, from: &State, to: &State, event: &Even
     });
 }
 
-async fn gpio_task(mut gpio: Box<dyn GpioPort>, event_tx: mpsc::Sender<Event>, bus: TelemetryBus) {
+async fn gpio_task(
+    initial: Box<dyn GpioPort>,
+    mut rebuild: Option<GpioRebuild>,
+    event_tx: mpsc::Sender<Event>,
+    bus: TelemetryBus,
+) {
+    let mut current: Option<Box<dyn GpioPort>> = Some(initial);
+    let mut backoff = GPIO_REBUILD_BACKOFF_BASE;
+
     loop {
+        let Some(mut gpio) = current.take() else {
+            // No live adapter. A lost stream is terminal for the previous
+            // adapter, which has already been dropped above so its pins and
+            // interrupts are released before we reopen them (rppal refuses to
+            // reserve a pin that is still owned, and a late `Drop` would clear
+            // the fresh registrations). Rebuild with capped exponential backoff
+            // instead of polling the known-closed adapter in a tight loop.
+            let Some(rebuild) = rebuild.as_mut() else {
+                warn!("no gpio rebuild available; stopping gpio task");
+                break;
+            };
+            tokio::time::sleep(backoff).await;
+            backoff = backoff.saturating_mul(2).min(GPIO_REBUILD_BACKOFF_MAX);
+            match rebuild() {
+                Ok(new_gpio) => {
+                    info!("rebuilt gpio adapter after stream loss");
+                    // Re-registered interrupts only fire on *future* edges, so
+                    // reconcile the current hook level: a lift or hang-up during
+                    // the outage would otherwise be lost until the next toggle.
+                    if !reconcile_hook(new_gpio.as_ref(), &event_tx, &bus).await {
+                        break;
+                    }
+                    current = Some(new_gpio);
+                }
+                Err(rebuild_err) => {
+                    bus.publish(TelemetryEvent::Error {
+                        source: "gpio".to_string(),
+                        message: format!("gpio rebuild failed: {rebuild_err}"),
+                    });
+                    warn!(%rebuild_err, "failed to rebuild gpio adapter");
+                }
+            }
+            continue;
+        };
+
         match gpio.next_edge().await {
             Ok(edge) => {
+                // A healthy edge means the adapter is alive; reset the recovery
+                // backoff so a future loss starts from the base delay.
+                backoff = GPIO_REBUILD_BACKOFF_BASE;
                 bus.publish(TelemetryEvent::GpioEdge(edge));
                 if let Some(event) = event_from_gpio(edge)
                     && event_tx.send(event).await.is_err()
                 {
                     break;
                 }
+                current = Some(gpio);
             }
             Err(err) => {
+                // Emit exactly one error per loss (not per poll) and drop the
+                // dead adapter by *not* restoring `current`, so the next
+                // iteration rebuilds from released pins.
                 bus.publish(TelemetryEvent::Error {
                     source: "gpio".to_string(),
                     message: err.to_string(),
                 });
-                warn!(%err, "gpio stream error");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                warn!(%err, "gpio stream lost");
             }
+        }
+    }
+}
+
+/// Re-emit the current hook level after the GPIO adapter is rebuilt so the core
+/// state machine resyncs with any lift or hang-up that happened while the edge
+/// stream was down. Re-registered interrupts only observe future transitions,
+/// and the core treats a redundant hook event as an idempotent no-op, so it is
+/// safe to always emit. Returns `false` only when the event receiver is gone
+/// (the runtime is shutting down) so the caller can stop.
+async fn reconcile_hook(
+    gpio: &dyn GpioPort,
+    event_tx: &mpsc::Sender<Event>,
+    bus: &TelemetryBus,
+) -> bool {
+    match gpio.snapshot(PinRole::Hook).await {
+        Ok(level) => {
+            let edge = GpioEdge {
+                role: PinRole::Hook,
+                level,
+                at_monotonic_ns: 0,
+            };
+            bus.publish(TelemetryEvent::GpioEdge(edge));
+            if let Some(event) = event_from_gpio(edge) {
+                return event_tx.send(event).await.is_ok();
+            }
+            true
+        }
+        Err(err) => {
+            warn!(%err, "failed to reconcile hook state after gpio rebuild");
+            true
         }
     }
 }
@@ -2058,6 +2174,91 @@ mod tests {
     }
 
     // --- validate_config tests ---
+
+    #[tokio::test]
+    async fn gpio_task_rebuilds_after_stream_loss() {
+        use super::{GpioRebuild, gpio_task};
+        use booth_hal::{GpioEdge, GpioError, GpioPort, PinRole};
+        use std::sync::Arc;
+
+        // Generation 0 emits one Hook edge then loses its stream; every later
+        // generation emits one RotaryPulse edge (proving recovery) then parks.
+        struct StepGpio {
+            generation: usize,
+            emitted: bool,
+        }
+
+        #[async_trait]
+        impl GpioPort for StepGpio {
+            async fn next_edge(&mut self) -> Result<GpioEdge, GpioError> {
+                if !self.emitted {
+                    self.emitted = true;
+                    let role = if self.generation == 0 {
+                        PinRole::Hook
+                    } else {
+                        PinRole::RotaryPulse
+                    };
+                    return Ok(GpioEdge {
+                        role,
+                        level: false,
+                        at_monotonic_ns: 0,
+                    });
+                }
+                if self.generation == 0 {
+                    Err(GpioError::Stream("gpio event channel closed".into()))
+                } else {
+                    std::future::pending().await
+                }
+            }
+
+            async fn snapshot(&self, _role: PinRole) -> Result<bool, GpioError> {
+                // A rebuilt adapter reports the handset lifted; reconciliation
+                // should surface that as a HookOn before edges resume.
+                Ok(true)
+            }
+        }
+
+        let generation = Arc::new(AtomicUsize::new(0));
+        let first = Box::new(StepGpio {
+            generation: 0,
+            emitted: false,
+        }) as Box<dyn GpioPort>;
+        let gen_for_rebuild = Arc::clone(&generation);
+        let rebuild: GpioRebuild = Box::new(move || {
+            let next = gen_for_rebuild.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(Box::new(StepGpio {
+                generation: next,
+                emitted: false,
+            }) as Box<dyn GpioPort>)
+        });
+
+        let bus = TelemetryBus::new(64);
+        let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(16);
+        let task = tokio::spawn(gpio_task(first, Some(rebuild), event_tx, bus.clone()));
+
+        // Pre-loss Hook edge, the reconciled hook level after rebuild, then the
+        // post-rebuild RotaryPulse edge.
+        assert_eq!(event_rx.recv().await, Some(booth_core::Event::HookOff));
+        assert_eq!(event_rx.recv().await, Some(booth_core::Event::HookOn));
+        assert_eq!(event_rx.recv().await, Some(booth_core::Event::RotaryPulse));
+
+        task.abort();
+
+        let errors = bus
+            .snapshot_since(None)
+            .into_iter()
+            .filter(|record| matches!(record.event, TelemetryEvent::Error { .. }))
+            .count();
+        assert_eq!(
+            errors, 1,
+            "a single stream loss must emit exactly one error"
+        );
+        assert_eq!(
+            generation.load(Ordering::SeqCst),
+            1,
+            "the adapter should be rebuilt exactly once"
+        );
+    }
 
     #[test]
     fn default_config_passes_validation() {
