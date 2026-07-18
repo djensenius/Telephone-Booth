@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2](https://github.com/djensenius/Telephone-Booth/compare/v0.7.1...v0.7.2) (2026-07-18)
+
+
+### Bug Fixes
+
+* let the service read its own config and fail loud when it can't ([#110](https://github.com/djensenius/Telephone-Booth/issues/110)) ([89cfefe](https://github.com/djensenius/Telephone-Booth/commit/89cfefe3b3566a2a2d43a889f5ab6195dca00448))
+* send x-ms-blob-type on recording uploads so Azure accepts them ([#115](https://github.com/djensenius/Telephone-Booth/issues/115)) ([4ba77d2](https://github.com/djensenius/Telephone-Booth/commit/4ba77d21f7d75d59dae553ebcff467fb7dcdfc35))
+
 ## [0.7.1](https://github.com/djensenius/Telephone-Booth/compare/v0.7.0...v0.7.1) (2026-07-18)
 
 
