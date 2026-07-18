@@ -115,6 +115,7 @@ tokio-rustls = "0.26"
 
 # GPIO + audio (Pi)
 rppal = { version = "0.19", features = ["hal"] }
+alsa = "0.9"
 cpal = "0.15"
 claxon = "0.4"        # FLAC decode
 flacenc = "0.4"       # FLAC encode (pure Rust)

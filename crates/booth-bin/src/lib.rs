@@ -322,6 +322,11 @@ pub fn build_pi_adapters(
 
     let gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
         .map_err(|err| anyhow!("open GPIO adapter: {err}"))?;
+
+    if let Err(err) = booth_pi::apply_startup_mixer(&config.audio) {
+        tracing::warn!(%err, "failed to apply startup ALSA mixer settings; continuing");
+    }
+
     let audio_sink = PiAudioSink::with_telemetry_and_policy(
         config.audio.clone(),
         Some(telemetry_tx.clone()),

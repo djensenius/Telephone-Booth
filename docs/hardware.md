@@ -178,6 +178,16 @@ rough order of audio quality (and increasing departure from "all original"):
 Set the interface input gain per [Microphone level](#microphone-level) once the
 element is chosen.
 
+> **Reference-booth note (carbon on a USB dongle).** In practice the original
+> carbon element passed usable, intelligible voice on a generic C-Media USB
+> dongle's **plug-in bias alone** — no external bias circuit (option 4) — once
+> the capture gain was pushed near the top of its range (~+17 dB) and the
+> dongle's **Auto Gain Control was turned off** (AGC pumps the noise floor up
+> on a quiet carbon source). It is still lo-fi and level varies as the granules
+> pack, but it works. Those mixer levels are now applied automatically at
+> startup via the [`[audio.mixer]`](configuration.md#startup-alsa-mixer) config
+> block so they survive reboots.
+
 ### Receiver (earpiece) quality and level
 
 The receiver is a *separate*, low-sensitivity element with a deliberately narrow
@@ -226,6 +236,14 @@ The Scarlett's analog "INST" / "MIC" gain wheel sets the input level. Aim
 for the level meter in the debug UI to peak around -6 dBFS while someone
 speaks at booth distance. The runtime publishes peak/RMS samples to the
 telemetry bus roughly every 50 ms.
+
+On a **generic USB dongle** there is no analog gain wheel — the capture
+level and switches live in the ALSA mixer (`amixer -c <card>`). Rather than
+tuning them by hand and persisting with `alsactl store`, let the booth set
+them deterministically at startup via the
+[`[audio.mixer]`](configuration.md#startup-alsa-mixer) config block. For the
+reference dongle + carbon mic that means raising the `Mic` capture control
+near the top of its range (~83 %) and disabling `Auto Gain Control`.
 
 ### Recording format
 

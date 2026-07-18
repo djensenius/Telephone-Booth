@@ -40,16 +40,19 @@ symphonia = { workspace = true, optional = true }
 
 # rppal only builds on Linux (it uses Linux-specific termios / ioctl), so the
 # dependency is also gated by `target_os = "linux"` to keep `--all-features`
-# green on macOS.
+# green on macOS. `alsa` mixer control is likewise Linux-only (libasound), so
+# the startup-mixer feature degrades to a no-op on other targets.
 [target.'cfg(target_os = "linux")'.dependencies]
 rppal = { workspace = true, optional = true }
+alsa = { workspace = true, optional = true }
 
 [features]
 default = []
 # Cross-platform audio playback + capture + FLAC handling. Pulls reqwest so
 # remote-URL playback (operator audio) keeps working without the `operator`
-# feature.
-audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest", "dep:futures-util"]
+# feature. On Linux it also enables `alsa` for startup mixer control (no-op
+# elsewhere).
+audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest", "dep:futures-util", "dep:alsa"]
 # Cross-platform operator HTTP client.
 operator = ["dep:reqwest"]
 # Real Raspberry Pi build: cross-platform audio + operator plus rppal GPIO.

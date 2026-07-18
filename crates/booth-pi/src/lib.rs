@@ -21,12 +21,14 @@ use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+pub mod mixer;
 pub mod url_policy;
 
 pub use audio::{
     PiAudioSink, PiAudioSource, RecordingHandle, device_name_matches, embedded_tone_bytes,
     has_flac_stream_marker,
 };
+pub use mixer::{MixerError, apply_startup_mixer, volume_from_percent};
 pub use url_policy::{AudioFetchPolicy, UrlPolicyError};
 
 pub mod operator;
@@ -224,6 +226,59 @@ pub struct AudioConfig {
     /// Where to write FLAC recordings before upload.
     #[serde(default = "default_recordings_dir")]
     pub recordings_dir: String,
+    /// Optional ALSA mixer controls applied once at startup so hardware
+    /// gain/switch levels are set by the app instead of relying on
+    /// `alsactl store`/`alsa-restore`. When unset, the mixer is left
+    /// untouched. Only takes effect on Linux builds with the `audio`
+    /// feature; a no-op elsewhere.
+    #[serde(default)]
+    pub mixer: Option<MixerConfig>,
+}
+
+/// Startup ALSA mixer configuration.
+///
+/// Applied once when the Pi runtime builds its adapters. Each entry maps to a
+/// simple-mixer control (as shown by `amixer scontrols`), letting the app set
+/// capture/playback gain and on/off switches deterministically at boot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MixerConfig {
+    /// ALSA card to open the mixer for. Accepts a card index (`"1"`), a card
+    /// id (`"Device"`), or a full control name (`"hw:1"`, `"default"`). When
+    /// unset, defaults to `"default"`.
+    #[serde(default)]
+    pub card: Option<String>,
+    /// Ordered list of simple-mixer controls to set on startup.
+    #[serde(default, alias = "control")]
+    pub controls: Vec<MixerControl>,
+}
+
+/// A single simple-mixer control setting applied at startup.
+///
+/// Only the fields that are set are applied; unset fields leave that aspect of
+/// the control unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MixerControl {
+    /// Simple control name, e.g. `"Mic"`, `"Speaker"`, `"Auto Gain Control"`.
+    pub name: String,
+    /// Control index (usually `0`).
+    #[serde(default)]
+    pub index: u32,
+    /// Playback volume as a percentage (`0`–`100`) of the control's range.
+    #[serde(default)]
+    pub playback_volume_percent: Option<u8>,
+    /// Capture volume as a percentage (`0`–`100`) of the control's range.
+    #[serde(default)]
+    pub capture_volume_percent: Option<u8>,
+    /// Playback switch: `true` = on/unmuted, `false` = off/muted.
+    #[serde(default)]
+    pub playback_switch: Option<bool>,
+    /// Capture switch: `true` = on, `false` = off.
+    #[serde(default)]
+    pub capture_switch: Option<bool>,
+    /// Generic switch for simple on/off controls (e.g. `"Auto Gain Control"`).
+    /// Applied to whichever of the playback/capture switches the control has.
+    #[serde(default)]
+    pub switch: Option<bool>,
 }
 
 #[allow(
@@ -258,6 +313,7 @@ impl Default for AudioConfig {
             max_recording_secs: default_max_recording_secs(),
             max_audio_download_bytes: default_max_audio_download_bytes(),
             recordings_dir: default_recordings_dir(),
+            mixer: None,
         }
     }
 }
