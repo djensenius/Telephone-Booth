@@ -49,6 +49,12 @@ const FLAC_CONTENT_TYPE: &str = "audio/flac";
 const AZURE_BLOB_TYPE_HEADER: &str = "x-ms-blob-type";
 #[cfg(feature = "operator")]
 const AZURE_BLOCK_BLOB: &str = "BlockBlob";
+/// Azure stores `x-ms-meta-*` request headers as blob metadata. The operator's
+/// `/v1/messages/{id}/complete` handler reads the `sha256` metadata value back
+/// off the blob and rejects the upload with `sha256_metadata_missing` (HTTP
+/// 422) when it is absent, so the recording PUT must always carry the digest.
+#[cfg(feature = "operator")]
+const AZURE_META_SHA256_HEADER: &str = "x-ms-meta-sha256";
 #[cfg(feature = "operator")]
 const USER_AGENT_VALUE: &str = concat!("telephone-booth/", env!("CARGO_PKG_VERSION"));
 
@@ -300,16 +306,17 @@ impl PiOperatorClient {
         &self,
         slot: &UploadSlot,
         local_path: &Path,
+        sha256_hex: &str,
     ) -> Result<(), UploadError> {
         #[cfg(feature = "operator")]
         {
             validate_upload_url(&slot.upload_url, &self.config.allowed_upload_hosts)?;
-            self.put_recording(slot, local_path).await
+            self.put_recording(slot, local_path, sha256_hex).await
         }
 
         #[cfg(not(feature = "operator"))]
         {
-            let _ = (slot, local_path);
+            let _ = (slot, local_path, sha256_hex);
             Err(UploadError::Transport(
                 "booth-pi was compiled without the operator feature".into(),
             ))
@@ -325,6 +332,7 @@ impl PiOperatorClient {
         &self,
         slot: &UploadSlot,
         local_path: &Path,
+        sha256_hex: &str,
     ) -> Result<(), UploadError> {
         // Validate file size against the configured cap before streaming.
         let meta = fs::metadata(local_path)
@@ -361,6 +369,7 @@ impl PiOperatorClient {
                 .header(CONTENT_TYPE, FLAC_CONTENT_TYPE)
                 .header(CONTENT_LENGTH, file_size)
                 .header(AZURE_BLOB_TYPE_HEADER, AZURE_BLOCK_BLOB)
+                .header(AZURE_META_SHA256_HEADER, sha256_hex)
                 .body(body)
                 .send()
                 .await;
@@ -477,8 +486,13 @@ impl OperatorClient for PiOperatorClient {
         .await
     }
 
-    async fn put_upload(&self, slot: &UploadSlot, local_path: &str) -> Result<(), OperatorError> {
-        self.upload_recording(slot, Path::new(local_path))
+    async fn put_upload(
+        &self,
+        slot: &UploadSlot,
+        local_path: &str,
+        sha256_hex: &str,
+    ) -> Result<(), OperatorError> {
+        self.upload_recording(slot, Path::new(local_path), sha256_hex)
             .await
             .map_err(OperatorError::from)
     }

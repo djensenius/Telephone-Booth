@@ -377,7 +377,17 @@ pub trait OperatorClient: Send + Sync {
     ) -> Result<UploadSlot, OperatorError>;
 
     /// PUT the bytes of `local_path` to `slot.upload_url`.
-    async fn put_upload(&self, slot: &UploadSlot, local_path: &str) -> Result<(), OperatorError>;
+    ///
+    /// `sha256_hex` is the lower-case hex digest declared for the recording;
+    /// adapters attach it as Azure blob metadata (`x-ms-meta-sha256`) so the
+    /// operator's `/complete` verification can match it against the message's
+    /// expected digest.
+    async fn put_upload(
+        &self,
+        slot: &UploadSlot,
+        local_path: &str,
+        sha256_hex: &str,
+    ) -> Result<(), OperatorError>;
 
     /// Notify the operator that the upload at `slot_id` is complete.
     async fn complete_upload(

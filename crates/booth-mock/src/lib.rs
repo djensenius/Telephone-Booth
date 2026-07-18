@@ -465,7 +465,12 @@ impl OperatorClient for MockOperatorClient {
         result
     }
 
-    async fn put_upload(&self, _slot: &UploadSlot, _local_path: &str) -> Result<(), OperatorError> {
+    async fn put_upload(
+        &self,
+        _slot: &UploadSlot,
+        _local_path: &str,
+        _sha256_hex: &str,
+    ) -> Result<(), OperatorError> {
         let (request_id, started) = self.begin_request("PUT /mock/upload");
         self.apply_latency().await;
         tokio::time::sleep(Duration::from_millis(1)).await;
