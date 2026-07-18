@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/djensenius/Telephone-Booth/compare/v0.6.2...v0.6.3) (2026-07-18)
+
+
+### Bug Fixes
+
+* durably spill buffered telemetry on shutdown so CallEnded survives restarts ([#106](https://github.com/djensenius/Telephone-Booth/issues/106)) ([3e2f8d6](https://github.com/djensenius/Telephone-Booth/commit/3e2f8d6f304244554dbb69cf103f9ae52184ad15)), closes [#104](https://github.com/djensenius/Telephone-Booth/issues/104)
+
 ## [0.6.2](https://github.com/djensenius/Telephone-Booth/compare/v0.6.1...v0.6.2) (2026-07-18)
 
 
