@@ -312,6 +312,9 @@ pub struct MockOperatorState {
     pub uploads: Vec<UploadSlot>,
     /// If set, `random_question` will fail with this until cleared.
     pub fail_questions: Option<OperatorError>,
+    /// If set, `push_events_json` will fail with this until cleared,
+    /// simulating a transient API/network outage.
+    pub fail_events: Option<OperatorError>,
     /// Raw `/v1/events` batch bodies received, in order of arrival.
     pub event_batches: Vec<String>,
     /// Live system snapshots received, with their booth_id label.
@@ -493,6 +496,15 @@ impl OperatorClient for MockOperatorClient {
 
     async fn push_events_json(&self, body: &str) -> Result<EventBatchAck, OperatorError> {
         let (request_id, started) = self.begin_request("POST /mock/events");
+        // Simulate a transient API/network failure when configured. The batch
+        // body is intentionally NOT recorded so tests can assert that failed
+        // events are retried/spooled rather than acknowledged.
+        let injected_failure = self.inner.lock().await.fail_events.clone();
+        if let Some(err) = injected_failure {
+            let result = Err(err);
+            self.finish_request(&request_id, started, &result);
+            return result;
+        }
         self.inner.lock().await.event_batches.push(body.to_string());
         // Count events by a naive scan for the `"eventId"` discriminator.
         // The mock does not enforce idempotency; tests inspecting

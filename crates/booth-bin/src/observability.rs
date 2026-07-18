@@ -36,13 +36,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, warn};
 
 use crate::event_spool::EventSpool;
 use uuid::Uuid;
+
+/// Upper bound on the best-effort final flush performed during graceful
+/// shutdown. Keeps a hung network call from blocking teardown; anything not
+/// acknowledged within this window is spilled to disk for replay instead.
+const SHUTDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Top-level observability config block in `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,9 +288,12 @@ impl SessionTracker {
 
 /// Spawn the event forwarder task.
 ///
-/// Returns the join handle; the caller is expected to `abort()` it on
-/// shutdown so the buffered events are not flushed during cleanup (we
-/// would otherwise race against the connection going away).
+/// Returns the join handle. On graceful shutdown the caller should flip
+/// `shutdown` to `true` and await the handle (with a timeout) so the task
+/// gets a chance to make a best-effort final flush and durably spill any
+/// still-buffered events to disk before exiting. Buffered events that are
+/// never spilled would otherwise be lost across a restart — including a
+/// `CallEnded` that closes a call session.
 ///
 /// When an [`super::event_spool::EventSpool`] is provided, failed batches are persisted to disk
 /// and replayed on startup so events survive restarts and extended outages.
@@ -297,6 +305,7 @@ pub fn spawn_event_forwarder(
     config: ObservabilityConfig,
     session_handle: SessionHandle,
     event_spool: Option<Arc<EventSpool>>,
+    mut shutdown: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     // Subscribe synchronously so we don't miss any events that fire
     // between spawn and the task's first poll.
@@ -393,6 +402,33 @@ pub fn spawn_event_forwarder(
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
+                changed = shutdown.changed() => {
+                    // `Err` means the sender was dropped, which also signals
+                    // teardown. Either way we stop the loop and run the final
+                    // best-effort flush + spill below.
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Graceful shutdown: make a bounded best-effort flush of whatever is
+        // still buffered, then durably spill anything that wasn't acknowledged
+        // so the next startup replays it. Without this, a normal shutdown
+        // (SIGTERM, power-cycle window, restart) would drop in-memory events —
+        // including the `CallEnded` that ends a call session.
+        if !batch.is_empty() {
+            let flushed = matches!(
+                tokio::time::timeout(
+                    SHUTDOWN_FLUSH_TIMEOUT,
+                    flush_once(&operator, &mut batch, &identity),
+                )
+                .await,
+                Ok(true)
+            );
+            if !flushed {
+                spill_remaining(event_spool.as_ref(), &mut batch);
             }
         }
     })
@@ -582,6 +618,34 @@ fn maybe_spill(
         }
     } else {
         debug!(count = items.len(), "spilled event batch to disk");
+    }
+}
+
+/// Unconditionally spill every buffered event to disk (used on shutdown).
+///
+/// Unlike [`maybe_spill`], this does not wait for the buffer to fill up: at
+/// shutdown even a single un-acknowledged event (e.g. a `CallEnded`) must be
+/// persisted so the next startup replays it.
+fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<Value>) {
+    if batch.is_empty() {
+        return;
+    }
+    let Some(spool) = spool else {
+        warn!(
+            count = batch.len(),
+            "no event spool configured; dropping buffered events on shutdown"
+        );
+        batch.clear();
+        return;
+    };
+    let items: Vec<Value> = batch.drain(..).collect();
+    if let Err(err) = spool.spill(&items) {
+        warn!(%err, count = items.len(), "failed to spill buffered events on shutdown");
+    } else {
+        debug!(
+            count = items.len(),
+            "spilled buffered events to disk on shutdown"
+        );
     }
 }
 

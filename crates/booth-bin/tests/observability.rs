@@ -102,3 +102,136 @@ async fn inject(
     tokio::task::yield_now().await;
     Ok(())
 }
+
+/// Durability regression test for djensenius/Telephone-Booth#104: a booth
+/// restart with events queued (and undeliverable) before shutdown must
+/// deliver those events after coming back online. The first run simulates a
+/// total operator outage so the buffered `CallStarted` / `CallEnded` are
+/// spilled to disk on shutdown; the second run (operator reachable, same
+/// recordings dir) must replay the on-disk spool and deliver them.
+#[tokio::test]
+async fn queued_events_survive_restart_via_spool() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+
+    // --- First run: operator is unreachable for the whole run. ---
+    {
+        let mut config = booth_bin::RuntimeConfig::default();
+        config.debug.allow_controls = true;
+        config.observability.enabled = true;
+        config.observability.booth_id = "booth-test".to_string();
+        config.observability.operator_forward.flush_interval_ms = 100;
+        config.audio.recordings_dir = recordings_dir.clone();
+
+        let bus = TelemetryBus::new(256);
+        let (adapters, handles) = build_mock_adapters(&bus);
+        // Simulate a transient API/network outage for the whole first run so
+        // no batch is ever acknowledged.
+        handles.operator.state().lock().await.fail_events = Some(
+            booth_hal::OperatorError::Transport("simulated outage".into()),
+        );
+
+        let runtime = spawn_runtime(
+            config,
+            adapters,
+            bus.clone(),
+            RuntimeOptions {
+                start_debug: false,
+                listen_signals: false,
+                notify_systemd: false,
+                ..RuntimeOptions::default()
+            },
+        );
+
+        // Pickup → hangup produces CallStarted + CallEnded.
+        inject(&runtime.commands, Event::HookOff).await?;
+        inject(&runtime.commands, Event::HookOn).await?;
+
+        // Give the forwarder time to attempt (and fail) at least one flush so
+        // the events remain buffered in memory.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        runtime.commands.send(RuntimeCommand::Shutdown).await?;
+        let _ = runtime.join.await?;
+    }
+
+    // The graceful shutdown should have spilled the buffered events to disk.
+    let spool_dir = std::path::Path::new(&recordings_dir).join("event-spool");
+    let spooled = spool_json_files(&spool_dir)?;
+    assert!(
+        !spooled.is_empty(),
+        "expected spooled event files after shutdown during an outage; found none in {}",
+        spool_dir.display()
+    );
+
+    // --- Second run: operator reachable, spool must replay on startup. ---
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.observability.enabled = true;
+    config.observability.booth_id = "booth-test".to_string();
+    config.observability.operator_forward.flush_interval_ms = 100;
+    config.audio.recordings_dir = recordings_dir.clone();
+
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    let operator = handles.operator.clone();
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    // Wait for the on-disk spool to be replayed to the operator.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut seen_call_ended = false;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let batches = operator.state().lock().await.event_batches.clone();
+        if batches.iter().any(|b| b.contains("\"call_ended\"")) {
+            seen_call_ended = true;
+            break;
+        }
+    }
+    assert!(
+        seen_call_ended,
+        "expected the replayed spool to deliver call_ended after restart"
+    );
+
+    // A successful replay must drain the spool from disk.
+    let remaining = spool_json_files(&spool_dir)?;
+    assert!(
+        remaining.is_empty(),
+        "expected the spool to be drained after replay; still present: {remaining:?}"
+    );
+
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    let _ = runtime.join.await?;
+    Ok(())
+}
+
+/// Collect the `*.json` spool files in `dir` (ignoring in-progress `.tmp-*`
+/// files), returning an empty list if the directory does not exist yet.
+fn spool_json_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, Box<dyn Error>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let is_json = path.extension().is_some_and(|ext| ext == "json");
+        let is_hidden = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'));
+        if path.is_file() && is_json && !is_hidden {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
