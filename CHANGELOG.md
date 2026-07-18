@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/djensenius/Telephone-Booth/compare/v0.6.1...v0.6.2) (2026-07-18)
+
+
+### Bug Fixes
+
+* poll GPIO levels + workflow permissions + RUSTSEC-2026-0204 ([#102](https://github.com/djensenius/Telephone-Booth/issues/102)) ([afdb136](https://github.com/djensenius/Telephone-Booth/commit/afdb136f064724664921d650803266430bab34ee))
+
 ## [0.6.1](https://github.com/djensenius/Telephone-Booth/compare/v0.6.0...v0.6.1) (2026-07-17)
 
 
