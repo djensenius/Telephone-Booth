@@ -35,6 +35,18 @@ recordings_dir     = "/var/lib/phone-booth/recordings"
 beep_volume        = 0.8
 dialtone_volume    = 0.6
 
+# Optional: set ALSA mixer levels once at startup (Linux only). See
+# "Startup ALSA mixer" below. Omit the whole [audio.mixer] block to leave
+# the mixer untouched.
+[audio.mixer]
+card = "Device"
+[[audio.mixer.controls]]
+name = "Mic"
+capture_volume_percent = 83
+[[audio.mixer.controls]]
+name = "Auto Gain Control"
+switch = false
+
 [operator]
 base_url    = "https://operator.example.com"
 token       = "tbo_REPLACE_WITH_TOKEN"
@@ -139,6 +151,61 @@ operator's hard limits: `booth_pi::MAX_UPLOAD_BYTES` is `26_214_400` (25 MiB)
 and `booth_pi::MAX_UPLOAD_DURATION_MS` is `300_000` (5 minutes). Rejected
 recordings stay on disk and in the pending-upload spool for operator-visible
 triage instead of being discarded.
+
+### Startup ALSA mixer
+
+The optional `[audio.mixer]` block lets the booth set sound-card mixer
+levels **itself, once, at startup** — so capture/playback gain and
+on/off switches survive reboots without depending on `alsactl store` /
+`alsa-restore`. It is applied by `build_pi_adapters` before the audio
+adapters open the device, and is a **Linux-only** feature (it uses ALSA's
+mixer API via the `alsa` crate); on non-Linux builds (e.g. the macOS host)
+it is a logged no-op. Omit the whole block to leave the mixer untouched.
+
+| Key                                    | Meaning                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `audio.mixer.card`                     | Card to open: index (`"1"`), id (`"Device"`), or full name (`"hw:1"`, `"default"`). Defaults to `"default"`. |
+| `audio.mixer.controls[].name`          | Simple-control name from `amixer -c <card> scontrols` (e.g. `"Mic"`, `"Speaker"`, `"Auto Gain Control"`). |
+| `audio.mixer.controls[].index`         | Control index, usually `0` (the default).                                            |
+| `audio.mixer.controls[].playback_volume_percent` | Playback volume as `0`–`100` % of the control's range.                     |
+| `audio.mixer.controls[].capture_volume_percent`  | Capture volume as `0`–`100` % of the control's range.                      |
+| `audio.mixer.controls[].playback_switch` | Playback switch: `true` = on/unmuted, `false` = off/muted.                          |
+| `audio.mixer.controls[].capture_switch`  | Capture switch: `true` = on, `false` = off.                                         |
+| `audio.mixer.controls[].switch`        | Generic on/off for controls with a single switch (e.g. `"Auto Gain Control"`).       |
+
+Only the fields you set are applied; everything else is left as-is. A
+control name that doesn't exist on the card is logged as a warning and
+skipped, so one bad entry never aborts the rest.
+
+**Known-good example (generic USB dongle + carbon handset mic):** this is
+the configuration currently running in the reference booth — a C-Media
+"USB Audio Device" (ALSA card id `Device`) with the payphone's original
+carbon mouthpiece. The mic passes usable voice with capture gain near the
+top of its range and AGC disabled:
+
+```toml
+[audio]
+# The dongle's playback hardware is stereo-only but the booth opens mono,
+# so it must land on a plug PCM that converts mono -> stereo.
+device_substring = "plughw:CARD=Device"
+sample_rate_hz   = 48000
+channels         = 1
+
+[audio.mixer]
+card = "Device"
+
+[[audio.mixer.controls]]
+name = "Mic"                    # capture gain ~+17 dB (29/35 on this card)
+capture_volume_percent = 83
+
+[[audio.mixer.controls]]
+name = "Speaker"                # earpiece playback at full scale
+playback_volume_percent = 100
+
+[[audio.mixer.controls]]
+name = "Auto Gain Control"      # AGC pumps the noise floor; keep it off
+switch = false
+```
 
 ## Environment variables
 
