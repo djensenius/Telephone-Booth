@@ -43,8 +43,8 @@ const JSON_CONTENT_TYPE: &str = "application/json";
 const FLAC_CONTENT_TYPE: &str = "audio/flac";
 /// Azure Blob Storage requires every `PUT Blob` request to declare the blob
 /// type; without `x-ms-blob-type: BlockBlob` the service rejects the upload
-/// with `409`/`422` `MissingRequiredHeader`. The operator hands out presigned
-/// SAS URLs that target block blobs, so this is always the correct value.
+/// with a `MissingRequiredHeader` error. The operator hands out presigned SAS
+/// URLs that target block blobs, so this is always the correct value.
 #[cfg(feature = "operator")]
 const AZURE_BLOB_TYPE_HEADER: &str = "x-ms-blob-type";
 #[cfg(feature = "operator")]

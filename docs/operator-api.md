@@ -71,5 +71,5 @@ backend fan-outs to connected browsers.
 | `409`  | Message `sha256` already exists or the completion blob is missing.  |
 | `413`  | Uploaded audio exceeds the 25 MiB operator cap.                     |
 | `422`  | Blob verification failed, usually missing/mismatched SHA metadata.  |
-| `MissingRequiredHeader` (Azure XML) | The `PUT <SAS URL>` upload omitted `x-ms-blob-type: BlockBlob`. The phone client sends it; a bare `curl` won't. |
+| `400`/`422` | Azure `PUT <SAS URL>` upload omitted `x-ms-blob-type: BlockBlob` (`MissingRequiredHeader`). The phone client sends it; a bare `curl` won't. |
 | `5xx`  | Operator backend down. The client retries with exponential backoff. |
