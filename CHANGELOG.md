@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/djensenius/Telephone-Booth/compare/v0.7.0...v0.7.1) (2026-07-18)
+
+
+### Bug Fixes
+
+* upload the caller's answer when they hang up mid-recording ([#111](https://github.com/djensenius/Telephone-Booth/issues/111)) ([f00664d](https://github.com/djensenius/Telephone-Booth/commit/f00664d8c5a35ce1fbd32f72e4f4cf7537dd7b2c))
+
 ## [0.7.0](https://github.com/djensenius/Telephone-Booth/compare/v0.6.3...v0.7.0) (2026-07-18)
 
 
