@@ -288,12 +288,12 @@ impl SessionTracker {
 
 /// Spawn the event forwarder task.
 ///
-/// Returns the join handle. On graceful shutdown the caller should flip
-/// `shutdown` to `true` and await the handle (with a timeout) so the task
-/// gets a chance to make a best-effort final flush and durably spill any
-/// still-buffered events to disk before exiting. Buffered events that are
-/// never spilled would otherwise be lost across a restart — including a
-/// `CallEnded` that closes a call session.
+/// Returns the join handle. On graceful shutdown the caller should send
+/// `true` on the `shutdown` watch channel and await the handle (with a
+/// timeout) so the task gets a chance to make a best-effort final flush and
+/// durably spill any still-buffered events to disk before exiting. Buffered
+/// events that are never spilled would otherwise be lost across a restart —
+/// including a `CallEnded` that closes a call session.
 ///
 /// When an [`super::event_spool::EventSpool`] is provided, failed batches are persisted to disk
 /// and replayed on startup so events survive restarts and extended outages.
