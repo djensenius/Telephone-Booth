@@ -1711,17 +1711,36 @@ fn apply_runtime_env_overrides(
 
 fn config_path_to_read(path: Option<&Path>) -> Result<Option<PathBuf>> {
     if let Some(path) = path {
-        if !path.exists() {
-            bail!("config file does not exist: {}", path.display());
+        // Use `try_exists` rather than `exists` so a permission error (e.g. the
+        // service user cannot traverse the config directory) surfaces as a hard
+        // failure instead of being silently treated as "file absent".
+        match path.try_exists() {
+            Ok(true) => return Ok(Some(path.to_path_buf())),
+            Ok(false) => bail!("config file does not exist: {}", path.display()),
+            Err(err) => bail!(
+                "cannot access config file {} (check ownership/permissions): {err}",
+                path.display()
+            ),
         }
-        return Ok(Some(path.to_path_buf()));
     }
 
     let default = Path::new(DEFAULT_CONFIG_PATH);
-    if default.exists() {
-        return Ok(Some(default.to_path_buf()));
+    match default.try_exists() {
+        Ok(true) => return Ok(Some(default.to_path_buf())),
+        // Not present: fall through to the dev-tree config below.
+        Ok(false) => {}
+        // Present-but-unreadable must not be mistaken for "use built-in
+        // defaults" — that failure mode silently strips the operator's whole
+        // config. Fail loudly with a hint at the usual cause.
+        Err(err) => bail!(
+            "cannot access config file {DEFAULT_CONFIG_PATH} (check ownership/permissions; \
+             the service user needs read+traverse access to the config directory): {err}"
+        ),
     }
+
     let dev = Path::new(DEV_CONFIG_PATH);
+    // The dev-tree fallback is best-effort; a bare `exists` is fine here since a
+    // permission error on `./config.toml` just means "no local override".
     if dev.exists() {
         return Ok(Some(dev.to_path_buf()));
     }
@@ -2020,8 +2039,8 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
 )]
 mod tests {
     use super::{
-        AudioRef, RuntimeConfig, RuntimeStartupConfig, apply_runtime_env_overrides, is_sha256_hex,
-        operator_audio_ref, upload_recording, validate_config,
+        AudioRef, RuntimeConfig, RuntimeStartupConfig, apply_runtime_env_overrides,
+        config_path_to_read, is_sha256_hex, operator_audio_ref, upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2088,6 +2107,59 @@ mod tests {
 
     fn unique_temp_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("telephone-booth-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn config_path_to_read_errors_for_missing_explicit_path() {
+        let missing = unique_temp_dir().join("nope.toml");
+        let err = config_path_to_read(Some(&missing)).expect_err("missing path should error");
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn config_path_to_read_returns_existing_explicit_path() -> std::io::Result<()> {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir)?;
+        let file = dir.join("config.toml");
+        fs::write(&file, b"")?;
+
+        let resolved = config_path_to_read(Some(&file)).expect("existing path resolves");
+        assert_eq!(resolved, Some(file));
+
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    // Regression: a config file that exists but cannot be reached because the
+    // service user lacks traverse permission on its directory must be a hard
+    // error, not a silent fall-back to built-in defaults.
+    #[cfg(unix)]
+    #[test]
+    fn config_path_to_read_errors_when_directory_is_unreadable() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir)?;
+        let file = dir.join("config.toml");
+        fs::write(&file, b"")?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000))?;
+
+        // Skip the assertion when running as root (e.g. some CI containers),
+        // where directory permissions are bypassed and `try_exists` still
+        // succeeds.
+        let root_bypasses = file.try_exists().is_ok();
+        let result = config_path_to_read(Some(&file));
+
+        // Restore permissions so the temp dir can be cleaned up.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755))?;
+        fs::remove_dir_all(&dir)?;
+
+        if root_bypasses {
+            return Ok(());
+        }
+        let err = result.expect_err("unreadable config directory should error");
+        assert!(err.to_string().contains("cannot access config file"));
+        Ok(())
     }
 
     #[derive(Default)]

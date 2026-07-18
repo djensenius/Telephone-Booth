@@ -12,6 +12,44 @@ ongoing operational issues, see the [runbook](runbook.md).
   the `[audio]` block. If `device_substring` doesn't match anything,
   the binary falls back to the system default — confirm the Focusrite
   shows up in `aplay -L` / `pactl list short sinks`.
+- **The service can't read its own config** (see below). If `journalctl`
+  shows the built-in defaults (`device_substring` = `Focusrite`,
+  `debounce_ms` = `25`) even though `/etc/phone-booth/config.toml` is
+  populated, the service user can't read the file.
+
+## The service ignores `config.toml` and runs on defaults
+
+Symptom: the booth boots and runs, but behaves as if `config.toml` were
+empty — the log shows `needle=Focusrite`, `debounce_ms=25`, and no
+`[audio.mixer]` is applied — even though `sudo cat /etc/phone-booth/config.toml`
+shows the right values.
+
+Cause: the service user (`phonebooth`, with primary group `audio`) can't
+**traverse** the `0750 root:phonebooth` config directory, so the loader
+treats the file as absent. Older packages set
+`SupplementaryGroups=gpio dialout` without `phonebooth`, which drops that
+access. Reproduce it exactly as the unit runs:
+
+```sh
+sudo systemd-run --uid=phonebooth --gid=audio --pipe -q \
+  cat /etc/phone-booth/config.toml
+```
+
+If that prints `Permission denied` while `sudo cat` works, that's the bug.
+Current packages ship `SupplementaryGroups=gpio dialout phonebooth`; on an
+older install add it via a drop-in:
+
+```sh
+sudo mkdir -p /etc/systemd/system/telephone-booth.service.d
+printf '[Service]\nSupplementaryGroups=phonebooth\n' | \
+  sudo tee /etc/systemd/system/telephone-booth.service.d/config-access.conf
+sudo systemctl daemon-reload
+sudo systemctl restart telephone-booth
+```
+
+Newer binaries also **fail loudly** in this situation (the `check`
+pre-start step reports `cannot access config file …`) instead of silently
+starting on defaults.
 
 ## Rotary dial seems to skip or stick
 
