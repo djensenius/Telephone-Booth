@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "booth-bin"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "booth-core"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "booth-hal",
  "heapless",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "booth-debug"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "axum",
  "booth-core",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "booth-hal"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "heapless",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "booth-metrics"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "booth-hal",
  "booth-telemetry",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "booth-mock"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "booth-hal",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "booth-pi"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "booth-telemetry"
-version = "0.5.0"
+version = "0.6.1"
 dependencies = [
  "booth-hal",
  "serde",
@@ -771,9 +771,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
