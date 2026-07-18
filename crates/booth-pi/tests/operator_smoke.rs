@@ -431,11 +431,44 @@ async fn upload_recording_rejects_http_localhost_url() -> TestResult {
 }
 
 #[tokio::test]
+async fn put_recording_sends_azure_blob_type_header() -> TestResult {
+    // Azure Blob Storage rejects a PUT Blob without `x-ms-blob-type`; require
+    // it on the mock so a regression that drops the header fails the upload.
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/blob"))
+        .and(header("content-type", "audio/flac"))
+        .and(header("x-ms-blob-type", "BlockBlob"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = PiOperatorClient::new(config(server.uri()))?;
+    let dir = std::env::current_dir()?.join("target/operator-smoke");
+    std::fs::create_dir_all(&dir)?;
+    let recording = dir.join(format!("upload-blobtype-{}.flac", std::process::id()));
+    std::fs::write(&recording, b"flac-data")?;
+
+    let slot = booth_hal::UploadSlot {
+        id: "44444444-4444-4444-4444-444444444444".to_string(),
+        upload_url: format!("{}/blob", server.uri()),
+        blob_name: "recordings/44444444-4444-4444-4444-444444444444.flac".to_string(),
+    };
+    let result = client.put_recording(&slot, &recording).await;
+    let _ = std::fs::remove_file(&recording);
+
+    assert!(result.is_ok(), "upload should succeed: {result:?}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn put_recording_retries_5xx_then_gives_up() -> TestResult {
     let server = MockServer::start().await;
     Mock::given(method("PUT"))
         .and(path("/blob"))
         .and(header("content-type", "audio/flac"))
+        .and(header("x-ms-blob-type", "BlockBlob"))
         .respond_with(ResponseTemplate::new(503).set_body_string("try later"))
         .expect(4) // initial attempt + 3 retries
         .mount(&server)
