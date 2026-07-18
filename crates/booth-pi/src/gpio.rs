@@ -17,7 +17,7 @@ mod imp {
     use tokio::runtime::Handle;
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
-    use tracing::{debug, info};
+    use tracing::{debug, info, warn};
 
     /// Interval between GPIO level samples.
     ///
@@ -191,11 +191,13 @@ mod imp {
     ) {
         // Per-role debounce state: the last confirmed logical level and, when a
         // differing reading is seen, the candidate level and when it first
-        // appeared.
+        // appeared. `confirmed` is seeded from the live pins; the shared
+        // `levels` (read by `snapshot`) instead mirrors the most recent raw
+        // sample so callers always see the current level, not the debounced one.
         let mut confirmed = [
-            levels[0].load(Ordering::Relaxed),
-            levels[1].load(Ordering::Relaxed),
-            levels[2].load(Ordering::Relaxed),
+            logical_level(&pins, &config, PinRole::Hook),
+            logical_level(&pins, &config, PinRole::RotaryPulse),
+            logical_level(&pins, &config, PinRole::RotaryRead),
         ];
         let mut pending: [Option<(bool, Instant)>; 3] = [None, None, None];
 
@@ -210,6 +212,10 @@ mod imp {
                 let idx = role_index(role);
                 let raw = apply_invert(pins.physical_high(role), config.inverted(role));
 
+                // Publish every raw sample so `snapshot` reflects the current
+                // level regardless of the debounce state.
+                levels[idx].store(raw, Ordering::Relaxed);
+
                 if raw == confirmed[idx] {
                     // Bounced back to the confirmed level; cancel any candidate.
                     pending[idx] = None;
@@ -221,24 +227,53 @@ mod imp {
                         if now.duration_since(since) >= debounce {
                             confirmed[idx] = raw;
                             pending[idx] = None;
-                            levels[idx].store(raw, Ordering::Relaxed);
-
-                            let edge = GpioEdge {
-                                role,
-                                level: raw,
-                                at_monotonic_ns: monotonic_ns(started_at.elapsed()),
-                            };
-                            if tx.send(edge).await.is_err() {
-                                debug!(?role, "gpio edge receiver dropped; stopping poll loop");
-                                return;
-                            }
-
-                            debug!(?role, level = raw, "forwarded debounced gpio edge");
+                            forward_edge(&tx, role, raw, started_at);
                         }
                     }
                     _ => pending[idx] = Some((raw, now)),
                 }
             }
+
+            // Never block the sampler on delivery (see `forward_edge`); instead
+            // stop once the consumer is gone so the task doesn't spin forever.
+            if tx.is_closed() {
+                debug!("gpio edge receiver dropped; stopping poll loop");
+                return;
+            }
+        }
+    }
+
+    /// Deliver a debounced edge without ever blocking the sampling loop.
+    ///
+    /// Awaiting a bounded `send` would pause sampling of *all* pins whenever the
+    /// queue is full (its capacity can be as low as 1), silently losing later
+    /// transitions. A non-blocking `try_send` keeps sampling alive; a full queue
+    /// drops the edge and bumps `booth_gpio_edges_dropped_total` instead.
+    fn forward_edge(tx: &mpsc::Sender<GpioEdge>, role: PinRole, level: bool, started_at: Instant) {
+        let edge = GpioEdge {
+            role,
+            level,
+            at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+        };
+
+        match tx.try_send(edge) {
+            Ok(()) => debug!(?role, level, "forwarded debounced gpio edge"),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                metrics::counter!("booth_gpio_edges_dropped_total", "role" => role_label(role))
+                    .increment(1);
+                warn!(?role, "gpio edge queue full; dropping edge");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                debug!(?role, "gpio edge receiver dropped");
+            }
+        }
+    }
+
+    const fn role_label(role: PinRole) -> &'static str {
+        match role {
+            PinRole::Hook => "Hook",
+            PinRole::RotaryPulse => "RotaryPulse",
+            PinRole::RotaryRead => "RotaryRead",
         }
     }
 
