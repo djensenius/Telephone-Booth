@@ -215,6 +215,79 @@ async fn queued_events_survive_restart_via_spool() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+/// Regression for the shutdown-drain race in djensenius/Telephone-Booth#106:
+/// a shutdown that fires immediately after `HookOn` — with **no** delay to
+/// let the forwarder pull the events out of the broadcast queue — must still
+/// deliver `CallEnded`. Records queued by `handle_event` before the shutdown
+/// signal are drained and persisted on the way out; without the drain the
+/// synthesized `CallEnded` (which the tracker only emits once it *observes*
+/// the `HookOn` transition) would never make it into the batch and would be
+/// lost. Unlike `queued_events_survive_restart_via_spool`, this test omits
+/// the pre-shutdown sleep so it exercises the still-queued path.
+#[tokio::test]
+async fn immediate_shutdown_after_hangup_spills_call_ended() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.debug.allow_controls = true;
+    config.observability.enabled = true;
+    config.observability.booth_id = "booth-test".to_string();
+    // A long flush interval guarantees the periodic flush never fires during
+    // the test window, so delivery depends solely on the shutdown drain.
+    config.observability.operator_forward.flush_interval_ms = 60_000;
+    config.audio.recordings_dir = recordings_dir.clone();
+
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    // Total outage so the shutdown flush cannot succeed and the batch must be
+    // spilled to disk instead — that on-disk spool is what we assert on.
+    handles.operator.state().lock().await.fail_events = Some(booth_hal::OperatorError::Transport(
+        "simulated outage".into(),
+    ));
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    // Pickup → hangup produces CallStarted + CallEnded, then shut down
+    // immediately with no intervening sleep.
+    inject(&runtime.commands, Event::HookOff).await?;
+    inject(&runtime.commands, Event::HookOn).await?;
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    let _ = runtime.join.await?;
+
+    // The shutdown drain must have converted the queued HookOn transition into
+    // a synthesized CallEnded and spilled it to disk.
+    let spool_dir = std::path::Path::new(&recordings_dir).join("event-spool");
+    let spooled = spool_json_files(&spool_dir)?;
+    assert!(
+        !spooled.is_empty(),
+        "expected spooled event files after immediate shutdown; found none in {}",
+        spool_dir.display()
+    );
+    let mut found_call_ended = false;
+    for path in &spooled {
+        if std::fs::read_to_string(path)?.contains("call_ended") {
+            found_call_ended = true;
+            break;
+        }
+    }
+    assert!(
+        found_call_ended,
+        "expected the spilled spool to contain call_ended; files: {spooled:?}"
+    );
+    Ok(())
+}
+
 /// Collect the `*.json` spool files in `dir` (ignoring in-progress `.tmp-*`
 /// files), returning an empty list if the directory does not exist yet.
 fn spool_json_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>, Box<dyn Error>> {
