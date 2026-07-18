@@ -1435,7 +1435,7 @@ async fn upload_recording(
         })
         .await?;
         retry_operator("PUT <presigned-upload-url>", bus, || {
-            operator.put_upload(&slot, path)
+            operator.put_upload(&slot, path, &recording_id)
         })
         .await?;
         retry_operator("POST /v1/messages/{id}/complete", bus, || {
@@ -2232,6 +2232,7 @@ mod tests {
             &self,
             _slot: &UploadSlot,
             _local_path: &str,
+            _sha256_hex: &str,
         ) -> Result<(), OperatorError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             Ok(())

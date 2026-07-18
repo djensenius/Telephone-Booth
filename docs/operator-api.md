@@ -54,7 +54,7 @@ debug panel will show "Operator: unauthenticated".
 | `GET  /v1/questions/random`          | After dialing **1**, fetch a random approved question to play                    |
 | `GET  /v1/messages/random`           | After dialing **2**, fetch a random approved message to play                     |
 | `POST /v1/messages`                  | Create a message row and request a presigned Azure Blob upload URL              |
-| `PUT  <SAS URL>`                     | Upload the FLAC directly to Azure Blob Storage (requires `x-ms-blob-type: BlockBlob`) |
+| `PUT  <SAS URL>`                     | Upload the FLAC directly to Azure Blob Storage (requires `x-ms-blob-type: BlockBlob` and `x-ms-meta-sha256: <hex>`) |
 | `POST /v1/messages/{id}/complete`    | Ask the API to verify the uploaded blob and mark the message received           |
 | `WS   /v1/ws/status`                 | _(reverse direction)_ Operator UI subscribes to status; the booth pushes events  |
 
@@ -68,8 +68,8 @@ backend fan-outs to connected browsers.
 | ------ | ------------------------------------------------------------------ |
 | `401`  | API token wrong or revoked. Reissue from the operator UI.          |
 | `403`  | Token valid but lacks scope (shouldn't happen with current schema).|
-| `409`  | Message `sha256` already exists or the completion blob is missing.  |
+| `409`  | Message `sha256` already exists or the completion blob is missing. On reboot, a recording whose message row was created but whose blob never uploaded needs the operator's idempotent re-initiation (returns a fresh SAS for `uploading` messages) to recover. |
 | `413`  | Uploaded audio exceeds the 25 MiB operator cap.                     |
 | `422`  | Blob verification failed, usually missing/mismatched SHA metadata.  |
-| `400`/`422` | Azure `PUT <SAS URL>` upload omitted `x-ms-blob-type: BlockBlob` (`MissingRequiredHeader`). The phone client sends it; a bare `curl` won't. |
+| `400`/`422` | Azure `PUT <SAS URL>` upload omitted `x-ms-blob-type: BlockBlob` (`MissingRequiredHeader`) or `x-ms-meta-sha256` (`/complete` returns `sha256_metadata_missing`). The phone client sends both; a bare `curl` won't. |
 | `5xx`  | Operator backend down. The client retries with exponential backoff. |

@@ -422,7 +422,9 @@ async fn upload_recording_rejects_http_localhost_url() -> TestResult {
         upload_url: format!("{}/blob", server.uri()),
         blob_name: "recordings/33333333-3333-3333-3333-333333333333.flac".to_string(),
     };
-    let result = client.upload_recording(&slot, &recording).await;
+    let result = client
+        .upload_recording(&slot, &recording, &"a".repeat(64))
+        .await;
     let _ = std::fs::remove_file(&recording);
 
     // URL is http:// on localhost — rejected by validation before any network I/O
@@ -434,11 +436,15 @@ async fn upload_recording_rejects_http_localhost_url() -> TestResult {
 async fn put_recording_sends_azure_blob_type_header() -> TestResult {
     // Azure Blob Storage rejects a PUT Blob without `x-ms-blob-type`; require
     // it on the mock so a regression that drops the header fails the upload.
+    // The operator's `/complete` check also needs the sha256 stored as blob
+    // metadata, so require `x-ms-meta-sha256` too.
     let server = MockServer::start().await;
+    let sha = "b".repeat(64);
     Mock::given(method("PUT"))
         .and(path("/blob"))
         .and(header("content-type", "audio/flac"))
         .and(header("x-ms-blob-type", "BlockBlob"))
+        .and(header("x-ms-meta-sha256", sha.as_str()))
         .respond_with(ResponseTemplate::new(201))
         .expect(1)
         .mount(&server)
@@ -455,7 +461,7 @@ async fn put_recording_sends_azure_blob_type_header() -> TestResult {
         upload_url: format!("{}/blob", server.uri()),
         blob_name: "recordings/44444444-4444-4444-4444-444444444444.flac".to_string(),
     };
-    let result = client.put_recording(&slot, &recording).await;
+    let result = client.put_recording(&slot, &recording, &sha).await;
     let _ = std::fs::remove_file(&recording);
 
     assert!(result.is_ok(), "upload should succeed: {result:?}");
@@ -486,7 +492,9 @@ async fn put_recording_retries_5xx_then_gives_up() -> TestResult {
         blob_name: "recordings/33333333-3333-3333-3333-333333333333.flac".to_string(),
     };
     // Call put_recording directly to bypass URL validation (mock is HTTP on localhost)
-    let result = client.put_recording(&slot, &recording).await;
+    let result = client
+        .put_recording(&slot, &recording, &"c".repeat(64))
+        .await;
     let _ = std::fs::remove_file(&recording);
 
     assert!(matches!(result, Err(UploadError::Http { status: 503, .. })));
@@ -630,7 +638,9 @@ async fn upload_rejects_file_exceeding_max_upload_bytes() -> TestResult {
         upload_url: "https://storage.example.com/blob".to_string(),
         blob_name: "recordings/44444444-4444-4444-4444-444444444444.flac".to_string(),
     };
-    let result = client.upload_recording(&slot, &recording).await;
+    let result = client
+        .upload_recording(&slot, &recording, &"d".repeat(64))
+        .await;
     let _ = std::fs::remove_file(&recording);
 
     let err_msg = match result {
