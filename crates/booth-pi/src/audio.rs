@@ -1197,6 +1197,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels,
             max_recording_secs: 60,
+            min_recording_secs: 2,
             max_audio_download_bytes: 32 * 1024 * 1024,
             recordings_dir: dir.to_string_lossy().into_owned(),
             mixer: None,

@@ -254,7 +254,7 @@ impl AudioSource for MockAudioSource {
     }
 
     async fn duration_of(&self, _id: &RecordingId) -> Option<u64> {
-        Some(1_000)
+        Some(5_000)
     }
 }
 

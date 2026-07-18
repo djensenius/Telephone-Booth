@@ -52,8 +52,9 @@ flowchart LR
 ## State machine
 
 States: `Idle`, `DialTone`, `Dialing { pulses }`, `PlayingQuestion`, `Beep`,
-`Recording`, `Uploading { recording_id }`, `PlayingMessage`,
-`PlayingInstructions`, `Error { reason }`.
+`Recording`, `FinishingRecording { question_id, on_hook }`,
+`Uploading { recording_id, on_hook }`,
+`PlayingMessage`, `PlayingInstructions`, `Error { reason }`.
 
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
 `DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `UploadComplete`,
@@ -69,6 +70,16 @@ after `PULSE_GROUP_TIMEOUT_MS = 350` ms.
 
 Digit 1 fetches a random question; digit 2 fetches a random message;
 digits 3..=9 and 0 play the operator-recorded `Instructions` audio.
+
+Hanging up while `Recording` moves to `FinishingRecording` (not straight to
+`Idle`) so the finalized answer is still uploaded — the natural "talk, then
+hang up" gesture. If the caller lifts the handset again before finalization
+completes, the pending recording is still uploaded (never dropped); only the
+post-upload routing changes. `on_hook` (carried from `FinishingRecording` into
+`Uploading`) records whether the caller is still on-hook, so a completed upload
+returns to `Idle` silently instead of playing a dial tone to an empty booth.
+Recordings shorter than `audio.min_recording_secs` are discarded rather than
+uploaded.
 
 See [`debug-panel.md`](debug-panel.md) for the live telemetry stream the
 state machine drives.

@@ -13,6 +13,10 @@ device_substring = "Focusrite"
 sample_rate_hz = 48000
 channels = 1
 max_recording_secs = 60
+# Recordings shorter than this are discarded instead of uploaded, so an
+# accidental pick-up-and-hang-up doesn't send an empty clip to the operator.
+# Set to 0 to upload every recording. Must be less than max_recording_secs.
+min_recording_secs = 2
 recordings_dir = "/var/lib/phone-booth/recordings"
 
 # Optional: have the booth set ALSA mixer levels once at startup (Linux
