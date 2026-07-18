@@ -1121,16 +1121,8 @@ async fn effect_task(
                 recording_id,
                 question_id,
             } => {
-                let session_id = session_handle.current();
-                if let Some(sid) = session_id.clone() {
-                    bus.publish(TelemetryEvent::UploadStarted {
-                        recording_id: recording_id.clone(),
-                        session_id: sid,
-                        at_monotonic_ns: monotonic_ns(),
-                    });
-                }
-                // Resolve path and enqueue in spool synchronously so it's
-                // durable before we hand off to the background task.
+                // Resolve path/size/duration first so the discard gate below
+                // runs *before* we announce an upload on the telemetry bus.
                 let (path, bytes, recording_duration_ms) = {
                     let src = audio_source.lock().await;
                     let p = match src.path_of(&recording_id).await {
@@ -1148,8 +1140,10 @@ async fn effect_task(
                 };
                 // Drop recordings shorter than the configured minimum (e.g. an
                 // accidental pick-up-and-hang-up) instead of uploading them.
-                // Treat it as a completed no-op so the core returns to Idle,
-                // and delete the throwaway FLAC + its metadata.
+                // Gate before publishing `UploadStarted` so the session never
+                // shows a phantom upload that never completes; treat it as a
+                // completed no-op so the core returns to Idle, and delete the
+                // throwaway FLAC + its metadata.
                 if let Some(ms) = recording_duration_ms
                     && ms < min_recording_ms
                 {
@@ -1171,6 +1165,16 @@ async fn effect_task(
                     let _ = event_tx.send(Event::UploadComplete).await;
                     continue;
                 }
+                let session_id = session_handle.current();
+                if let Some(sid) = session_id.clone() {
+                    bus.publish(TelemetryEvent::UploadStarted {
+                        recording_id: recording_id.clone(),
+                        session_id: sid,
+                        at_monotonic_ns: monotonic_ns(),
+                    });
+                }
+                // Enqueue in spool synchronously so it's durable before we
+                // hand off to the background task.
                 let spool_entry = pending_uploads::SpoolEntry {
                     recording_id: recording_id.clone(),
                     question_id: Some(question_id.clone()),
