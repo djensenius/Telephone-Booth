@@ -36,13 +36,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, warn};
 
 use crate::event_spool::EventSpool;
 use uuid::Uuid;
+
+/// Upper bound on the best-effort final flush performed during graceful
+/// shutdown. Keeps a hung network call from blocking teardown; anything not
+/// acknowledged within this window is spilled to disk for replay instead.
+const SHUTDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Top-level observability config block in `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,9 +288,12 @@ impl SessionTracker {
 
 /// Spawn the event forwarder task.
 ///
-/// Returns the join handle; the caller is expected to `abort()` it on
-/// shutdown so the buffered events are not flushed during cleanup (we
-/// would otherwise race against the connection going away).
+/// Returns the join handle. On graceful shutdown the caller should send
+/// `true` on the `shutdown` watch channel and await the handle (with a
+/// timeout) so the task gets a chance to make a best-effort final flush and
+/// durably spill any still-buffered events to disk before exiting. Buffered
+/// events that are never spilled would otherwise be lost across a restart —
+/// including a `CallEnded` that closes a call session.
 ///
 /// When an [`super::event_spool::EventSpool`] is provided, failed batches are persisted to disk
 /// and replayed on startup so events survive restarts and extended outages.
@@ -297,6 +305,7 @@ pub fn spawn_event_forwarder(
     config: ObservabilityConfig,
     session_handle: SessionHandle,
     event_spool: Option<Arc<EventSpool>>,
+    mut shutdown: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     // Subscribe synchronously so we don't miss any events that fire
     // between spawn and the task's first poll.
@@ -340,46 +349,40 @@ pub fn spawn_event_forwarder(
             tokio::select! {
                 () = flush_tick(&mut flush) => {
                     if !batch.is_empty() {
-                        let ok = flush_once(&operator, &mut batch, &identity).await;
-                        if ok && was_failing {
-                            debug!("operator reconnected; event forwarder recovered");
-                            was_failing = false;
-                        } else if !ok {
-                            was_failing = true;
-                            maybe_spill(event_spool.as_ref(), &mut batch, &config);
+                        // Race the flush against the shutdown signal so a
+                        // hung operator call (the real client has a 10 s HTTP
+                        // timeout) cannot pin the loop and delay the bounded
+                        // final flush + spill below. `flush_once` is
+                        // cancellation-safe: if shutdown wins, the batch is
+                        // left intact for the shutdown drain to persist.
+                        tokio::select! {
+                            ok = flush_once(&operator, &mut batch, &identity) => {
+                                after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config);
+                            }
+                            () = shutdown_requested(&mut shutdown) => break,
                         }
                     }
                 }
                 received = rx.recv() => {
                     match received {
                         Ok(record) => {
-                            // Process the original event through the tracker
-                            // first so synthesized CallStarted/CallEnded events
-                            // are stamped with the same monotonic time as the
-                            // event that produced them.
-                            let monotonic_ns = monotonic_ns_of(&record);
-                            let synthetic = tracker.observe(&record.event, monotonic_ns);
-                            session_handle.set(tracker.current_session_id().map(str::to_string));
-
-                            if let Some(wire) = wire_for(&record, &identity, &mut next_seq) {
-                                push_with_cap(&mut batch, wire, config.operator_forward.buffer_max, &mut dropped);
-                            }
-                            for synth in synthetic {
-                                let wire = wire_for_synthetic(&synth, &identity, &mut next_seq);
-                                push_with_cap(&mut batch, wire, config.operator_forward.buffer_max, &mut dropped);
-                                // Also publish back to the bus so other
-                                // subscribers (booth-debug WS, system_pusher
-                                // filters, etc.) see the synthesized events.
-                                bus.publish(synth);
-                            }
+                            ingest_record(
+                                &record,
+                                &mut tracker,
+                                &session_handle,
+                                &identity,
+                                &mut next_seq,
+                                &mut batch,
+                                &mut dropped,
+                                &bus,
+                                config.operator_forward.buffer_max,
+                            );
                             if batch.len() >= config.operator_forward.batch_max {
-                                let ok = flush_once(&operator, &mut batch, &identity).await;
-                                if ok && was_failing {
-                                    debug!("operator reconnected; event forwarder recovered");
-                                    was_failing = false;
-                                } else if !ok {
-                                    was_failing = true;
-                                    maybe_spill(event_spool.as_ref(), &mut batch, &config);
+                                tokio::select! {
+                                    ok = flush_once(&operator, &mut batch, &identity) => {
+                                        after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config);
+                                    }
+                                    () = shutdown_requested(&mut shutdown) => break,
                                 }
                             }
                             if dropped > 0 {
@@ -393,6 +396,57 @@ pub fn spawn_event_forwarder(
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
+                () = shutdown_requested(&mut shutdown) => {
+                    // The value became `true` or the sender was dropped;
+                    // either way we stop the loop and run the shutdown drain +
+                    // final best-effort flush + spill below.
+                    break;
+                }
+            }
+        }
+
+        // Graceful shutdown. Records may still be sitting in the broadcast
+        // queue that were published by `handle_event` before the shutdown
+        // signal but never pulled into `batch` (e.g. the `HookOn`
+        // StateTransition that synthesizes `CallEnded`). Drain them now so the
+        // final flush + spill can see them — otherwise an immediate shutdown
+        // after `HookOn` would still lose the `CallEnded`.
+        loop {
+            match rx.try_recv() {
+                Ok(record) => ingest_record(
+                    &record,
+                    &mut tracker,
+                    &session_handle,
+                    &identity,
+                    &mut next_seq,
+                    &mut batch,
+                    &mut dropped,
+                    &bus,
+                    config.operator_forward.buffer_max,
+                ),
+                Err(broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => break,
+            }
+        }
+
+        // Make a bounded best-effort flush of whatever is still buffered, then
+        // durably spill anything that wasn't acknowledged so the next startup
+        // replays it. Without this, a normal shutdown (SIGTERM, power-cycle
+        // window, restart) would drop in-memory events — including the
+        // `CallEnded` that ends a call session.
+        if !batch.is_empty() {
+            let flushed = matches!(
+                tokio::time::timeout(
+                    SHUTDOWN_FLUSH_TIMEOUT,
+                    flush_once(&operator, &mut batch, &identity),
+                )
+                .await,
+                Ok(true)
+            );
+            if !flushed {
+                spill_remaining(event_spool.as_ref(), &mut batch);
             }
         }
     })
@@ -507,6 +561,72 @@ async fn flush_tick(interval: &mut tokio::time::Interval) {
     interval.tick().await;
 }
 
+/// Resolve as soon as the shutdown watch is (or becomes) `true`, or the
+/// sender is dropped. Used to race in-loop operator calls against shutdown so
+/// a hung request can't delay the bounded final flush + spill.
+async fn shutdown_requested(shutdown: &mut watch::Receiver<bool>) {
+    loop {
+        if *shutdown.borrow_and_update() {
+            return;
+        }
+        if shutdown.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Ingest one telemetry record into the batch: run it through the session
+/// tracker (which may synthesize `CallStarted` / `CallEnded`), stamp wire
+/// envelopes, and publish any synthesized events back onto the bus.
+#[allow(clippy::too_many_arguments)]
+fn ingest_record(
+    record: &TelemetryRecord,
+    tracker: &mut SessionTracker,
+    session_handle: &SessionHandle,
+    identity: &RuntimeIdentity,
+    next_seq: &mut u64,
+    batch: &mut VecDeque<Value>,
+    dropped: &mut u64,
+    bus: &TelemetryBus,
+    buffer_max: usize,
+) {
+    // Process the original event through the tracker first so synthesized
+    // CallStarted/CallEnded events are stamped with the same monotonic time
+    // as the event that produced them.
+    let monotonic_ns = monotonic_ns_of(record);
+    let synthetic = tracker.observe(&record.event, monotonic_ns);
+    session_handle.set(tracker.current_session_id().map(str::to_string));
+
+    if let Some(wire) = wire_for(record, identity, next_seq) {
+        push_with_cap(batch, wire, buffer_max, dropped);
+    }
+    for synth in synthetic {
+        let wire = wire_for_synthetic(&synth, identity, next_seq);
+        push_with_cap(batch, wire, buffer_max, dropped);
+        // Also publish back to the bus so other subscribers (booth-debug WS,
+        // system_pusher filters, etc.) see the synthesized events.
+        bus.publish(synth);
+    }
+}
+
+/// Update the `was_failing` recovery flag after a flush attempt, spilling the
+/// batch when the operator is unreachable so it survives buffer pressure.
+fn after_flush(
+    ok: bool,
+    was_failing: &mut bool,
+    spool: Option<&Arc<EventSpool>>,
+    batch: &mut VecDeque<Value>,
+    config: &ObservabilityConfig,
+) {
+    if ok && *was_failing {
+        debug!("operator reconnected; event forwarder recovered");
+        *was_failing = false;
+    } else if !ok {
+        *was_failing = true;
+        maybe_spill(spool, batch, config);
+    }
+}
+
 /// Attempt to flush the event batch to the operator.
 ///
 /// Returns `true` on success (batch cleared), `false` on failure (batch
@@ -582,6 +702,34 @@ fn maybe_spill(
         }
     } else {
         debug!(count = items.len(), "spilled event batch to disk");
+    }
+}
+
+/// Unconditionally spill every buffered event to disk (used on shutdown).
+///
+/// Unlike [`maybe_spill`], this does not wait for the buffer to fill up: at
+/// shutdown even a single un-acknowledged event (e.g. a `CallEnded`) must be
+/// persisted so the next startup replays it.
+fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<Value>) {
+    if batch.is_empty() {
+        return;
+    }
+    let Some(spool) = spool else {
+        warn!(
+            count = batch.len(),
+            "no event spool configured; dropping buffered events on shutdown"
+        );
+        batch.clear();
+        return;
+    };
+    let items: Vec<Value> = batch.drain(..).collect();
+    if let Err(err) = spool.spill(&items) {
+        warn!(%err, count = items.len(), "failed to spill buffered events on shutdown");
+    } else {
+        debug!(
+            count = items.len(),
+            "spilled buffered events to disk on shutdown"
+        );
     }
 }
 

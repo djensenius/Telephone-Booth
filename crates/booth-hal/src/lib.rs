@@ -307,7 +307,7 @@ pub enum BoothStatus {
 }
 
 /// Errors talking to the operator backend.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum OperatorError {
     /// Network / transport failure.
     #[error("operator transport error: {0}")]

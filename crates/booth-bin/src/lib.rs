@@ -512,6 +512,11 @@ async fn run_runtime(
     // this is gated on `observability.enabled` so dev runs that don't
     // care about metrics can opt out.
     let mut observability_tasks: Vec<JoinHandle<()>> = Vec::new();
+    // Cooperative shutdown signal for the event forwarder so it can make a
+    // best-effort final flush and durably spill buffered telemetry before we
+    // tear the runtime down (rather than aborting mid-batch and losing it).
+    let (obs_shutdown_tx, obs_shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut event_forwarder: Option<JoinHandle<()>> = None;
     let mut metrics_handle: Option<booth_metrics::MetricsHandle> = None;
     if config.observability.enabled {
         match booth_metrics::install_registry(config.observability.booth_id.clone()) {
@@ -536,13 +541,14 @@ async fn run_runtime(
                     identity.start,
                 ));
                 if config.observability.operator_forward.enabled {
-                    observability_tasks.push(observability::spawn_event_forwarder(
+                    event_forwarder = Some(observability::spawn_event_forwarder(
                         bus.clone(),
                         Arc::clone(&operator),
                         identity.clone(),
                         config.observability.clone(),
                         session_handle.clone(),
                         event_spool.clone(),
+                        obs_shutdown_rx.clone(),
                     ));
                     observability_tasks.push(observability::spawn_system_pusher(
                         bus.clone(),
@@ -709,6 +715,16 @@ async fn run_runtime(
     gpio_task.abort();
     audio_task.abort();
     effect_task.abort();
+    // Give the event forwarder a chance to flush + durably spill buffered
+    // telemetry (e.g. a pending CallEnded) before we abort the rest.
+    let _ = obs_shutdown_tx.send(true);
+    if let Some(handle) = event_forwarder
+        && tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .is_err()
+    {
+        warn!("event forwarder did not finish flushing within timeout");
+    }
     for task in observability_tasks {
         task.abort();
     }
