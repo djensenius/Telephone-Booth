@@ -219,6 +219,15 @@ pub struct AudioConfig {
         alias = "max_recording_seconds"
     )]
     pub max_recording_secs: u32,
+    /// Minimum recording duration, in seconds, for an answer to be uploaded.
+    /// Recordings shorter than this (e.g. an accidental pick-up-and-hang-up)
+    /// are discarded instead of being sent to the operator. `0` uploads every
+    /// recording.
+    #[serde(
+        default = "default_min_recording_secs",
+        alias = "min_recording_seconds"
+    )]
+    pub min_recording_secs: u32,
     /// Maximum bytes to download/read for audio playback. Files exceeding this
     /// limit are rejected before decode to prevent OOM. Default: 32 MiB.
     #[serde(default = "default_max_audio_download_bytes")]
@@ -297,6 +306,9 @@ fn default_channels() -> u16 {
 fn default_max_recording_secs() -> u32 {
     60
 }
+fn default_min_recording_secs() -> u32 {
+    2
+}
 fn default_max_audio_download_bytes() -> u64 {
     32 * 1024 * 1024 // 32 MiB
 }
@@ -311,6 +323,7 @@ impl Default for AudioConfig {
             sample_rate_hz: default_sample_rate(),
             channels: default_channels(),
             max_recording_secs: default_max_recording_secs(),
+            min_recording_secs: default_min_recording_secs(),
             max_audio_download_bytes: default_max_audio_download_bytes(),
             recordings_dir: default_recordings_dir(),
             mixer: None,

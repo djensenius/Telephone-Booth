@@ -593,6 +593,7 @@ async fn run_runtime(
         recordings_dir.clone(),
         session_handle.clone(),
         Arc::clone(&upload_spool),
+        u64::from(config.audio.min_recording_secs).saturating_mul(1000),
     ));
 
     let debug_handles = if options.start_debug {
@@ -1005,6 +1006,7 @@ async fn effect_task(
     recordings_dir: PathBuf,
     session_handle: SessionHandle,
     upload_spool: Arc<pending_uploads::PendingUploadSpool>,
+    min_recording_ms: u64,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
@@ -1144,6 +1146,31 @@ async fn effect_task(
                     let dur = src.duration_of(&recording_id).await;
                     (p, b, dur)
                 };
+                // Drop recordings shorter than the configured minimum (e.g. an
+                // accidental pick-up-and-hang-up) instead of uploading them.
+                // Treat it as a completed no-op so the core returns to Idle,
+                // and delete the throwaway FLAC + its metadata.
+                if let Some(ms) = recording_duration_ms
+                    && ms < min_recording_ms
+                {
+                    info!(
+                        %recording_id,
+                        duration_ms = ms,
+                        min_recording_ms,
+                        "recording shorter than minimum; discarding without upload"
+                    );
+                    {
+                        let src = audio_source.lock().await;
+                        if let Err(err) = src.cleanup_recording(&recording_id).await {
+                            warn!(%recording_id, %err, "failed to clean up discarded recording metadata");
+                        }
+                    }
+                    if let Err(err) = tokio::fs::remove_file(&path).await {
+                        debug!(%recording_id, path = %path, %err, "could not remove discarded recording file");
+                    }
+                    let _ = event_tx.send(Event::UploadComplete).await;
+                    continue;
+                }
                 let spool_entry = pending_uploads::SpoolEntry {
                     recording_id: recording_id.clone(),
                     question_id: Some(question_id.clone()),
@@ -1575,6 +1602,13 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
             "audio.max_recording_secs ({}) exceeds maximum allowed ({})",
             config.audio.max_recording_secs,
             MAX_RECORDING_SECS_CEILING
+        );
+    }
+    if config.audio.min_recording_secs >= config.audio.max_recording_secs {
+        bail!(
+            "audio.min_recording_secs ({}) must be less than audio.max_recording_secs ({})",
+            config.audio.min_recording_secs,
+            config.audio.max_recording_secs
         );
     }
 

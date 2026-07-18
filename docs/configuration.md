@@ -31,6 +31,7 @@ device_substring   = "Focusrite"
 sample_rate_hz     = 48000
 channels           = 1
 max_recording_secs = 60
+min_recording_secs = 2
 recordings_dir     = "/var/lib/phone-booth/recordings"
 beep_volume        = 0.8
 dialtone_volume    = 0.6

@@ -249,3 +249,112 @@ async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>
     let _ = runtime.join.await?;
     Ok(())
 }
+
+/// A recording shorter than `audio.min_recording_secs` must be discarded, not
+/// uploaded: no upload slot is issued and the booth returns to a dial tone.
+#[tokio::test]
+async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Error>> {
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.debug.allow_controls = true;
+    // Mock recordings report 5s; require 10s so this one is "too short".
+    config.audio.min_recording_secs = 10;
+    // Isolate the upload spool so a sibling test's queued upload can't be
+    // recovered onto this test's operator at startup.
+    let rec_dir = std::env::temp_dir().join(format!(
+        "booth-discard-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&rec_dir)?;
+    config.audio.recordings_dir = rec_dir.to_string_lossy().into_owned();
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+
+    {
+        let state = handles.operator.state();
+        let mut s = state.lock().await;
+        s.questions.push_back(booth_hal::OperatorQuestion {
+            id: "q-1".to_string(),
+            audio_url: "https://mock.invalid/q1.flac".to_string(),
+            audio_sha256: None,
+            description: None,
+        });
+    }
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    // Drive to Recording: dial 1 → question → beep → record.
+    inject(&runtime.commands, Event::HookOff).await?;
+    inject(&runtime.commands, Event::RotaryPulse).await?;
+    inject(&runtime.commands, Event::Tick).await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if matches!(
+            snapshot(&runtime.commands).await?,
+            State::PlayingQuestion { .. }
+        ) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("never reached PlayingQuestion".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        if matches!(snapshot(&runtime.commands).await?, State::Recording { .. }) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("never reached Recording".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Finish the (too-short) recording. The gate should discard it and the
+    // booth should return to a dial tone without issuing an upload slot.
+    inject(
+        &runtime.commands,
+        Event::RecordingFinished {
+            recording_id: "rec-short".to_string(),
+        },
+    )
+    .await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        if matches!(snapshot(&runtime.commands).await?, State::DialTone) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("booth did not return to DialTone after discarding".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        handles.operator.state().lock().await.uploads.is_empty(),
+        "a short recording must not issue an upload slot"
+    );
+
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    let _ = runtime.join.await?;
+    let _ = std::fs::remove_dir_all(&rec_dir);
+    Ok(())
+}

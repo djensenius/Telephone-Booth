@@ -73,12 +73,24 @@ pub enum State {
         /// The question being answered.
         question_id: QuestionId,
     },
+    /// The caller hung up mid-recording. The recording is being finalized and
+    /// we are waiting for its id (via [`Event::RecordingFinished`]) so the
+    /// answer can still be uploaded instead of being dropped.
+    FinishingRecording {
+        /// The question being answered.
+        question_id: QuestionId,
+    },
     /// Uploading a finished recording to the operator.
     Uploading {
         /// Recording id from the audio adapter.
         recording_id: RecordingId,
         /// Question id this recording answers.
         question_id: QuestionId,
+        /// Whether the caller has already hung up (`true`, upload started from
+        /// [`State::FinishingRecording`]) or is still off-hook (`false`,
+        /// recording hit the duration cap). Decides whether completion returns
+        /// to `Idle` (silent) or `DialTone`.
+        on_hook: bool,
     },
     /// Playing a randomly chosen, previously-approved message (dial 2).
     PlayingMessage,
@@ -101,7 +113,7 @@ impl State {
             State::DialTone | State::Dialing { .. } => BoothStatus::DialTone,
             State::PlayingQuestion { .. } | State::Beep { .. } => BoothStatus::PlayingQuestion,
             State::Recording { .. } => BoothStatus::Recording,
-            State::Uploading { .. } => BoothStatus::Uploading,
+            State::FinishingRecording { .. } | State::Uploading { .. } => BoothStatus::Uploading,
             State::PlayingMessage => BoothStatus::PlayingMessage,
             State::PlayingInstructions => BoothStatus::PlayingInstructions,
             State::Error { .. } => BoothStatus::Idle,
@@ -118,6 +130,7 @@ impl State {
             State::PlayingQuestion { .. } => "playing_question",
             State::Beep { .. } => "beep",
             State::Recording { .. } => "recording",
+            State::FinishingRecording { .. } => "finishing_recording",
             State::Uploading { .. } => "uploading",
             State::PlayingMessage => "playing_message",
             State::PlayingInstructions => "playing_instructions",
@@ -252,15 +265,34 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
     // Hanging up always returns us to Idle (with cleanup), regardless of the
     // current state. Tested as an invariant in `tests/transitions.rs`.
     if matches!(event, E::HookOn) {
-        let mut effects = vec![
-            Effect::StopAudio,
-            Effect::CancelPulseTimeout,
-            Effect::PutStatus(BoothStatus::Idle),
-        ];
-        if matches!(state, S::Recording { .. }) {
-            effects.insert(0, Effect::StopRecording);
+        // Hanging up while recording means "I'm done — send it". Finalize the
+        // recording and move to `FinishingRecording` so the background upload
+        // still fires once the recording id is known, instead of dropping the
+        // caller's answer on the floor.
+        if let S::Recording { question_id } = state {
+            return (
+                S::FinishingRecording { question_id },
+                vec![
+                    Effect::StopRecording,
+                    Effect::CancelPulseTimeout,
+                    Effect::PutStatus(BoothStatus::Uploading),
+                ],
+            );
         }
-        return (S::Idle, effects);
+        // While finalizing a hung-up recording the caller is already on-hook;
+        // ignore a bouncing/duplicate `HookOn` so we don't reset to `Idle`
+        // before `RecordingFinished` arrives (which would drop the upload).
+        if matches!(state, S::FinishingRecording { .. }) {
+            return (state, vec![]);
+        }
+        return (
+            S::Idle,
+            vec![
+                Effect::StopAudio,
+                Effect::CancelPulseTimeout,
+                Effect::PutStatus(BoothStatus::Idle),
+            ],
+        );
     }
 
     match (state, event) {
@@ -328,6 +360,7 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
             S::Uploading {
                 recording_id: recording_id.clone(),
                 question_id: question_id.clone(),
+                on_hook: false,
             },
             vec![
                 Effect::UploadRecording {
@@ -337,14 +370,47 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::PutStatus(BoothStatus::Uploading),
             ],
         ),
-        (S::Uploading { .. }, E::UploadComplete) => (
+        // The caller hung up mid-recording; now that the recording is finalized
+        // we can upload it. `on_hook: true` so completion resets to `Idle`
+        // silently rather than playing a dial tone to an empty booth.
+        (S::FinishingRecording { question_id }, E::RecordingFinished { recording_id }) => (
+            S::Uploading {
+                recording_id: recording_id.clone(),
+                question_id: question_id.clone(),
+                on_hook: true,
+            },
+            vec![
+                Effect::UploadRecording {
+                    recording_id,
+                    question_id,
+                },
+                Effect::PutStatus(BoothStatus::Uploading),
+            ],
+        ),
+        // Recovery: if the caller lifts the handset again while we are still
+        // finalizing (e.g. the recording never produced an id), give them a
+        // fresh dial tone instead of stranding the booth.
+        (S::FinishingRecording { .. }, E::HookOff) => (
             S::DialTone,
             vec![
                 Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
                 Effect::PutStatus(BoothStatus::DialTone),
             ],
         ),
-        (S::Uploading { .. }, E::UploadFailed { reason }) => (
+        // Off-hook upload finished: caller is still holding the handset, so
+        // return them to a dial tone.
+        (S::Uploading { on_hook: false, .. }, E::UploadComplete) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
+        ),
+        // Hung-up upload finished: nobody is listening, so reset silently.
+        (S::Uploading { on_hook: true, .. }, E::UploadComplete) => {
+            (S::Idle, vec![Effect::PutStatus(BoothStatus::Idle)])
+        }
+        (S::Uploading { on_hook: false, .. }, E::UploadFailed { reason }) => (
             S::Error {
                 reason: reason.clone(),
             },
@@ -353,6 +419,17 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::Log {
                     message: alloc::format!("upload failed: {reason}"),
                 },
+            ],
+        ),
+        // The caller already hung up, so don't play a busy tone to an empty
+        // booth — just log and reset to `Idle`.
+        (S::Uploading { on_hook: true, .. }, E::UploadFailed { reason }) => (
+            S::Idle,
+            vec![
+                Effect::Log {
+                    message: alloc::format!("upload failed after hangup: {reason}"),
+                },
+                Effect::PutStatus(BoothStatus::Idle),
             ],
         ),
 
@@ -485,13 +562,113 @@ mod tests {
             State::DialTone,
             State::Dialing { pulses: 3 },
             State::PlayingMessage,
-            State::Recording {
-                question_id: "q1".into(),
-            },
         ] {
             let (next, _) = handle(state, Event::HookOn);
             assert_eq!(next, State::Idle);
         }
+    }
+
+    #[test]
+    fn hangup_while_recording_finalizes_then_uploads() {
+        // Hanging up mid-recording must NOT drop the answer: it finalizes the
+        // recording and moves to FinishingRecording (still "uploading" status).
+        let (next, effects) = handle(
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            Event::HookOn,
+        );
+        assert_eq!(
+            next,
+            State::FinishingRecording {
+                question_id: "q1".into()
+            }
+        );
+        assert!(effects.contains(&Effect::StopRecording));
+
+        // When the finalized recording id arrives, we upload it and mark the
+        // upload as on-hook so completion resets silently.
+        let (next, effects) = handle(
+            next,
+            Event::RecordingFinished {
+                recording_id: "rec-1".into(),
+            },
+        );
+        assert_eq!(
+            next,
+            State::Uploading {
+                recording_id: "rec-1".into(),
+                question_id: "q1".into(),
+                on_hook: true,
+            }
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::UploadRecording { recording_id, .. } if recording_id == "rec-1"
+        )));
+
+        // A successful upload after a hangup returns to Idle without a tone.
+        let (next, effects) = handle(next, Event::UploadComplete);
+        assert_eq!(next, State::Idle);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Play(_))));
+    }
+
+    #[test]
+    fn duplicate_hangup_while_finishing_does_not_drop_upload() {
+        // A bouncing/duplicate HookOn while finalizing must be ignored so the
+        // pending RecordingFinished still lands in FinishingRecording.
+        let state = State::FinishingRecording {
+            question_id: "q1".into(),
+        };
+        let (next, effects) = handle(state.clone(), Event::HookOn);
+        assert_eq!(next, state);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn offhook_recording_upload_returns_to_dialtone() {
+        // Recording that ends while still off-hook (duration cap) uploads with
+        // on_hook: false and resumes at a dial tone on completion.
+        let (next, _) = handle(
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            Event::RecordingFinished {
+                recording_id: "rec-2".into(),
+            },
+        );
+        assert_eq!(
+            next,
+            State::Uploading {
+                recording_id: "rec-2".into(),
+                question_id: "q1".into(),
+                on_hook: false,
+            }
+        );
+        let (next, effects) = handle(next, Event::UploadComplete);
+        assert_eq!(next, State::DialTone);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
+        );
+    }
+
+    #[test]
+    fn hangup_upload_failure_resets_silently() {
+        let (next, effects) = handle(
+            State::Uploading {
+                recording_id: "rec-3".into(),
+                question_id: "q1".into(),
+                on_hook: true,
+            },
+            Event::UploadFailed {
+                reason: "boom".into(),
+            },
+        );
+        assert_eq!(next, State::Idle);
+        // No line-busy tone to an empty booth.
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Play(_))));
     }
 
     #[test]
