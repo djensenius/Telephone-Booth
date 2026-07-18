@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/djensenius/Telephone-Booth/compare/v0.7.2...v0.7.3) (2026-07-18)
+
+
+### Bug Fixes
+
+* **pi:** attach x-ms-meta-sha256 to recording uploads so /complete verifies ([#118](https://github.com/djensenius/Telephone-Booth/issues/118)) ([a553538](https://github.com/djensenius/Telephone-Booth/commit/a553538ae2db93cb5344b83bf4216445930cd501))
+
 ## [0.7.2](https://github.com/djensenius/Telephone-Booth/compare/v0.7.1...v0.7.2) (2026-07-18)
 
 
