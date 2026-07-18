@@ -10,7 +10,8 @@ Group=audio
 # `phonebooth` is required in addition to the runtime device groups: overriding
 # the primary group with Group=audio drops the user's own group, which owns the
 # 0750 /etc/phone-booth config directory. Without it the service cannot read
-# config.toml and silently runs on built-in defaults.
+# config.toml; the `check` pre-start step (ExecStartPre) then fails, so the unit
+# refuses to start instead of silently running on built-in defaults.
 SupplementaryGroups=gpio dialout phonebooth
 ExecStartPre=/usr/bin/telephone-booth check
 ExecStart=/usr/bin/telephone-booth run

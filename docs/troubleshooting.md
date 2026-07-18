@@ -25,10 +25,11 @@ empty — the log shows `needle=Focusrite`, `debounce_ms=25`, and no
 shows the right values.
 
 Cause: the service user (`phonebooth`, with primary group `audio`) can't
-**traverse** the `0750 root:phonebooth` config directory, so the loader
-treats the file as absent. Older packages set
-`SupplementaryGroups=gpio dialout` without `phonebooth`, which drops that
-access. Reproduce it exactly as the unit runs:
+**traverse** the `0750 root:phonebooth` config directory. Older loaders
+treated the file as absent and silently used built-in defaults (the symptom
+above); current binaries **fail loudly** instead — see the note below. Older
+packages set `SupplementaryGroups=gpio dialout` without `phonebooth`, which
+drops that access. Reproduce it exactly as the unit runs:
 
 ```sh
 sudo systemd-run --uid=phonebooth --gid=audio --pipe -q \
