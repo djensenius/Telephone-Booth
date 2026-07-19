@@ -948,7 +948,10 @@ async fn audio_task(
         } else {
             match rx.recv().await {
                 Some(AudioCommand::Play(source)) => {
-                    let completes = !matches!(source, AudioRef::Builtin(BuiltinTone::DialTone));
+                    let completes = !matches!(
+                        source,
+                        AudioRef::Builtin(BuiltinTone::DialTone | BuiltinTone::LineBusy)
+                    );
                     match sink.play(source).await {
                         Ok(()) => playing = completes,
                         Err(err) => publish_audio_error(&bus, &err),

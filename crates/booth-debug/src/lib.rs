@@ -1062,6 +1062,7 @@ fn status_from_hal(status: HalBoothStatus, updated_at: Option<SystemTime>) -> St
             HalBoothStatus::Uploading => "uploading",
             HalBoothStatus::PlayingMessage => "playingMessage",
             HalBoothStatus::PlayingInstructions => "playingInstructions",
+            HalBoothStatus::CallUnavailable => "callUnavailable",
         }
         .to_string(),
         updated_at: system_time_to_rfc3339(updated_at.unwrap_or_else(SystemTime::now)),
@@ -1082,6 +1083,7 @@ fn operator_state_name(name: &str) -> String {
         "uploading" | "Uploading" => "uploading",
         "playing_message" | "PlayingMessage" => "playingMessage",
         "playing_instructions" | "PlayingInstructions" => "playingInstructions",
+        "call_unavailable" | "CallUnavailable" => "callUnavailable",
         "error" | "Error" => "error",
         other => other,
     }

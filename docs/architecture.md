@@ -54,7 +54,7 @@ flowchart LR
 States: `Idle`, `DialTone`, `Dialing { pulses }`, `PlayingQuestion`, `Beep`,
 `Recording`, `FinishingRecording { question_id, on_hook }`,
 `Uploading { recording_id, on_hook }`,
-`PlayingMessage`, `PlayingInstructions`, `Error { reason }`.
+`PlayingMessage`, `PlayingInstructions`, `CallUnavailable`, `Error { reason }`.
 
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
 `DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `UploadComplete`,
@@ -69,7 +69,8 @@ in a single group resets to `DialTone`. A pulse group is closed by `Tick`
 after `PULSE_GROUP_TIMEOUT_MS = 350` ms.
 
 Digit 1 fetches a random question; digit 2 fetches a random message;
-digits 3..=9 and 0 play the operator-recorded `Instructions` audio.
+digit 0 plays the operator-recorded `Instructions` audio; digits 3..=9
+play the bundled "call cannot be completed as dialed" prompt.
 
 Hanging up while `Recording` moves to `FinishingRecording` (not straight to
 `Idle`) so the finalized answer is still uploaded — the natural "talk, then

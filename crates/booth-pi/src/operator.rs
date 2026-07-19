@@ -781,6 +781,7 @@ fn booth_status_state(status: &BoothStatus) -> &'static str {
         BoothStatus::Uploading => "uploading",
         BoothStatus::PlayingMessage => "playingMessage",
         BoothStatus::PlayingInstructions => "playingInstructions",
+        BoothStatus::CallUnavailable => "callUnavailable",
     }
 }
 

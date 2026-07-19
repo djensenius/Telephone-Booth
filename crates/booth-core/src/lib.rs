@@ -101,8 +101,10 @@ pub enum State {
     },
     /// Playing a randomly chosen, previously-approved message (dial 2).
     PlayingMessage,
-    /// Playing the instructions prompt (dial 3+).
+    /// Playing the instructions prompt (dial 0).
     PlayingInstructions,
+    /// Playing the "call cannot be completed as dialed" prompt (dial 3-9).
+    CallUnavailable,
     /// A non-fatal error happened; the runtime should reset us back to
     /// `Idle` on the next `HookOn`. `reason` is short, human-readable.
     Error {
@@ -123,6 +125,7 @@ impl State {
             State::FinishingRecording { .. } | State::Uploading { .. } => BoothStatus::Uploading,
             State::PlayingMessage => BoothStatus::PlayingMessage,
             State::PlayingInstructions => BoothStatus::PlayingInstructions,
+            State::CallUnavailable => BoothStatus::CallUnavailable,
             State::Error { .. } => BoothStatus::Idle,
         }
     }
@@ -141,6 +144,7 @@ impl State {
             State::Uploading { .. } => "uploading",
             State::PlayingMessage => "playing_message",
             State::PlayingInstructions => "playing_instructions",
+            State::CallUnavailable => "call_unavailable",
             State::Error { .. } => "error",
         }
     }
@@ -520,6 +524,15 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
             ],
         ),
 
+        // ---- Call unavailable (dial 3-9) ----
+        (S::CallUnavailable, E::PlaybackEnded) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
+        ),
+
         // ---- Catch-all: anything not enumerated is a no-op ----
         (state, _) => (state, vec![]),
     }
@@ -537,7 +550,15 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
             State::DialTone,
             vec![Effect::FetchRandomMessage, Effect::CancelPulseTimeout],
         ),
-        3..=9 | 0 => (
+        3..=9 => (
+            State::CallUnavailable,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::CallUnavailable)),
+                Effect::CancelPulseTimeout,
+                Effect::PutStatus(BoothStatus::CallUnavailable),
+            ],
+        ),
+        0 => (
             State::PlayingInstructions,
             vec![
                 Effect::Play(AudioRef::LocalFile("Instructions.flac".to_string())),
@@ -559,7 +580,8 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
     let action = match digit {
         1 => "fetching a random question",
         2 => "fetching a random message",
-        _ => "playing operator instructions",
+        0 => "playing operator instructions",
+        _ => "playing the call-cannot-be-completed prompt",
     };
     effects.insert(
         0,
@@ -750,11 +772,21 @@ mod tests {
         }
         assert_eq!(s, State::Dialing { pulses: 3 });
         let (s2, effects) = handle(s, Event::Tick);
-        assert_eq!(s2, State::PlayingInstructions);
+        assert_eq!(s2, State::CallUnavailable);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Play(AudioRef::Builtin(BuiltinTone::CallUnavailable))
+        )));
+    }
+
+    #[test]
+    fn call_unavailable_playback_returns_to_dial_tone() {
+        let (s, effects) = handle(State::CallUnavailable, Event::PlaybackEnded);
+        assert_eq!(s, State::DialTone);
         assert!(
             effects
                 .iter()
-                .any(|e| matches!(e, Effect::Play(AudioRef::LocalFile(_))))
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
         );
     }
 

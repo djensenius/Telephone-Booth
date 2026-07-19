@@ -27,7 +27,12 @@ fn device_matching_is_case_insensitive_and_ignores_empty_needles() {
 
 #[test]
 fn embedded_tones_are_flac_streams() {
-    for tone in [BuiltinTone::DialTone, BuiltinTone::Beep] {
+    for tone in [
+        BuiltinTone::DialTone,
+        BuiltinTone::Beep,
+        BuiltinTone::LineBusy,
+        BuiltinTone::CallUnavailable,
+    ] {
         let bytes = match embedded_tone_bytes(tone) {
             Ok(bytes) => bytes,
             Err(err) => panic!("tone should be bundled: {err}"),
@@ -37,8 +42,8 @@ fn embedded_tones_are_flac_streams() {
 }
 
 #[test]
-fn unsupported_builtin_tone_reports_error() {
-    assert!(embedded_tone_bytes(BuiltinTone::LineBusy).is_err());
+fn all_builtin_tones_are_bundled() {
+    assert!(embedded_tone_bytes(BuiltinTone::LineBusy).is_ok());
 }
 
 #[cfg(feature = "pi")]

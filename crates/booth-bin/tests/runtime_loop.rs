@@ -33,7 +33,7 @@ async fn runtime_accepts_debug_events_and_dispatches_effects() -> Result<(), Box
     }
     inject(&runtime.commands, Event::Tick).await?;
     let state = snapshot(&runtime.commands).await?;
-    assert_eq!(state, State::PlayingInstructions);
+    assert_eq!(state, State::CallUnavailable);
 
     inject(&runtime.commands, Event::HookOn).await?;
     inject(&runtime.commands, Event::HookOff).await?;
