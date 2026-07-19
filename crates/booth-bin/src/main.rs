@@ -15,6 +15,8 @@ use booth_telemetry::TelemetryBus;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+#[cfg(feature = "simulator")]
+use url::Url;
 
 /// Telephone Booth phone-side runtime.
 #[derive(Debug, Parser)]
@@ -46,10 +48,24 @@ enum Command {
         /// telemetry (state, decoded digits, audio levels, operator calls) in a
         /// scrolling log while you dial the physical phone. Reserves the same
         /// GPIO/audio as the systemd service, so stop `telephone-booth.service`
-        /// first. Pair with `--mock` to monitor mock adapters instead.
+        /// first. Pair with `--mock` to monitor mock adapters instead, or use
+        /// `--attach` to watch a running service remotely without touching
+        /// GPIO/audio at all.
         #[cfg(feature = "simulator")]
         #[arg(long)]
         tui: bool,
+        /// Attach the read-only TUI to a running booth's debug surface instead
+        /// of creating a second local runtime. Requires `--tui` and conflicts
+        /// with `--mock`/`--simulator`. Remote hosts must use `https://` or
+        /// `wss://`; plaintext `http://`/`ws://` is allowed only on loopback.
+        #[cfg(feature = "simulator")]
+        #[arg(long, value_name = "URL", requires = "tui", conflicts_with_all = ["mock", "simulator"])]
+        attach: Option<Url>,
+        /// Debug bearer token for `--attach`. Falls back to
+        /// `BOOTH_DEBUG_TOKEN`, `BOOTH_DEBUG_TOKEN_FILE`, or `/etc/phone-booth/env`.
+        #[cfg(feature = "simulator")]
+        #[arg(long, requires = "attach", value_name = "TOKEN")]
+        token: Option<String>,
     },
     /// Print the effective merged config as TOML with tokens redacted.
     PrintConfig {
@@ -93,8 +109,18 @@ async fn run_cli() -> Result<()> {
             simulator,
             #[cfg(feature = "simulator")]
             tui,
+            #[cfg(feature = "simulator")]
+            attach,
+            #[cfg(feature = "simulator")]
+            token,
         } => {
             let config = load_config(config.as_deref())?;
+            #[cfg(feature = "simulator")]
+            if let Some(attach) = attach {
+                let token = booth_bin::simulator::resolve_attach_token(&config, token)?;
+                let (log_path, _guard) = install_simulator_tracing(&config.telemetry.journal_level);
+                return booth_bin::simulator::run_attached(config, attach, token, log_path).await;
+            }
             // CLI flag can only force a mode on; the config setting provides
             // the autostart baseline for systemd units.
             let mock = mock || config.runtime.mock;
@@ -106,6 +132,7 @@ async fn run_cli() -> Result<()> {
                 let (log_path, _guard) = install_simulator_tracing(&config.telemetry.journal_level);
                 return booth_bin::simulator::run_monitor(config, mock, log_path).await;
             }
+
             #[cfg(feature = "simulator")]
             let simulator = simulator || config.runtime.simulator;
             #[cfg(feature = "simulator")]
@@ -359,4 +386,56 @@ fn redirect_stderr_to(path: &std::path::Path) {
         return;
     };
     let _ = rustix::stdio::dup2_stderr(&file);
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "CLI parse tests should fail loudly on unexpected parser behavior"
+)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn attach_requires_tui() {
+        let err =
+            Cli::try_parse_from(["telephone-booth", "run", "--attach", "https://example.com"])
+                .expect_err("attach without tui should fail");
+
+        assert!(err.to_string().contains("--tui"));
+    }
+
+    #[test]
+    fn attach_conflicts_with_mock() {
+        let err = Cli::try_parse_from([
+            "telephone-booth",
+            "run",
+            "--tui",
+            "--attach",
+            "https://example.com",
+            "--mock",
+        ])
+        .expect_err("attach with mock should fail");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--mock"));
+        assert!(rendered.contains("--attach"));
+    }
+
+    #[test]
+    fn attach_accepts_token_with_tui() {
+        let cli = Cli::try_parse_from([
+            "telephone-booth",
+            "run",
+            "--tui",
+            "--attach",
+            "https://example.com",
+            "--token",
+            "secret",
+        ])
+        .expect("valid attach args should parse");
+
+        assert!(matches!(cli.command, Command::Run { .. }));
+    }
 }

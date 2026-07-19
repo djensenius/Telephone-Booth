@@ -133,9 +133,15 @@ dial. If a signal reads inverted, flip `gpio.pull` or set
 `gpio.invert.<role> = true` — see [`configuration.md`](configuration.md).
 
 For a full-screen console dashboard directly on the Pi (rather than the web
-pin matrix), stop the service and run the read-only hardware monitor:
-`sudo systemctl stop telephone-booth && sudo -u phonebooth /usr/bin/telephone-booth run --tui`.
-See [`simulator.md`](simulator.md#read-only-hardware-monitor---tui).
+pin matrix), either:
+
+- stop the service and run the read-only hardware monitor:
+  `sudo systemctl stop telephone-booth && sudo -u phonebooth /usr/bin/telephone-booth run --tui`; or
+- keep the service running and attach passively over the debug surface:
+  `sudo -u phonebooth BOOTH_DEBUG_TOKEN=... /usr/bin/telephone-booth run --tui --attach https://127.0.0.1:8443`.
+
+See [`simulator.md`](simulator.md#read-only-hardware-monitor---tui) and
+[`simulator.md`](simulator.md#monitor-vs-web-pin-matrix).
 
 ## Handset transmitter and receiver
 

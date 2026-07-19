@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "booth-bin"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -327,22 +327,27 @@ dependencies = [
  "futures-util",
  "parking_lot",
  "ratatui",
+ "reqwest",
  "rustix",
+ "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "time",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "toml",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "booth-core"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "booth-hal",
  "heapless",
@@ -355,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "booth-debug"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "axum",
  "booth-core",
@@ -383,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "booth-hal"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "async-trait",
  "heapless",
@@ -394,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "booth-metrics"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "booth-hal",
  "booth-telemetry",
@@ -409,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "booth-mock"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "async-trait",
  "booth-hal",
@@ -423,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "booth-pi"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "alsa",
  "anyhow",
@@ -454,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "booth-telemetry"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "booth-hal",
  "serde",

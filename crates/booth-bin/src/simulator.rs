@@ -19,9 +19,10 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Stdout};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use booth_debug::RuntimeCommand;
 use booth_hal::{AudioChannel, GpioEdge, PinRole, TelemetryEvent};
 use booth_telemetry::{TelemetryBus, TelemetryRecord};
@@ -30,17 +31,29 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap};
+use reqwest::StatusCode;
+use rustls::client::WebPkiServerVerifier;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Iso8601;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior, interval};
+use tokio_tungstenite::Connector;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::connect_async_tls_with_config;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use url::Url;
 
 use crate::{RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime};
 use booth_hal::RuntimeMode;
@@ -48,6 +61,10 @@ use booth_hal::RuntimeMode;
 const EVENT_HISTORY: usize = 64;
 const RENDER_TICK: Duration = Duration::from_millis(100);
 const DEFAULT_OPERATOR_URL: &str = "https://operator.example.com";
+const ATTACH_CHANNEL_CAPACITY: usize = 256;
+const ATTACH_RECONNECT_INITIAL: Duration = Duration::from_millis(500);
+const ATTACH_RECONNECT_MAX: Duration = Duration::from_secs(5);
+const DEFAULT_DEBUG_ENV_PATH: &str = "/etc/phone-booth/env";
 
 /// Run the simulator TUI to completion.
 ///
@@ -141,7 +158,13 @@ pub async fn run_simulator(
     );
 
     let state = SimulatorState::new(mock_io, false, log_path);
-    drive_tui(handle, &bus, state, Some(injector)).await
+    drive_tui(
+        Some(handle),
+        TelemetryFeed::local(&bus),
+        state,
+        Some(injector),
+    )
+    .await
 }
 
 /// Run the read-only hardware monitor TUI to completion.
@@ -187,20 +210,114 @@ pub async fn run_monitor(
     );
 
     let state = SimulatorState::new(mock, true, log_path);
-    drive_tui(handle, &bus, state, None).await
+    drive_tui(Some(handle), TelemetryFeed::local(&bus), state, None).await
+}
+
+/// Attach the read-only TUI to a running booth's debug surface instead of
+/// spawning a second local runtime.
+pub async fn run_attached(
+    config: RuntimeConfig,
+    attach_url: Url,
+    token: String,
+    log_path: Option<String>,
+) -> Result<()> {
+    validate_attach_url_security(&attach_url)?;
+    let target = attach_target_label(&attach_url)?;
+    let state = SimulatorState::attached(target.clone(), log_path);
+    let feed = TelemetryFeed::remote(AttachConfig {
+        base_url: attach_url,
+        token,
+        loopback_bind: config.debug.loopback_bind.clone(),
+        target_label: target,
+    });
+    drive_tui(None, feed, state, None).await
+}
+
+enum TelemetryMessage {
+    Record(TelemetryRecord),
+    Lagged(u64),
+    Status(String),
+    Closed,
+}
+
+enum TelemetryStream {
+    Local(tokio::sync::broadcast::Receiver<TelemetryRecord>),
+    Remote(mpsc::Receiver<TelemetryMessage>),
+}
+
+struct TelemetryFeed {
+    stream: TelemetryStream,
+    background_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl TelemetryFeed {
+    fn local(bus: &TelemetryBus) -> Self {
+        Self {
+            stream: TelemetryStream::Local(bus.subscribe()),
+            background_task: None,
+        }
+    }
+
+    fn remote(config: AttachConfig) -> Self {
+        let (tx, rx) = mpsc::channel(ATTACH_CHANNEL_CAPACITY);
+        let task = tokio::spawn(async move {
+            attach_telemetry_loop(config, tx).await;
+        });
+        Self {
+            stream: TelemetryStream::Remote(rx),
+            background_task: Some(task),
+        }
+    }
+
+    async fn recv(&mut self) -> TelemetryMessage {
+        match &mut self.stream {
+            TelemetryStream::Local(rx) => match rx.recv().await {
+                Ok(record) => TelemetryMessage::Record(record),
+                Err(RecvError::Lagged(skipped)) => TelemetryMessage::Lagged(skipped),
+                Err(RecvError::Closed) => TelemetryMessage::Closed,
+            },
+            TelemetryStream::Remote(rx) => rx
+                .recv()
+                .await
+                .map_or(TelemetryMessage::Closed, |message| message),
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(task) = self.background_task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AttachConfig {
+    base_url: Url,
+    token: String,
+    loopback_bind: String,
+    target_label: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CertFingerprintResponse {
+    sha256: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ReplayRequest {
+    replay_from: u64,
 }
 
 /// Shared TUI event loop for the interactive simulator and the read-only
 /// monitor. When `injector` is `Some`, hook/dial keypresses synthesize GPIO
 /// edges; when `None`, the TUI is read-only and only responds to quit keys.
 async fn drive_tui(
-    handle: crate::RuntimeHandle,
-    bus: &TelemetryBus,
+    handle: Option<crate::RuntimeHandle>,
+    mut telemetry: TelemetryFeed,
     mut state: SimulatorState,
     injector: Option<booth_mock::GpioInjector>,
 ) -> Result<()> {
     let mut terminal = TerminalGuard::enter().context("enter terminal alternate screen")?;
-    let mut telemetry_rx = bus.subscribe();
     let mut events = EventStream::new();
     let mut ticker = interval(RENDER_TICK);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -214,7 +331,9 @@ async fn drive_tui(
                 match key {
                     Some(Ok(CtEvent::Key(key))) => {
                         if matches!(state.handle_key(key, injector.as_ref()).await, Action::Quit) {
-                            let _ = handle.commands.send(RuntimeCommand::Shutdown).await;
+                            if let Some(handle) = &handle {
+                                let _ = handle.commands.send(RuntimeCommand::Shutdown).await;
+                            }
                             break Ok(());
                         }
                     }
@@ -223,13 +342,12 @@ async fn drive_tui(
                     None => break Ok(()),
                 }
             }
-            record = telemetry_rx.recv() => {
-                match record {
-                    Ok(record) => state.ingest(&record),
-                    Err(RecvError::Lagged(skipped)) => {
-                        state.note_lag(skipped);
-                    }
-                    Err(RecvError::Closed) => break Ok(()),
+            message = telemetry.recv() => {
+                match message {
+                    TelemetryMessage::Record(record) => state.ingest(&record),
+                    TelemetryMessage::Lagged(skipped) => state.note_lag(skipped),
+                    TelemetryMessage::Status(status) => state.set_status(status, Style::default()),
+                    TelemetryMessage::Closed => break Ok(()),
                 }
             }
             _ = ticker.tick() => {}
@@ -240,18 +358,381 @@ async fn drive_tui(
     // Always restore the terminal before printing or returning.
     drop(terminal);
 
-    // Wait briefly for the runtime to finish cleanly. The runtime task
+    telemetry.shutdown();
+
+    // Wait briefly for the local runtime to finish cleanly. The runtime task
     // exits when it sees Shutdown above.
-    match tokio::time::timeout(Duration::from_secs(2), handle.join).await {
-        Ok(Ok(Ok(final_state))) => {
-            tracing::info!(state = final_state.tag(), "tui runtime stopped");
+    if let Some(handle) = handle {
+        match tokio::time::timeout(Duration::from_secs(2), handle.join).await {
+            Ok(Ok(Ok(final_state))) => {
+                tracing::info!(state = final_state.tag(), "tui runtime stopped");
+            }
+            Ok(Ok(Err(err))) => tracing::warn!(error = %err, "runtime exited with error"),
+            Ok(Err(join_err)) => tracing::warn!(error = %join_err, "runtime task panicked"),
+            Err(_) => tracing::warn!("runtime did not stop within 2s of shutdown"),
         }
-        Ok(Ok(Err(err))) => tracing::warn!(error = %err, "runtime exited with error"),
-        Ok(Err(join_err)) => tracing::warn!(error = %join_err, "runtime task panicked"),
-        Err(_) => tracing::warn!("runtime did not stop within 2s of shutdown"),
     }
 
     outcome
+}
+
+/// Resolve the debug bearer token used by attach mode before the TUI takes over
+/// stderr/stdout.
+pub fn resolve_attach_token(config: &RuntimeConfig, cli_token: Option<String>) -> Result<String> {
+    if let Some(token) = cli_token {
+        return Ok(token);
+    }
+    if let Some(token) = config.debug_token.clone() {
+        return Ok(token);
+    }
+    if let Some(token) = config.debug.token.as_ref().map(|token| token.0.clone()) {
+        return Ok(token);
+    }
+    if let Some(token) = read_debug_token_from_env_file(DEFAULT_DEBUG_ENV_PATH)? {
+        return Ok(token);
+    }
+    bail!(
+        "attach mode requires a debug bearer token; pass --token, set BOOTH_DEBUG_TOKEN \
+         or BOOTH_DEBUG_TOKEN_FILE, or add BOOTH_DEBUG_TOKEN to {DEFAULT_DEBUG_ENV_PATH}"
+    );
+}
+
+fn read_debug_token_from_env_file(path: &str) -> Result<Option<String>> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("read {path}")),
+    };
+
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "BOOTH_DEBUG_TOKEN" {
+            return Ok(Some(strip_optional_quotes(value.trim()).to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
+fn strip_optional_quotes(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
+}
+
+fn attach_target_label(url: &Url) -> Result<String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("attach URL must include a host"))?;
+    Ok(url
+        .port()
+        .map_or_else(|| host.to_string(), |port| format!("{host}:{port}")))
+}
+
+fn is_loopback_host(url: &Url) -> bool {
+    matches!(url.host_str(), Some("localhost"))
+        || url
+            .host_str()
+            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
+}
+
+fn validate_attach_url_security(base_url: &Url) -> Result<()> {
+    match base_url.scheme() {
+        "http" | "ws" if !is_loopback_host(base_url) => bail!(
+            "plaintext attach URLs are only allowed for loopback hosts; use https:// or wss://"
+        ),
+        "http" | "https" | "ws" | "wss" => Ok(()),
+        other => bail!(
+            "unsupported attach URL scheme `{other}`; use http:// or ws:// for loopback, \
+             https:// or wss:// for remote hosts"
+        ),
+    }
+}
+
+fn websocket_url(base_url: &Url) -> Result<Url> {
+    validate_attach_url_security(base_url)?;
+    let mut url = base_url.clone();
+    match url.scheme() {
+        "http" => {
+            url.set_scheme("ws")
+                .map_err(|()| anyhow!("convert attach URL scheme to ws"))?;
+        }
+        "https" => {
+            url.set_scheme("wss")
+                .map_err(|()| anyhow!("convert attach URL scheme to wss"))?;
+        }
+        "ws" | "wss" => {}
+        other => bail!(
+            "unsupported attach URL scheme `{other}`; use http://, https://, ws://, or wss://"
+        ),
+    }
+    url.set_path("/v1/ws/telemetry");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+async fn attach_telemetry_loop(config: AttachConfig, tx: mpsc::Sender<TelemetryMessage>) {
+    let mut replay_from = Some(0_u64);
+    let mut backoff = ATTACH_RECONNECT_INITIAL;
+    let target = config.target_label.clone();
+
+    let _ = tx
+        .send(TelemetryMessage::Status(format!("Connecting to {target}…")))
+        .await;
+
+    'reconnect: loop {
+        match connect_attach_socket(&config).await {
+            Ok(mut socket) => {
+                backoff = ATTACH_RECONNECT_INITIAL;
+                let _ = tx
+                    .send(TelemetryMessage::Status(format!(
+                        "Attached to {target} (read-only telemetry stream)."
+                    )))
+                    .await;
+
+                if let Some(last_seen) = replay_from {
+                    let replay_request = ReplayRequest {
+                        replay_from: last_seen,
+                    };
+                    let replay = match serde_json::to_string(&replay_request) {
+                        Ok(replay) => replay,
+                        Err(err) => {
+                            let _ = tx
+                                .send(TelemetryMessage::Status(format!(
+                                    "Attach replay request failed; reconnecting… ({err})"
+                                )))
+                                .await;
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(ATTACH_RECONNECT_MAX);
+                            continue 'reconnect;
+                        }
+                    };
+                    if let Err(err) = socket.send(Message::Text(replay)).await {
+                        let _ = tx
+                            .send(TelemetryMessage::Status(format!(
+                                "Attach replay request failed; reconnecting… ({err})"
+                            )))
+                            .await;
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(ATTACH_RECONNECT_MAX);
+                        continue;
+                    }
+                }
+
+                loop {
+                    match socket.next().await {
+                        Some(Ok(Message::Text(text))) => {
+                            match serde_json::from_str::<TelemetryRecord>(&text) {
+                                Ok(record) => {
+                                    replay_from = Some(record.id);
+                                    if tx.send(TelemetryMessage::Record(record)).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = tx
+                                        .send(TelemetryMessage::Status(format!(
+                                            "Invalid telemetry frame; reconnecting… ({err})"
+                                        )))
+                                        .await;
+                                    break;
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Binary(bytes))) => {
+                            match serde_json::from_slice::<TelemetryRecord>(&bytes) {
+                                Ok(record) => {
+                                    replay_from = Some(record.id);
+                                    if tx.send(TelemetryMessage::Record(record)).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = tx
+                                        .send(TelemetryMessage::Status(format!(
+                                            "Invalid telemetry frame; reconnecting… ({err})"
+                                        )))
+                                        .await;
+                                    break;
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) => break,
+                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                        Some(Ok(Message::Frame(_))) => {}
+                        Some(Err(err)) => {
+                            let _ = tx
+                                .send(TelemetryMessage::Status(format!(
+                                    "Attach stream dropped; reconnecting… ({err})"
+                                )))
+                                .await;
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+            }
+            Err(err) => {
+                let _ = tx
+                    .send(TelemetryMessage::Status(format!(
+                        "Attach failed; reconnecting in {} ms ({err})",
+                        backoff.as_millis()
+                    )))
+                    .await;
+            }
+        }
+
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(ATTACH_RECONNECT_MAX);
+    }
+}
+
+async fn connect_attach_socket(
+    config: &AttachConfig,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    let ws_url = websocket_url(&config.base_url)?;
+    let mut request = ws_url.as_str().into_client_request()?;
+    let mut authorization = String::from("Bearer ");
+    authorization.push_str(&config.token);
+    request.headers_mut().insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&authorization)
+            .context("build attach Authorization header")?,
+    );
+
+    let is_pinned_loopback =
+        matches!(config.base_url.scheme(), "https" | "wss") && is_loopback_host(&config.base_url);
+    if is_pinned_loopback {
+        let fingerprint = fetch_loopback_fingerprint(config).await?;
+        let connector = build_fingerprint_connector(&fingerprint)?;
+        let (socket, _response) =
+            connect_async_tls_with_config(request, None, false, Some(connector)).await?;
+        Ok(socket)
+    } else {
+        let (socket, _response) = connect_async(request).await?;
+        Ok(socket)
+    }
+}
+
+async fn fetch_loopback_fingerprint(config: &AttachConfig) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .context("build fingerprint client")?;
+    let response = client
+        .get(format!(
+            "http://{}/v1/cert/fingerprint",
+            config.loopback_bind
+        ))
+        .bearer_auth(&config.token)
+        .send()
+        .await
+        .context("fetch loopback certificate fingerprint")?;
+    if response.status() != StatusCode::OK {
+        bail!(
+            "fetch loopback certificate fingerprint failed with HTTP {}; \
+             ensure the running service still exposes the loopback debug listener on {}",
+            response.status(),
+            config.loopback_bind
+        );
+    }
+    let body: CertFingerprintResponse = response
+        .json()
+        .await
+        .context("decode loopback certificate fingerprint response")?;
+    Ok(body.sha256)
+}
+
+fn build_fingerprint_connector(expected_fingerprint: &str) -> Result<Connector> {
+    let verifier = WebPkiServerVerifier::builder(Arc::new(rustls::RootCertStore::empty()))
+        .build()
+        .context("build TLS signature verifier")?;
+    let config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(FingerprintVerifier {
+            expected_sha256: expected_fingerprint.to_ascii_lowercase(),
+            signature_verifier: verifier,
+        }))
+        .with_no_client_auth();
+    Ok(Connector::Rustls(Arc::new(config)))
+}
+
+#[derive(Debug)]
+struct FingerprintVerifier {
+    expected_sha256: String,
+    signature_verifier: Arc<WebPkiServerVerifier>,
+}
+
+impl ServerCertVerifier for FingerprintVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let digest = Sha256::digest(end_entity.as_ref());
+        let actual = format_sha256_hex(digest.as_slice());
+        if actual == self.expected_sha256 {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "debug TLS certificate fingerprint did not match".to_string(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.signature_verifier
+            .verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.signature_verifier
+            .verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.signature_verifier.supported_verify_schemes()
+    }
+}
+
+fn format_sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +794,7 @@ struct SimulatorState {
     /// dial keypresses are ignored (there is no injector) and the header/footer
     /// reflect a live-hardware view instead of the interactive simulator.
     read_only: bool,
+    attached_to: Option<String>,
     log_path: Option<String>,
     hook_on_hook: bool,
     /// Whether we have observed the physical hook position yet. The monitor
@@ -353,9 +835,30 @@ impl SimulatorState {
         Self {
             mock_io,
             read_only,
+            attached_to: None,
             log_path,
             hook_on_hook: true,
             hook_known: !read_only,
+            current_state: "idle".to_string(),
+            booth_status: "idle".to_string(),
+            audio_in: LevelView::default(),
+            audio_out: LevelView::default(),
+            history: VecDeque::with_capacity(EVENT_HISTORY),
+            status_line,
+            lagged_records: 0,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn attached(target: String, log_path: Option<String>) -> Self {
+        let status_line = format!("Connecting to {target}…");
+        Self {
+            mock_io: false,
+            read_only: true,
+            attached_to: Some(target),
+            log_path,
+            hook_on_hook: true,
+            hook_known: false,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
             audio_in: LevelView::default(),
@@ -404,7 +907,11 @@ impl SimulatorState {
 
     fn note_read_only(&mut self) {
         self.set_status(
-            "Live hardware monitor — use the real phone (input is read-only).",
+            if self.attached_to.is_some() {
+                "Attach mode is read-only — watch the running booth or use the web simulator controls."
+            } else {
+                "Live hardware monitor — use the real phone (input is read-only)."
+            },
             Style::default().fg(Color::Yellow),
         );
     }
@@ -694,6 +1201,10 @@ impl SimulatorState {
         } else {
             "Telephone Booth Simulator"
         };
+        let mode_badge = self.attached_to.as_ref().map_or_else(
+            || format!("[{mode}]"),
+            |target| format!("[attached: {target}]"),
+        );
         let hook = if !self.hook_known {
             "unknown"
         } else if self.hook_on_hook {
@@ -704,7 +1215,7 @@ impl SimulatorState {
         let header = Line::from(vec![
             Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("   "),
-            Span::styled(format!("[{mode}]"), Style::default().fg(Color::DarkGray)),
+            Span::styled(mode_badge, Style::default().fg(Color::DarkGray)),
             Span::raw("   state="),
             Span::styled(
                 self.current_state.clone(),
@@ -768,7 +1279,9 @@ impl SimulatorState {
     }
 
     fn render_footer(&self, frame: &mut ratatui::Frame<'_>, area: Rect) {
-        let controls = if self.read_only {
+        let controls = if self.attached_to.is_some() {
+            "Controls: [q]/Esc/Ctrl+C quit   (attached read-only view)"
+        } else if self.read_only {
             "Controls: [q]/Esc/Ctrl+C quit   (live hardware — dial the real phone)"
         } else {
             "Controls: [h]/space toggle hook   [0-9] dial digit   [q]/Esc/Ctrl+C quit"
@@ -818,5 +1331,153 @@ fn derive_booth_status(state: &str) -> &'static str {
         "playing_message" => "playing_message",
         "playing_instructions" => "playing_instructions",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "tests may panic on setup failure"
+)]
+mod tests {
+    use super::*;
+    use booth_debug::{DebugConfig, DebugToken, RuntimeCommand, serve_with_handles};
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn attach_feed_replays_and_streams_live_telemetry() -> Result<()> {
+        let config = DebugConfig {
+            loopback_bind: "127.0.0.1:0".to_string(),
+            lan_enabled: false,
+            tailscale_enabled: true,
+            allow_tokenless: false,
+            token: Some(DebugToken("attach-test-token".to_string())),
+            ring_buffer_capacity: 16,
+            ..DebugConfig::default()
+        };
+
+        let bus = TelemetryBus::new(config.ring_buffer_capacity);
+        let (runtime_tx, _runtime_rx) = mpsc::channel::<RuntimeCommand>(4);
+        let handles = serve_with_handles(config, bus.clone(), runtime_tx, None).await?;
+        let addr = handles
+            .loopback_addr
+            .expect("loopback listener should be running");
+
+        bus.publish(TelemetryEvent::Log {
+            level: "info".to_string(),
+            target: "attach-test".to_string(),
+            message: "replay-1".to_string(),
+        });
+        bus.publish(TelemetryEvent::Log {
+            level: "info".to_string(),
+            target: "attach-test".to_string(),
+            message: "replay-2".to_string(),
+        });
+
+        let mut feed = TelemetryFeed::remote(AttachConfig {
+            base_url: Url::parse(&format!("http://{addr}"))?,
+            token: "attach-test-token".to_string(),
+            loopback_bind: addr.to_string(),
+            target_label: addr.to_string(),
+        });
+
+        let mut messages = Vec::new();
+        while messages.len() < 2 {
+            match tokio::time::timeout(Duration::from_secs(2), feed.recv()).await? {
+                TelemetryMessage::Record(record) => {
+                    if let TelemetryEvent::Log { message, .. } = record.event {
+                        messages.push(message);
+                    }
+                }
+                TelemetryMessage::Status(_) | TelemetryMessage::Lagged(_) => {}
+                TelemetryMessage::Closed => bail!("attach feed closed before replay arrived"),
+            }
+        }
+
+        bus.publish(TelemetryEvent::Log {
+            level: "info".to_string(),
+            target: "attach-test".to_string(),
+            message: "live-3".to_string(),
+        });
+
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), feed.recv()).await? {
+                TelemetryMessage::Record(record) => {
+                    if let TelemetryEvent::Log { message, .. } = record.event {
+                        messages.push(message);
+                        if messages.len() == 3 {
+                            break;
+                        }
+                    }
+                }
+                TelemetryMessage::Status(_) | TelemetryMessage::Lagged(_) => {}
+                TelemetryMessage::Closed => bail!("attach feed closed before live event arrived"),
+            }
+        }
+
+        assert_eq!(messages, vec!["replay-1", "replay-2", "live-3"]);
+
+        feed.shutdown();
+        let _ = handles.shutdown_tx.send(());
+        let _ = handles.handle.await;
+        Ok(())
+    }
+
+    #[test]
+    fn env_file_reader_extracts_debug_token() -> Result<()> {
+        let dir = std::env::current_dir()?
+            .join("target")
+            .join("booth-bin-simulator-tests");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("env-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "# comment\nINVALID LINE\nOTHER=value\nBOOTH_DEBUG_TOKEN='single-quoted'\n",
+        )?;
+
+        let token = read_debug_token_from_env_file(&path.display().to_string())?;
+        assert_eq!(token.as_deref(), Some("single-quoted"));
+
+        std::fs::write(&path, "BOOTH_DEBUG_TOKEN=plain-token-with-$pecial_chars\n")?;
+        let token = read_debug_token_from_env_file(&path.display().to_string())?;
+        assert_eq!(token.as_deref(), Some("plain-token-with-$pecial_chars"));
+
+        std::fs::write(&path, "BOOTH_DEBUG_TOKEN=\n")?;
+        let token = read_debug_token_from_env_file(&path.display().to_string())?;
+        assert_eq!(token.as_deref(), Some(""));
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
+    #[test]
+    fn attach_url_allows_plaintext_only_on_loopback() -> Result<()> {
+        let http_loopback = Url::parse("http://127.0.0.1:8080/debug?ignored=true")?;
+        assert_eq!(
+            websocket_url(&http_loopback)?.as_str(),
+            "ws://127.0.0.1:8080/v1/ws/telemetry"
+        );
+
+        let ws_loopback = Url::parse("ws://localhost:8080/custom")?;
+        assert_eq!(
+            websocket_url(&ws_loopback)?.as_str(),
+            "ws://localhost:8080/v1/ws/telemetry"
+        );
+
+        let secure_remote_url = Url::parse("https://telephone-booth.example.com")?;
+        assert_eq!(
+            websocket_url(&secure_remote_url)?.as_str(),
+            "wss://telephone-booth.example.com/v1/ws/telemetry"
+        );
+
+        let cleartext_http_url = Url::parse("http://telephone-booth.example.com")?;
+        let err = websocket_url(&cleartext_http_url).expect_err("remote plaintext should fail");
+        assert!(err.to_string().contains("plaintext attach URLs"));
+
+        let cleartext_ws_url = Url::parse("ws://telephone-booth.example.com")?;
+        let err = websocket_url(&cleartext_ws_url).expect_err("remote plaintext should fail");
+        assert!(err.to_string().contains("plaintext attach URLs"));
+
+        Ok(())
     }
 }
