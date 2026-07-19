@@ -103,6 +103,7 @@ spew on the framebuffer, you're running an old build; pull the latest.
 | `run --simulator --mock`      | Mock       | Mock       | Mock      | TUI         |
 | `run --tui`                   | Pi (rppal) | Pi (cpal)  | Pi (HTTP) | TUI (read-only) |
 | `run --tui --mock`            | Mock       | Mock       | Mock      | TUI (read-only) |
+| `run --tui --attach <url>`    | none       | none       | none      | TUI (attached, read-only) |
 
 `run --mock` (no simulator) just runs the headless event loop with mocks —
 useful for integration tests but with no way to inject hook lifts or dial
@@ -128,6 +129,21 @@ operator adapters, it **reserves the same GPIO pins and audio device as the
 before starting the monitor, and quit the monitor (`q`) before restarting the
 service.
 
+If you want the same full-screen terminal dashboard **without** stopping the
+service, use attach mode instead:
+
+```sh
+# Local Pi: attach over the loopback + LAN debug listeners without opening GPIO/audio.
+sudo -u phonebooth BOOTH_DEBUG_TOKEN=... /usr/bin/telephone-booth run --tui --attach https://127.0.0.1:8443
+
+# Remote: attach over the Tailscale-served HTTPS endpoint.
+telephone-booth run --tui --attach https://telephone-booth.<tailnet>.ts.net --token ...
+```
+
+Attach mode never builds local adapters. It only consumes the running service's
+`/v1/ws/telemetry` stream, so GPIO pins, ALSA devices, and the operator client
+stay owned by `telephone-booth.service`.
+
 Only quit keys are active in monitor mode:
 
 | Key                  | Action                                         |
@@ -144,11 +160,35 @@ mostly a curiosity — `--simulator --mock` is the interactive equivalent.
 
 ### Monitor vs. web pin matrix
 
-For attaching to an *already-running* service without stopping it, use the
-read-only web debug surface instead (`/v1/ui/simulator`, served over
-Tailscale). The `--tui` monitor is for when you want a full-screen console
-dashboard on the Pi itself and are happy to take exclusive control of the
-hardware.
+There are now three ways to watch a booth, depending on whether you need local
+hardware ownership or a passive remote view:
+
+| Surface | GPIO/audio opened by this process? | Control injection | Best for |
+| ------- | ---------------------------------- | ----------------- | -------- |
+| `run --tui` | yes | no | On-Pi bring-up when you can stop the service |
+| `run --tui --attach <url>` | no | no | SSH/Tailscale dashboard of a running booth |
+| `/v1/ui/simulator` | no | web controls only in `mock`/`simulator` runtime modes | Browser-based remote watch/debug |
+
+Attach mode is strictly read-only. Only quit keys are active, just like the
+local `--tui` monitor.
+
+### TLS in attach mode
+
+`--attach` accepts `https://` and `wss://` base URLs for remote hosts and always
+connects to `/v1/ws/telemetry`. Plaintext `http://` and `ws://` are accepted
+only for loopback hosts (`localhost`, `127.0.0.1`, or `::1`) so the bearer token
+is never sent in cleartext over the network.
+
+- **Remote Tailscale HTTPS** uses normal WebPKI validation.
+- **Local loopback HTTPS** (`https://127.0.0.1:8443`) bootstraps the generated
+  self-signed cert by fetching `/v1/cert/fingerprint` from the authenticated
+  loopback HTTP listener (`[debug].loopback_bind`) and pinning that SHA-256
+  fingerprint for the WebSocket connection.
+
+The attach client does **not** blanket-disable TLS verification for arbitrary
+hosts. If you are connecting to a non-Tailscale remote HTTPS endpoint with a
+self-signed cert, trust that CA separately or attach through the loopback/Tailscale
+path instead.
 
 ## Implementation notes
 
@@ -169,12 +209,14 @@ The terminal is set up via `ratatui` + `crossterm` and is restored from a
 `Drop` guard so a panic or fatal error cannot leave the terminal in raw
 mode.
 
-The read-only monitor (`run_monitor`) shares the same `SimulatorState`,
-render loop, and terminal guard via the internal `drive_tui` helper, but
-passes no `GpioInjector` and spawns the runtime with
-`runtime_mode: RuntimeMode::Real` (or `Mock` with `--mock`). Keypresses other
-than quit are no-ops, and the hook indicator is driven from real
-`GpioEdge` telemetry rather than injected edges.
+The read-only monitor (`run_monitor`) and attach mode (`run_attached`) share
+the same `SimulatorState`, render loop, and terminal guard via the internal
+`drive_tui` helper. Local monitor mode passes no `GpioInjector` and spawns the
+runtime with `runtime_mode: RuntimeMode::Real` (or `Mock` with `--mock`);
+attach mode skips runtime creation entirely and feeds the same render loop from
+the debug WebSocket stream instead. In both cases, keypresses other than quit
+are no-ops, and the hook indicator is driven from observed telemetry rather
+than injected edges.
 
 ## Running on the Raspberry Pi
 
