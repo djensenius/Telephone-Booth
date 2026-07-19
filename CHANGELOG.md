@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/djensenius/Telephone-Booth/compare/v0.7.3...v0.8.0) (2026-07-19)
+
+
+### Features
+
+* **bin:** add passive attach-only TUI mode ([ab20408](https://github.com/djensenius/Telephone-Booth/commit/ab20408fa1f875742b850d9131a4a000bfb23d86))
+
 ## [0.7.3](https://github.com/djensenius/Telephone-Booth/compare/v0.7.2...v0.7.3) (2026-07-18)
 
 
