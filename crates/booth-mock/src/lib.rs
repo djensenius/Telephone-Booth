@@ -306,6 +306,8 @@ pub struct MockOperatorState {
     pub questions: VecDeque<OperatorQuestion>,
     /// Pre-canned messages, popped FIFO.
     pub messages: VecDeque<OperatorMessage>,
+    /// Pre-canned instructions clips, popped FIFO.
+    pub instructions: VecDeque<OperatorMessage>,
     /// Status writes received from the booth.
     pub statuses: Vec<BoothStatus>,
     /// Upload slots issued.
@@ -434,6 +436,19 @@ impl OperatorClient for MockOperatorClient {
             s.messages
                 .pop_front()
                 .ok_or_else(|| OperatorError::Protocol("no messages queued".into()))
+        };
+        self.finish_request(&request_id, started, &result);
+        result
+    }
+
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
+        let (request_id, started) = self.begin_request("GET /mock/instructions");
+        self.apply_latency().await;
+        let result = {
+            let mut s = self.inner.lock().await;
+            s.instructions
+                .pop_front()
+                .ok_or_else(|| OperatorError::Protocol("no instructions queued".into()))
         };
         self.finish_request(&request_id, started, &result);
         result

@@ -993,6 +993,7 @@ fn is_operator_effect(effect: &Effect) -> bool {
         Effect::UploadRecording { .. }
             | Effect::FetchRandomQuestion
             | Effect::FetchRandomMessage
+            | Effect::FetchInstructions
             | Effect::PutStatus(_)
     )
 }
@@ -1236,6 +1237,16 @@ async fn effect_task(
                     fetch_random_message(&*op, &ev_tx, &b, &nra, &rd).await;
                 });
             }
+            Effect::FetchInstructions => {
+                let op = Arc::clone(&operator);
+                let ev_tx = event_tx.clone();
+                let b = bus.clone();
+                let nra = Arc::clone(&next_remote_audio);
+                let rd = recordings_dir.clone();
+                operator_tasks.spawn(async move {
+                    fetch_instructions(&*op, &ev_tx, &b, &nra, &rd).await;
+                });
+            }
             Effect::PutStatus(status) => {
                 let op = Arc::clone(&operator);
                 let b = bus.clone();
@@ -1357,6 +1368,37 @@ async fn fetch_random_message(
             publish_operator_error(bus, "random_message", &err);
             let _ = event_tx
                 .send(Event::MessageFailed {
+                    reason: err.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
+async fn fetch_instructions(
+    operator: &dyn OperatorClient,
+    event_tx: &mpsc::Sender<Event>,
+    bus: &TelemetryBus,
+    next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
+    recordings_dir: &Path,
+) {
+    match retry_operator("GET /v1/instructions/current", bus, || {
+        operator.instructions()
+    })
+    .await
+    {
+        Ok(instructions) => {
+            *next_remote_audio.lock().await = Some(operator_audio_ref(
+                instructions.audio_url,
+                instructions.audio_sha256.as_deref(),
+                recordings_dir,
+            ));
+            let _ = event_tx.send(Event::InstructionsReady).await;
+        }
+        Err(err) => {
+            publish_operator_error(bus, "instructions", &err);
+            let _ = event_tx
+                .send(Event::InstructionsFailed {
                     reason: err.to_string(),
                 })
                 .await;
@@ -2215,6 +2257,10 @@ mod tests {
         }
 
         async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
+            Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
 

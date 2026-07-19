@@ -370,6 +370,9 @@ pub trait OperatorClient: Send + Sync {
     /// Fetch a random previously-approved message.
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError>;
 
+    /// Fetch the current admin-uploaded instructions clip.
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError>;
+
     /// Reserve an upload slot for a recording answering `question_id`.
     ///
     /// `metadata` carries the recording's SHA-256, byte size, and duration so

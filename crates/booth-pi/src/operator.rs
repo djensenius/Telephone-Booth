@@ -286,16 +286,22 @@ impl PiOperatorClient {
         }
     }
 
-    /// Fetch the operator-recorded instructions prompt.
-    #[allow(
-        clippy::unused_async,
-        reason = "kept async to mirror future operator endpoint shape"
-    )]
+    /// Fetch the current admin-uploaded instructions clip.
     pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
-        let _ = self;
-        Err(OperatorError::Unsupported(
-            "OpenAPI spec does not define a phone-side instructions endpoint".into(),
-        ))
+        #[cfg(feature = "operator")]
+        {
+            let message = self
+                .send_json::<ApiMessage>(
+                    reqwest::Method::GET,
+                    "/v1/instructions/current",
+                    None::<&()>,
+                )
+                .await?;
+            return Ok(message.into());
+        }
+
+        #[cfg(not(feature = "operator"))]
+        unsupported()
     }
 
     /// Upload a FLAC recording directly to a presigned blob URL.
@@ -470,6 +476,10 @@ impl OperatorClient for PiOperatorClient {
 
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
         self.get_random_message().await
+    }
+
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
+        self.get_instructions().await
     }
 
     async fn init_upload(
