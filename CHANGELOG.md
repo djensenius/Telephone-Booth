@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/djensenius/Telephone-Booth/compare/v0.8.0...v0.8.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* play "call cannot be completed" prompt for dials 3-9 and bundle line-busy tone ([#121](https://github.com/djensenius/Telephone-Booth/issues/121)) ([3f53e71](https://github.com/djensenius/Telephone-Booth/commit/3f53e719a55478455a7e2df88655756ce5a18c0f))
+
 ## [0.8.0](https://github.com/djensenius/Telephone-Booth/compare/v0.7.3...v0.8.0) (2026-07-19)
 
 
