@@ -131,6 +131,9 @@ pub enum BuiltinTone {
     Beep,
     /// Slow busy / line-busy signal.
     LineBusy,
+    /// Recorded "your call cannot be completed as dialed" voice prompt,
+    /// played when the caller dials a digit with no assigned action (3-9).
+    CallUnavailable,
 }
 
 /// Errors an [`AudioSink`] / [`AudioSource`] can return.
@@ -304,6 +307,8 @@ pub enum BoothStatus {
     PlayingMessage,
     /// Playing the instructions prompt.
     PlayingInstructions,
+    /// Playing the "call cannot be completed" prompt.
+    CallUnavailable,
 }
 
 /// Errors talking to the operator backend.
@@ -364,6 +369,9 @@ pub trait OperatorClient: Send + Sync {
 
     /// Fetch a random previously-approved message.
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError>;
+
+    /// Fetch the current admin-uploaded instructions clip.
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError>;
 
     /// Reserve an upload slot for a recording answering `question_id`.
     ///
@@ -951,6 +959,7 @@ impl fmt::Display for BoothStatus {
             Self::Uploading => f.write_str("uploading"),
             Self::PlayingMessage => f.write_str("playing_message"),
             Self::PlayingInstructions => f.write_str("playing_instructions"),
+            Self::CallUnavailable => f.write_str("call_unavailable"),
         }
     }
 }

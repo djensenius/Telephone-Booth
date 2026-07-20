@@ -1330,6 +1330,7 @@ fn derive_booth_status(state: &str) -> &'static str {
         "uploading" => "uploading",
         "playing_message" => "playing_message",
         "playing_instructions" => "playing_instructions",
+        "call_unavailable" => "call_unavailable",
         _ => "unknown",
     }
 }

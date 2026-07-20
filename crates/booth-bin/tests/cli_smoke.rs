@@ -36,7 +36,7 @@ fn simulate_five_pulses_prints_expected_effects() -> Result<(), Box<dyn Error>> 
 
     assert!(output.status.success(), "simulate failed: {output:?}");
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("PlayingInstructions"));
-    assert!(stdout.contains("LocalFile(\"Instructions.flac\")"));
+    assert!(stdout.contains("CallUnavailable"));
+    assert!(stdout.contains("Builtin(CallUnavailable)"));
     Ok(())
 }

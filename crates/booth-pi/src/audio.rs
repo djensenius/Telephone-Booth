@@ -40,6 +40,8 @@ use crate::{AudioConfig, OperatorConfig};
 
 const DIAL_TONE_FLAC: &[u8] = include_bytes!("../assets/dial-tone.flac");
 const BEEP_FLAC: &[u8] = include_bytes!("../assets/beep.flac");
+const LINE_BUSY_FLAC: &[u8] = include_bytes!("../assets/line-busy.flac");
+const CALL_UNAVAILABLE_FLAC: &[u8] = include_bytes!("../assets/call-unavailable.flac");
 
 /// Metadata for a finalized Pi recording.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,9 +70,8 @@ pub fn embedded_tone_bytes(tone: BuiltinTone) -> Result<&'static [u8], AudioErro
     match tone {
         BuiltinTone::DialTone => Ok(DIAL_TONE_FLAC),
         BuiltinTone::Beep => Ok(BEEP_FLAC),
-        BuiltinTone::LineBusy => Err(AudioError::Unsupported(
-            "line-busy tone is not bundled yet".into(),
-        )),
+        BuiltinTone::LineBusy => Ok(LINE_BUSY_FLAC),
+        BuiltinTone::CallUnavailable => Ok(CALL_UNAVAILABLE_FLAC),
     }
 }
 
@@ -190,7 +191,7 @@ impl AudioSink for PiAudioSink {
             let playable = match source {
                 AudioRef::Builtin(tone) => PlayableAudio {
                     samples: decode_audio_bytes(embedded_tone_bytes(tone)?)?,
-                    repeat: tone == BuiltinTone::DialTone,
+                    repeat: matches!(tone, BuiltinTone::DialTone | BuiltinTone::LineBusy),
                 },
                 AudioRef::RemoteUrl(url, expected_sha256) => {
                     let safe_url = redact_url(&url);

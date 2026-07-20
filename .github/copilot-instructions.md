@@ -307,9 +307,10 @@ when its config and the Release PR title disagree. Past regressions
   ADR. See ADR 0003.
 - Rotary pulses: 10 pulses = digit 0. More than 10 in a single group resets
   to `DialTone`. Pulse-group timeout is 350 ms (`PULSE_GROUP_TIMEOUT_MS`).
-- Digit 1 → random question. Digit 2 → random message. Digits 0, 3–9 → the
-  operator-recorded `Instructions` clip. Keep these mappings stable; UX is
-  documented to operators.
+- Digit 1 → random question. Digit 2 → random message. Digit 0 → the
+  operator-recorded `Instructions` clip. Digits 3–9 → the bundled
+  "call cannot be completed as dialed" prompt (`BuiltinTone::CallUnavailable`).
+  Keep these mappings stable; UX is documented to operators.
 
 ## Tooling cheat sheet
 

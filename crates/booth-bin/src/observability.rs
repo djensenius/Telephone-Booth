@@ -551,6 +551,7 @@ fn state_name_to_booth_status(name: &str) -> booth_hal::BoothStatus {
         "uploading" | "Uploading" => BoothStatus::Uploading,
         "playing_message" | "PlayingMessage" => BoothStatus::PlayingMessage,
         "playing_instructions" | "PlayingInstructions" => BoothStatus::PlayingInstructions,
+        "call_unavailable" | "CallUnavailable" => BoothStatus::CallUnavailable,
         // Conservative fallback: if we see an unknown state name, report Idle
         // rather than panicking. The operator treats unknown states gracefully.
         _ => BoothStatus::Idle,

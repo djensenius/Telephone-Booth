@@ -101,8 +101,10 @@ pub enum State {
     },
     /// Playing a randomly chosen, previously-approved message (dial 2).
     PlayingMessage,
-    /// Playing the instructions prompt (dial 3+).
+    /// Playing the instructions prompt (dial 0).
     PlayingInstructions,
+    /// Playing the "call cannot be completed as dialed" prompt (dial 3-9).
+    CallUnavailable,
     /// A non-fatal error happened; the runtime should reset us back to
     /// `Idle` on the next `HookOn`. `reason` is short, human-readable.
     Error {
@@ -123,6 +125,7 @@ impl State {
             State::FinishingRecording { .. } | State::Uploading { .. } => BoothStatus::Uploading,
             State::PlayingMessage => BoothStatus::PlayingMessage,
             State::PlayingInstructions => BoothStatus::PlayingInstructions,
+            State::CallUnavailable => BoothStatus::CallUnavailable,
             State::Error { .. } => BoothStatus::Idle,
         }
     }
@@ -141,6 +144,7 @@ impl State {
             State::Uploading { .. } => "uploading",
             State::PlayingMessage => "playing_message",
             State::PlayingInstructions => "playing_instructions",
+            State::CallUnavailable => "call_unavailable",
             State::Error { .. } => "error",
         }
     }
@@ -204,6 +208,15 @@ pub enum Event {
         /// Diagnostic message.
         reason: String,
     },
+    /// Operator returned the current instructions clip (for the runtime to
+    /// start playing).
+    InstructionsReady,
+    /// Operator could not give us an instructions clip (none uploaded,
+    /// transport error).
+    InstructionsFailed {
+        /// Diagnostic message.
+        reason: String,
+    },
     /// A periodic tick from the runtime, used (only) to time out pulse groups.
     Tick,
 }
@@ -237,6 +250,8 @@ pub enum Effect {
     FetchRandomQuestion,
     /// Ask the operator for a random approved message.
     FetchRandomMessage,
+    /// Ask the operator for the current admin-uploaded instructions clip.
+    FetchInstructions,
     /// Push our current coarse status to the operator.
     PutStatus(BoothStatus),
     /// Reset the pulse-group timeout to fire `Tick` after
@@ -512,7 +527,34 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
         ),
 
         // ---- Instructions ----
+        (S::DialTone, E::InstructionsReady) => (
+            S::PlayingInstructions,
+            vec![
+                Effect::Play(AudioRef::RemoteUrl(String::new(), None)), // runtime fills in URL
+                Effect::PutStatus(BoothStatus::PlayingInstructions),
+            ],
+        ),
+        (S::DialTone, E::InstructionsFailed { reason }) => (
+            S::Error {
+                reason: reason.clone(),
+            },
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy)),
+                Effect::Log {
+                    message: alloc::format!("instructions fetch failed: {reason}"),
+                },
+            ],
+        ),
         (S::PlayingInstructions, E::PlaybackEnded) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
+        ),
+
+        // ---- Call unavailable (dial 3-9) ----
+        (S::CallUnavailable, E::PlaybackEnded) => (
             S::DialTone,
             vec![
                 Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
@@ -537,13 +579,18 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
             State::DialTone,
             vec![Effect::FetchRandomMessage, Effect::CancelPulseTimeout],
         ),
-        3..=9 | 0 => (
-            State::PlayingInstructions,
+        3..=9 => (
+            State::CallUnavailable,
             vec![
-                Effect::Play(AudioRef::LocalFile("Instructions.flac".to_string())),
+                Effect::Play(AudioRef::Builtin(BuiltinTone::CallUnavailable)),
                 Effect::CancelPulseTimeout,
-                Effect::PutStatus(BoothStatus::PlayingInstructions),
+                Effect::PutStatus(BoothStatus::CallUnavailable),
             ],
+        ),
+        0 => (
+            // Stay in DialTone until the operator hands us the instructions clip.
+            State::DialTone,
+            vec![Effect::FetchInstructions, Effect::CancelPulseTimeout],
         ),
         _ => {
             return (
@@ -559,7 +606,8 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
     let action = match digit {
         1 => "fetching a random question",
         2 => "fetching a random message",
-        _ => "playing operator instructions",
+        0 => "fetching the operator instructions clip",
+        _ => "playing the call-cannot-be-completed prompt",
     };
     effects.insert(
         0,
@@ -750,22 +798,67 @@ mod tests {
         }
         assert_eq!(s, State::Dialing { pulses: 3 });
         let (s2, effects) = handle(s, Event::Tick);
-        assert_eq!(s2, State::PlayingInstructions);
+        assert_eq!(s2, State::CallUnavailable);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Play(AudioRef::Builtin(BuiltinTone::CallUnavailable))
+        )));
+    }
+
+    #[test]
+    fn call_unavailable_playback_returns_to_dial_tone() {
+        let (s, effects) = handle(State::CallUnavailable, Event::PlaybackEnded);
+        assert_eq!(s, State::DialTone);
         assert!(
             effects
                 .iter()
-                .any(|e| matches!(e, Effect::Play(AudioRef::LocalFile(_))))
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
         );
     }
 
     #[test]
-    fn ten_pulses_decodes_to_zero_which_plays_instructions() {
+    fn ten_pulses_decodes_to_zero_which_fetches_instructions() {
         let mut s = State::DialTone;
         for _ in 0..10 {
             (s, _) = handle(s, Event::RotaryPulse);
         }
-        let (s2, _) = handle(s, Event::Tick);
-        assert_eq!(s2, State::PlayingInstructions);
+        let (s2, effects) = handle(s, Event::Tick);
+        assert_eq!(s2, State::DialTone);
+        assert!(effects.contains(&Effect::FetchInstructions));
+    }
+
+    #[test]
+    fn instructions_ready_plays_remote_then_returns_to_dial_tone() {
+        let (s, effects) = handle(State::DialTone, Event::InstructionsReady);
+        assert_eq!(s, State::PlayingInstructions);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::RemoteUrl(_, _))))
+        );
+        let (s2, effects2) = handle(s, Event::PlaybackEnded);
+        assert_eq!(s2, State::DialTone);
+        assert!(
+            effects2
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
+        );
+    }
+
+    #[test]
+    fn instructions_failure_plays_line_busy() {
+        let (s, effects) = handle(
+            State::DialTone,
+            Event::InstructionsFailed {
+                reason: "boom".into(),
+            },
+        );
+        assert!(matches!(s, State::Error { .. }));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy))))
+        );
     }
 
     #[test]
