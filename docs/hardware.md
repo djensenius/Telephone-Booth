@@ -4,6 +4,44 @@ The Rust client targets a Raspberry Pi (any model with the 40-pin header) with
 a **USB-Audio-Class 2.0** audio interface plugged in — a Focusrite Scarlett
 Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
+## Cable and connector conventions
+
+**This project terminates every 8P8C / RJ45 connector to `T568B`.** That applies
+to real network drops *and* to the Cat5e/Cat6 runs this build repurposes as
+multi-conductor cable for GPIO, handset audio, and 5 V power. Every wiring table
+in this document names conductors by their T568B colour.
+
+T568B pin order, pin 1 → 8 (holding the plug with the contacts facing you, the
+latch pointing down, and the cable running away from you, pin 1 is on the left):
+
+| Pin | Conductor    | Pair            |
+| --- | ------------ | --------------- |
+| 1   | white-orange | Pair 2 (orange) |
+| 2   | orange       | Pair 2 (orange) |
+| 3   | white-green  | Pair 3 (green)  |
+| 4   | blue         | Pair 1 (blue)   |
+| 5   | white-blue   | Pair 1 (blue)   |
+| 6   | green        | Pair 3 (green)  |
+| 7   | white-brown  | Pair 4 (brown)  |
+| 8   | brown        | Pair 4 (brown)  |
+
+Notes:
+
+- **Both ends get T568B**, giving a straight-through cable. Terminating one end
+  T568A and the other T568B yields a crossover, which will silently break the
+  pair assignments in the audio and power tables below.
+- **T568A and T568B are electrically identical** — the choice is pure
+  convention. T568B is the prevailing convention in North America, so it is what
+  this build standardises on. Do not mix the two within the booth.
+- The only difference is that the orange and green pairs swap places. Pins 4, 5,
+  7, and 8 are the same in both schemes.
+- Pin numbers used in the wiring tables below are RJ45 pin numbers under this
+  scheme. The
+  [audio + 5 V run](#running-audio--5-v-to-the-booth-over-one-ethernet-cable)
+  puts each handset signal on its own twisted pair (blue and green) and gives
+  5 V the orange pair, so that power return current never shares an audio
+  ground.
+
 ## Rotary phone wiring
 
 The reference booth is built from a vintage **three-slot coin payphone**
@@ -165,7 +203,8 @@ over a **second, dedicated Ethernet cable** (separate from the audio + 5 V run).
   position.
 - **white = hook.** Its return shares the single common (blue) ground rail.
 
-**Landing on the Pi over the second Ethernet cable (T568B colours):**
+**Landing on the Pi over the second Ethernet cable
+([T568B](#cable-and-connector-conventions) colours):**
 
 | Wire  | Function          | Ethernet conductor | Pi-side termination            |
 | ----- | ----------------- | ------------------ | ------------------------------ |
@@ -279,7 +318,8 @@ return current from sharing an audio ground.
 
 Five solid AWG leads land on the booth side: `green` ×2 (ground), `red` (5 V),
 `blue` (**T** — receiver / audio *out*), and `black` (**TR** — transmitter /
-audio *in*). Map them to the Ethernet conductors by **T568B** colour:
+audio *in*). Map them to the Ethernet conductors by
+**[T568B](#cable-and-connector-conventions)** colour:
 
 | Booth lead (AWG)      | Function                | Ethernet pair | Ethernet conductor (T568B) | RJ45 pin |
 | --------------------- | ----------------------- | ------------- | -------------------------- | -------- |
