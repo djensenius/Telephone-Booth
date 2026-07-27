@@ -4,6 +4,67 @@ The Rust client targets a Raspberry Pi (any model with the 40-pin header) with
 a **USB-Audio-Class 2.0** audio interface plugged in — a Focusrite Scarlett
 Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
+## Cable and connector conventions
+
+**This project terminates every 8P8C / RJ45 connector to `T568B`.** That applies
+to real network drops *and* to the Cat5e/Cat6 runs this build repurposes as
+multi-conductor cable for GPIO, handset audio, and 5 V power. Every wiring table
+in this document names conductors by their T568B colour.
+
+T568B pin order, pin 1 → 8 (holding the plug with the contacts facing you, the
+latch pointing down, and the cable running away from you, pin 1 is on the left):
+
+| Pin | Conductor    | Pair            |
+| --- | ------------ | --------------- |
+| 1   | white-orange | Pair 2 (orange) |
+| 2   | orange       | Pair 2 (orange) |
+| 3   | white-green  | Pair 3 (green)  |
+| 4   | blue         | Pair 1 (blue)   |
+| 5   | white-blue   | Pair 1 (blue)   |
+| 6   | green        | Pair 3 (green)  |
+| 7   | white-brown  | Pair 4 (brown)  |
+| 8   | brown        | Pair 4 (brown)  |
+
+Notes:
+
+- **Both ends get T568B**, giving a straight-through cable. Terminating one end
+  T568A and the other T568B yields a crossover, which will silently break the
+  pair assignments in the audio and power tables below.
+- **T568A and T568B are electrically identical** — the choice is pure
+  convention. T568B is the prevailing convention in North America, so it is what
+  this build standardises on. Do not mix the two within the booth.
+- The only difference is that the orange and green pairs swap places. Pins 4, 5,
+  7, and 8 are the same in both schemes.
+- Pin numbers used in the wiring tables below are RJ45 pin numbers under this
+  scheme. The
+  [audio + 5 V run](#running-audio--5-v-to-the-booth-over-one-ethernet-cable)
+  puts each handset signal on its own twisted pair (blue and green) and gives
+  5 V the orange pair, so that power return current never shares an audio
+  ground.
+
+### The booth runs are not Ethernet — never patch them into a network
+
+Two of the cables described in this document are Cat5e/Cat6 with 8P8C plugs on
+both ends, but carry **DC power, unbalanced analog audio, and switch contacts**
+rather than Ethernet: the
+[audio + 5 V run](#running-audio--5-v-to-the-booth-over-one-ethernet-cable) and
+the [dial + hook run](#as-built-dial--hook-wiring-reference-booth). They are
+physically indistinguishable from a patch lead. Treat them as a hazard:
+
+- **Never plug a booth run into a switch, NIC, router, or patch panel**, and
+  never plug a real network cable into a booth-side jack. Pins 1–2 and 3–6 are
+  differential signal pairs on real Ethernet; a booth run puts a DC supply and
+  GPIO contacts across them. That can destroy the Pi, the supply, and the
+  network device at once.
+- **A PoE port is worse.** PoE will push up to 48 V down the cable into GPIO
+  pins and audio inputs rated for 3.3 V.
+- **Label both ends unmistakably** and keep the booth runs physically separated
+  from any real network drop. A distinct cable colour, or a non-RJ45 connector
+  such as an M12 or XLR shell, is strongly preferred over relying on a label.
+- If a jack for one of these runs is exposed on the outside of an enclosure, it
+  reads as a network port to anyone who has not read this document. Recess it,
+  key it, or use a connector that cannot mate with Ethernet.
+
 ## Rotary phone wiring
 
 The reference booth is built from a vintage **three-slot coin payphone**
@@ -143,6 +204,60 @@ pin matrix), either:
 See [`simulator.md`](simulator.md#read-only-hardware-monitor---tui) and
 [`simulator.md`](simulator.md#monitor-vs-web-pin-matrix).
 
+### As-built dial + hook wiring (reference booth)
+
+This records the actual, meter-verified wiring of the reference booth's
+`P-13E961` dial and switchhook, and how the four leads are carried to the Pi
+over a **second, dedicated Ethernet cable** (separate from the audio + 5 V run).
+
+**Contact decode (verified with a multimeter):**
+
+| Wire  | Phone terminal | Continuity behaviour (meter)                          | Function            |
+| ----- | -------------- | ----------------------------------------------------- | ------------------- |
+| blue  | **W**          | shared common across *both* contact sets              | common → ground     |
+| red   | **BB**         | closed at rest, opens while dialling                  | rotary pulse (NC)   |
+| green | —              | open at rest, closed *only* while wheel is off rest   | rotary gate (off-normal) |
+| white | —              | switchhook leaf contact                               | hook                |
+
+- **blue is the common.** It reads through both the pulse pair (blue+red) and
+  the gate pair (blue+green), so it is the shared node that lands on Pi `GND`.
+- **red = pulse** — blue+red beeps at rest and opens as the wheel returns.
+- **green = gate** — blue+green beeps *only* while the wheel is off its rest
+  position.
+- **white = hook.** Its return shares the single common (blue) ground rail.
+
+**Landing on the Pi over the second Ethernet cable
+([T568B](#cable-and-connector-conventions) colours):**
+
+> **⚠️ This cable carries GPIO switch contacts, not Ethernet.** Never patch it
+> into a switch, NIC, or PoE port — see
+> [The booth runs are not Ethernet](#the-booth-runs-are-not-ethernet--never-patch-them-into-a-network).
+
+| Wire  | Function          | Ethernet conductor | Pi-side termination            |
+| ----- | ----------------- | ------------------ | ------------------------------ |
+| white | Hook              | blue               | `IO17` (`hook_bcm = 17`)       |
+| red   | Pulse             | orange             | `IO22` — see config note below |
+| green | Gate (optional)   | green              | `IO27` — see config note below |
+| blue  | Common → ground   | white-blue         | any `GND`                      |
+
+> **Non-default pin mapping.** The reference booth lands **pulse (red) on IO22**
+> and **gate (green) on IO27** — the *opposite* of the code defaults
+> (`rotary_pulse_bcm = 27`, `rotary_gate_bcm = 22`). You **must** swap the config
+> to match, or dialling will not decode:
+>
+> ```toml
+> [gpio]
+> hook_bcm         = 17   # white
+> rotary_pulse_bcm = 22   # red   — pulse contact
+> rotary_gate_bcm  = 27   # green  — gate (off-normal), optional
+> ```
+
+Only **hook** (white) + **pulse** (red) + **ground** (blue) are required to
+dial; **gate** (green) is optional debug telemetry. Bring the booth up with the
+[debug pin matrix](debug-panel.md) open and dial `0` — you should see **10
+pulses** on the pulse pin. If pulse reads inverted, flip
+`gpio.invert.rotary_pulse`.
+
 ## Handset transmitter and receiver
 
 The mouthpiece **transmitter** and the earpiece **receiver** are two *different*
@@ -184,15 +299,21 @@ rough order of audio quality (and increasing departure from "all original"):
 Set the interface input gain per [Microphone level](#microphone-level) once the
 element is chosen.
 
-> **Reference-booth note (carbon on a USB dongle).** In practice the original
-> carbon element passed usable, intelligible voice on a generic C-Media USB
-> dongle's **plug-in bias alone** — no external bias circuit (option 4) — once
-> the capture gain was pushed near the top of its range (~+17 dB) and the
+> **Historical note (carbon on a USB dongle — superseded).** During bring-up the
+> original carbon element passed usable, intelligible voice on a generic C-Media
+> USB dongle's **plug-in bias alone** — no external bias circuit (option 4) —
+> once the capture gain was pushed near the top of its range (~+17 dB) and the
 > dongle's **Auto Gain Control was turned off** (AGC pumps the noise floor up
-> on a quiet carbon source). It is still lo-fi and level varies as the granules
-> pack, but it works. Those mixer levels are now applied automatically at
-> startup via the [`[audio.mixer]`](configuration.md#startup-alsa-mixer) config
-> block so they survive reboots.
+> on a quiet carbon source). It was still lo-fi and level varied as the granules
+> packed. Those mixer levels are applied automatically at startup via the
+> [`[audio.mixer]`](configuration.md#startup-alsa-mixer) config block so they
+> survive reboots.
+>
+> **The booth no longer runs this way.** The handset path is now an electret
+> element into a `MAX9814` preamp — see
+> [As-built MAX9814 mic wiring](#as-built-max9814-mic-wiring). This note is kept
+> because the carbon-direct result is what makes option 3 viable if you are
+> reproducing the booth with a period element and no preamp.
 
 ### Receiver (earpiece) quality and level
 
@@ -217,6 +338,113 @@ drive them **directly**, just quietly. To dial in level and quality:
 
 Keep playback levels modest into an original receiver — a high-power speaker amp
 can cook a vintage voice-coil.
+
+## Running audio + 5 V to the booth over one Ethernet cable
+
+The handset audio and a 5 V supply for any in-booth electronics (an electret mic
+preamp, a small receiver amp, etc.) can all share a single **Cat5e/Cat6**
+run between the electronics box and the phone. Cat cable is four **twisted
+pairs** (eight conductors); the twist is what rejects hum and crosstalk, so the
+schema below keeps each audio signal in its *own* pair alongside a ground
+return, and gives 5 V its own pair too. That "audio-first" layout stops power
+return current from sharing an audio ground.
+
+> **⚠️ This cable carries DC and analog audio, not Ethernet.** Pins 1–2 hold the
+> supply. Never patch it into a switch, NIC, or PoE port — see
+> [The booth runs are not Ethernet](#the-booth-runs-are-not-ethernet--never-patch-them-into-a-network).
+
+Five solid AWG leads land on the booth side: `green` ×2 (ground), `red` (5 V),
+`blue` (**T** — receiver / audio *out*), and `black` (**TR** — transmitter /
+audio *in*). Map them to the Ethernet conductors by
+**[T568B](#cable-and-connector-conventions)** colour:
+
+| Booth lead (AWG)      | Function                | Ethernet pair | Ethernet conductor (T568B) | RJ45 pin |
+| --------------------- | ----------------------- | ------------- | -------------------------- | -------- |
+| `blue`                | **T** — receiver (out)  | Pair 1 (blue) | blue                       | 4        |
+| `green` #1            | ground (return for T)   | Pair 1 (blue) | white-blue                 | 5        |
+| `black`               | **TR** — transmitter (in) | Pair 3 (green) | green                    | 6        |
+| `green` #2            | ground (return for TR)  | Pair 3 (green) | white-green                | 3        |
+| `red`                 | 5 V                     | Pair 2 (orange) | orange                   | 2        |
+| — (bond to GND bus)   | 5 V return              | Pair 2 (orange) | white-orange             | 1        |
+| — (spare)             | spare / power parallel  | Pair 4 (brown) | white-brown, brown         | 7, 8     |
+
+Notes:
+
+- **Each audio line gets a full twisted pair.** `blue`/**T** rides the blue pair
+  with a ground on its partner conductor; `black`/**TR** rides the green pair the
+  same way. The twist keeps the mic and earpiece signals quiet.
+- **5 V has its own pair.** You only have two `green` ground leads (both used as
+  audio returns), so the 5 V return is the orange pair's `white-orange`
+  conductor — tie it into the common ground bus at **both** ends. That gives the
+  power a twisted return without borrowing an audio ground.
+- **Long run or a hungry 5 V load?** Parallel the spare brown pair with the power
+  pair — `brown` + `orange` = 5 V, `white-brown` + `white-orange` = ground — to
+  roughly halve the supply resistance and voltage drop.
+- **Keep the RJ45 shell / drain (if the cable is shielded) on ground at one end
+  only** to avoid a ground loop.
+- Confirm polarity and continuity end-to-end with a multimeter before powering
+  up; T/TR are defined in
+  [Handset transmitter and receiver](#handset-transmitter-and-receiver).
+
+### Landing it on the Pi side (USB dongle build)
+
+The reference build terminates the audio leads on a **generic USB audio dongle**
+with two 3.5 mm breakouts — one **mic** jack and one **speaker** jack, each
+broken out to L / R / ground. The dongle is mono per capsule and its two jacks
+share a common internal ground, so the two `green` returns simply land on each
+jack's sleeve:
+
+| Booth lead            | Ethernet conductor | Pi-side termination                     |
+| --------------------- | ------------------ | --------------------------------------- |
+| `blue` — **T** (out)  | blue               | Speaker breakout **tip** (L)            |
+| `green` #1 (T return) | white-blue         | Speaker breakout **ground / sleeve**    |
+| `black` — **TR** (in) | green              | Mic breakout **tip** (L)                |
+| `green` #2 (TR return)| white-green        | Mic breakout **ground / sleeve**        |
+| `red` — power         | orange             | Pi header 3.3 V (phys 1) — see note     |
+| power return          | white-orange       | Pi header `GND` (phys 6/9/14/…)         |
+| spare                 | brown pair         | leave unterminated                      |
+
+> **Power-rail note.** The schema labels the `red` lead "5 V", but the reference
+> booth actually drives it from the Pi header's **3.3 V** rail (physical pin 1)
+> — enough for electret plug-in bias and similar low-draw needs. If a future
+> load genuinely needs 5 V, move `red` to physical pin 2/4 and re-check the
+> load's current against the Pi's shared 5 V budget. Either way the USB dongle
+> powers itself over USB; this lead is only for auxiliary in-booth electronics.
+
+### As-built MAX9814 mic wiring
+
+The working booth uses a `MAX9814` electret preamp in the handset path. The
+preamp sits **inside the booth**, powered over the Cat run's power pair, and its
+output drives the `black` / **TR** conductor back to the Pi. The full transmitter
+path is:
+
+```text
+electret element -> MAX9814 IN -> MAX9814 OUT -> black/TR conductor
+  (green wire, RJ45 pin 6) -> Pi side -> USB dongle mic breakout tip
+```
+
+Note that **`TR` names two different things** in this document: the handset's
+transmitter *terminal* (which lands on the mic element) and the `black`
+*conductor* in the Cat run (which carries the preamp's output). The preamp sits
+between them, which is why the
+[Pi-side table](#landing-it-on-the-pi-side-usb-dongle-build) lands `TR` straight
+on the dongle's mic tip — by that point the signal is already amplified.
+
+The final, verified terminations are:
+
+| Signal / terminal         | Wires to                                              |
+| ------------------------- | ----------------------------------------------------- |
+| **TR** (handset terminal) | Microphone (mic element)                              |
+| Mic element               | `MAX9814` **mic input**                               |
+| **OUT**                   | `black` / **TR** conductor of the Cat run             |
+| **L** (loopback)          | Audio loopback into the `MAX9814` **mic inputs**      |
+| **V+**                    | Cat run power pair → Pi header **3.3 V**              |
+| **Pi GND** (star node)    | Both the **audio ground** *and* the **3.3 V ground**  |
+
+The single Pi ground is the common star-ground node: the audio return and the
+3.3 V supply return both land on it, which is what finally killed the floating-
+ground hum during bring-up. Keep the mic run as short as practical to the
+preamp to minimise mains pickup.
 
 ## USB audio device
 

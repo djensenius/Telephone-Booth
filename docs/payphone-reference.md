@@ -96,6 +96,20 @@ The `P-13E961` dial has two contact sets that matter:
   them for debugging but does **not** need them to decode digits (see
   [`hardware.md`](hardware.md#rotary-phone-wiring)).
 
+**As wired in the reference booth** (meter-verified — colours/terminals vary by
+set, so always re-check yours):
+
+| Wire  | Dial terminal | Continuity behaviour                                | Function        |
+| ----- | ------------- | --------------------------------------------------- | --------------- |
+| blue  | `W`           | shared common across both contact sets              | common → ground |
+| red   | `BB`          | closed at rest, opens while dialling                | pulse (impulse) |
+| green | —             | open at rest, closed only while wheel is off rest   | gate (off-normal) |
+
+Because `blue` reads through both the pulse pair (blue+red) and the gate pair
+(blue+green), it is the shared common that lands on Pi `GND`. See
+[`hardware.md`](hardware.md#as-built-dial--hook-wiring-reference-booth) for the
+full Pi-side termination and the (non-default) `IO22`/`IO27` pin mapping.
+
 ### Switch-hook
 
 A leaf-spring contact pile-up on the back plate, operated by the handset cradle.
