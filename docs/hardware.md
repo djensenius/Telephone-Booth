@@ -299,15 +299,21 @@ rough order of audio quality (and increasing departure from "all original"):
 Set the interface input gain per [Microphone level](#microphone-level) once the
 element is chosen.
 
-> **Reference-booth note (carbon on a USB dongle).** In practice the original
-> carbon element passed usable, intelligible voice on a generic C-Media USB
-> dongle's **plug-in bias alone** — no external bias circuit (option 4) — once
-> the capture gain was pushed near the top of its range (~+17 dB) and the
+> **Historical note (carbon on a USB dongle — superseded).** During bring-up the
+> original carbon element passed usable, intelligible voice on a generic C-Media
+> USB dongle's **plug-in bias alone** — no external bias circuit (option 4) —
+> once the capture gain was pushed near the top of its range (~+17 dB) and the
 > dongle's **Auto Gain Control was turned off** (AGC pumps the noise floor up
-> on a quiet carbon source). It is still lo-fi and level varies as the granules
-> pack, but it works. Those mixer levels are now applied automatically at
-> startup via the [`[audio.mixer]`](configuration.md#startup-alsa-mixer) config
-> block so they survive reboots.
+> on a quiet carbon source). It was still lo-fi and level varied as the granules
+> packed. Those mixer levels are applied automatically at startup via the
+> [`[audio.mixer]`](configuration.md#startup-alsa-mixer) config block so they
+> survive reboots.
+>
+> **The booth no longer runs this way.** The handset path is now an electret
+> element into a `MAX9814` preamp — see
+> [As-built MAX9814 mic wiring](#as-built-max9814-mic-wiring). This note is kept
+> because the carbon-direct result is what makes option 3 viable if you are
+> reproducing the booth with a period element and no preamp.
 
 ### Receiver (earpiece) quality and level
 
@@ -408,14 +414,32 @@ jack's sleeve:
 ### As-built MAX9814 mic wiring
 
 The working booth uses a `MAX9814` electret preamp in the handset path. The
-final, verified terminations are:
+preamp sits **inside the booth**, powered over the Cat run's power pair, and its
+output drives the `black` / **TR** conductor back to the Pi. The full transmitter
+path is:
 
-| Signal / terminal      | Wires to                                              |
-| ---------------------- | ----------------------------------------------------- |
-| **TR**                 | Microphone (mic element)                              |
-| **L** (loopback)       | Audio loopback into the `MAX9814` **mic inputs**      |
-| **V+**                 | Pi header **3.3 V**                                   |
-| **Pi GND** (star node) | Both the **audio ground** *and* the **3.3 V ground**  |
+```text
+electret element -> MAX9814 IN -> MAX9814 OUT -> black/TR conductor
+  (green wire, RJ45 pin 6) -> Pi side -> USB dongle mic breakout tip
+```
+
+Note that **`TR` names two different things** in this document: the handset's
+transmitter *terminal* (which lands on the mic element) and the `black`
+*conductor* in the Cat run (which carries the preamp's output). The preamp sits
+between them, which is why the
+[Pi-side table](#landing-it-on-the-pi-side-usb-dongle-build) lands `TR` straight
+on the dongle's mic tip — by that point the signal is already amplified.
+
+The final, verified terminations are:
+
+| Signal / terminal         | Wires to                                              |
+| ------------------------- | ----------------------------------------------------- |
+| **TR** (handset terminal) | Microphone (mic element)                              |
+| Mic element               | `MAX9814` **mic input**                               |
+| **OUT**                   | `black` / **TR** conductor of the Cat run             |
+| **L** (loopback)          | Audio loopback into the `MAX9814` **mic inputs**      |
+| **V+**                    | Cat run power pair → Pi header **3.3 V**              |
+| **Pi GND** (star node)    | Both the **audio ground** *and* the **3.3 V ground**  |
 
 The single Pi ground is the common star-ground node: the audio return and the
 3.3 V supply return both land on it, which is what finally killed the floating-
