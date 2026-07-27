@@ -42,6 +42,29 @@ Notes:
   5 V the orange pair, so that power return current never shares an audio
   ground.
 
+### The booth runs are not Ethernet — never patch them into a network
+
+Two of the cables described in this document are Cat5e/Cat6 with 8P8C plugs on
+both ends, but carry **DC power, unbalanced analog audio, and switch contacts**
+rather than Ethernet: the
+[audio + 5 V run](#running-audio--5-v-to-the-booth-over-one-ethernet-cable) and
+the [dial + hook run](#as-built-dial--hook-wiring-reference-booth). They are
+physically indistinguishable from a patch lead. Treat them as a hazard:
+
+- **Never plug a booth run into a switch, NIC, router, or patch panel**, and
+  never plug a real network cable into a booth-side jack. Pins 1–2 and 3–6 are
+  differential signal pairs on real Ethernet; a booth run puts a DC supply and
+  GPIO contacts across them. That can destroy the Pi, the supply, and the
+  network device at once.
+- **A PoE port is worse.** PoE will push up to 48 V down the cable into GPIO
+  pins and audio inputs rated for 3.3 V.
+- **Label both ends unmistakably** and keep the booth runs physically separated
+  from any real network drop. A distinct cable colour, or a non-RJ45 connector
+  such as an M12 or XLR shell, is strongly preferred over relying on a label.
+- If a jack for one of these runs is exposed on the outside of an enclosure, it
+  reads as a network port to anyone who has not read this document. Recess it,
+  key it, or use a connector that cannot mate with Ethernet.
+
 ## Rotary phone wiring
 
 The reference booth is built from a vintage **three-slot coin payphone**
@@ -206,6 +229,10 @@ over a **second, dedicated Ethernet cable** (separate from the audio + 5 V run).
 **Landing on the Pi over the second Ethernet cable
 ([T568B](#cable-and-connector-conventions) colours):**
 
+> **⚠️ This cable carries GPIO switch contacts, not Ethernet.** Never patch it
+> into a switch, NIC, or PoE port — see
+> [The booth runs are not Ethernet](#the-booth-runs-are-not-ethernet--never-patch-them-into-a-network).
+
 | Wire  | Function          | Ethernet conductor | Pi-side termination            |
 | ----- | ----------------- | ------------------ | ------------------------------ |
 | white | Hook              | blue               | `IO17` (`hook_bcm = 17`)       |
@@ -315,6 +342,10 @@ pairs** (eight conductors); the twist is what rejects hum and crosstalk, so the
 schema below keeps each audio signal in its *own* pair alongside a ground
 return, and gives 5 V its own pair too. That "audio-first" layout stops power
 return current from sharing an audio ground.
+
+> **⚠️ This cable carries DC and analog audio, not Ethernet.** Pins 1–2 hold the
+> supply. Never patch it into a switch, NIC, or PoE port — see
+> [The booth runs are not Ethernet](#the-booth-runs-are-not-ethernet--never-patch-them-into-a-network).
 
 Five solid AWG leads land on the booth side: `green` ×2 (ground), `red` (5 V),
 `blue` (**T** — receiver / audio *out*), and `black` (**TR** — transmitter /
