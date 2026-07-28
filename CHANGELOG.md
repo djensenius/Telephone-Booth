@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.2](https://github.com/djensenius/Telephone-Booth/compare/v0.8.1...v0.8.2) (2026-07-28)
+
+
+### Bug Fixes
+
+* treat hanging up as a full booth reset ([e282281](https://github.com/djensenius/Telephone-Booth/commit/e282281e3f9f384ae2e16ff176b982a0b2c2d3a7))
+
+
+### Documentation
+
+* record as-built wiring and standardise RJ45 on T568B ([#124](https://github.com/djensenius/Telephone-Booth/issues/124)) ([c10a113](https://github.com/djensenius/Telephone-Booth/commit/c10a1131909e4c012e8eb1c66dea543306a486ad))
+
 ## [0.8.1](https://github.com/djensenius/Telephone-Booth/compare/v0.8.0...v0.8.1) (2026-07-20)
 
 
