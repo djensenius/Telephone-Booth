@@ -20,9 +20,10 @@ you can paste the commands verbatim.
 > **Architecture warning.** The mise route assumes **64-bit Raspberry Pi OS
 > (`arm64`)**. Several of these projects publish no 32-bit ARM binaries at all
 > — `neovim`, `tmux`, `atuin`, `zellij`, and `herdr` ship `aarch64` Linux
-> assets only — so on `armhf` those `mise install` steps will fail or fetch an
-> unusable binary. The `armhf` column below lists what actually works on 32-bit
-> Pi OS; prefer apt there, or run the 64-bit OS.
+> assets only, and mise's `eza` package resolves only `amd64`/`arm64` — so on
+> `armhf` those `mise install` steps will fail or fetch an unusable binary.
+> The `armhf` column below lists what actually works on 32-bit Pi OS; prefer
+> apt there, or run the 64-bit OS.
 
 ## Summary
 
@@ -32,7 +33,7 @@ you can paste the commands verbatim.
 | `tmux` | Yes — Raspberry Pi OS (Debian) | mise (`tmux@latest`) | apt only |
 | `bat` | Yes — Raspberry Pi OS (Debian) | mise (`bat@latest`) | mise or apt |
 | `mise` | Yes — official apt repo | apt repo below | apt repo below |
-| `eza` | Yes — official apt repo (`deb.gierens.de`) | apt repo below | apt repo below |
+| `eza` | Yes — Pi OS 13+, or upstream apt repo | mise (`eza@latest`) | apt |
 | `neovim` (latest) | No arm apt/`.deb` | mise | none — apt's stale build |
 | `starship` | No | mise | mise |
 | `atuin` | No | mise | none |
@@ -108,10 +109,33 @@ Then activate it in your shell (fish shown; see the mise docs for bash/zsh):
 echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 ```
 
-### eza — official apt repo (`deb.gierens.de`)
+### eza
 
-[`eza`](https://github.com/eza-community/eza) is only in very recent Debian
-releases, but the maintainers run an apt repo with `arm64` and `armhf` builds:
+On `arm64`, install `eza` with mise like the other Rust tools — it is in the
+mise registry and tracks upstream releases:
+
+```sh
+mise use -g eza@latest
+```
+
+Two apt alternatives, both of which also cover 32-bit `armhf` (mise's `eza`
+package only maps `linux/amd64` and `linux/arm64`, so it will not resolve on
+`armhf`):
+
+**Raspberry Pi OS 13 (trixie) and newer** ship `eza` directly:
+
+```sh
+sudo apt install -y eza
+```
+
+That build lags upstream (trixie has 0.21.x), so prefer mise if you want the
+newest release.
+
+**Older Pi OS (bookworm)** has no `eza` package. Use `deb.gierens.de`, which
+is the Debian route documented in eza's own
+[`INSTALL.md`](https://github.com/eza-community/eza/blob/main/INSTALL.md) —
+the repo is run by an eza maintainer and its signing key is served from the
+upstream repository:
 
 ```sh
 sudo apt update
@@ -163,8 +187,8 @@ sudo dpkg -i git-delta_VERSION_arm64.deb
 ## The Raspberry Pi mise config
 
 [`packaging/raspberry-pi/mise.toml`](../packaging/raspberry-pi/mise.toml)
-installs every tool above that lacks a good apt package and also pins
-`tmux`/`bat` to `latest`. It targets **64-bit Raspberry Pi OS (`arm64`)** —
+installs every tool above that lacks a good apt package, plus `tmux`, `bat`,
+and `eza` pinned to `latest`. It targets **64-bit Raspberry Pi OS (`arm64`)** —
 see the architecture warning at the top of this page before using it on a
 32-bit install. Install mise first (apt repo above), then:
 

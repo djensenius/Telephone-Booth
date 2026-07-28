@@ -36,7 +36,7 @@ bottom = "latest"   # provides the `btm` binary
 delta = "latest"    # git-delta
 herdr = "latest"    # agent multiplexer for the terminal
 
-# The following also has a first-class apt repo for Raspberry Pi OS and is
-# commonly installed that way (see docs/raspberry-pi-tools.md). Uncomment it
-# here if you would rather manage everything through mise instead.
-# eza = "latest"     # apt repo: deb.gierens.de
+# eza also has apt routes (Pi OS 13+ ships it; deb.gierens.de covers older
+# releases and armhf). mise tracks upstream more closely on arm64 — comment
+# this out and use apt if you would rather not manage it here.
+eza = "latest"
