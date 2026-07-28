@@ -143,6 +143,31 @@ fn frame_header_len(frame: &[u8]) -> Option<usize> {
     Some(FRAME_HEADER_PREFIX_LEN + coded_number_len + block_size_len + sample_rate_len + 1)
 }
 
+/// Checks that every frame boundary implied by `frame_lengths` really is one.
+///
+/// A frame must start with the sync code, parse as a header, and carry a
+/// CRC-8 that matches its own bytes. Requiring this for *all* frames before
+/// touching any of them means a bad offset makes the pass a no-op instead of
+/// letting it write garbage into the middle of the audio payload.
+fn frames_are_intact(encoded: &[u8], first_frame: usize, frame_lengths: &[usize]) -> bool {
+    let mut offset = first_frame;
+    for &len in frame_lengths {
+        let Some(frame) = encoded.get(offset..offset + len) else {
+            return false;
+        };
+        let Some(header_len) = frame_header_len(frame) else {
+            return false;
+        };
+        if frame.len() < header_len + FRAME_FOOTER_LEN
+            || frame[header_len - 1] != crc8(&frame[..header_len - 1])
+        {
+            return false;
+        }
+        offset += len;
+    }
+    true
+}
+
 /// Rewrites one frame in place. Returns `false` if the frame does not look
 /// like a `flacenc`-produced frame with an unspecified sample rate.
 fn rewrite_frame(frame: &mut [u8], code: u8) -> bool {
@@ -169,6 +194,9 @@ fn rewrite_frame(frame: &mut [u8], code: u8) -> bool {
 /// order; `flacenc` exposes these as `Frame::count_bits() >> 3`. Their sum is
 /// used to locate the first frame, so the metadata blocks never need parsing.
 ///
+/// The stream is validated in full before a single byte is written, so this
+/// either rewrites every frame or leaves `encoded` untouched.
+///
 /// Returns the number of frames rewritten. `0` means the stream was left
 /// byte-for-byte unchanged — either the rate has no fixed-width code, the
 /// lengths did not add up, or the frames were already explicit.
@@ -192,6 +220,13 @@ pub fn rewrite_frame_sample_rates(
     };
     if !encoded.starts_with(b"fLaC") {
         tracing::warn!("encoded FLAC stream is missing its magic number; skipping header rewrite");
+        return 0;
+    }
+    if !frames_are_intact(encoded, first_frame, frame_lengths) {
+        tracing::warn!(
+            "encoded FLAC frame boundaries did not validate; skipping header rewrite. \
+             Recordings will not play back under Apple CoreAudio"
+        );
         return 0;
     }
 
@@ -363,6 +398,44 @@ mod tests {
         }
         assert_eq!(offset, encoded.len(), "frame lengths must cover the stream");
         out
+    }
+
+    #[test]
+    fn misaligned_frame_lengths_leave_the_stream_untouched() {
+        let samples: Vec<i32> = (0..12_000).map(|i: i32| (i % 97) - 48).collect();
+        let (encoded, lengths) = encode(&samples, 1, 48_000);
+        let mut shifted = encoded.clone();
+        // Claim the first frame is one byte shorter than it is: every later
+        // boundary now lands inside the audio payload.
+        let mut bad = lengths.clone();
+        bad[0] -= 1;
+        assert_eq!(rewrite_frame_sample_rates(&mut shifted, &bad, 48_000), 0);
+        assert_eq!(shifted, encoded, "a bad offset must not corrupt the stream");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)] // Test signal is bounded well inside i32.
+    fn stereo_recordings_are_rewritten_and_still_decode() {
+        let samples: Vec<i32> = (0..60_000)
+            .map(|i| ((f64::from(i) / 13.0).sin() * 7000.0) as i32)
+            .collect();
+        let (mut encoded, lengths) = encode(&samples, 2, 44_100);
+        assert_eq!(
+            rewrite_frame_sample_rates(&mut encoded, &lengths, 44_100),
+            lengths.len()
+        );
+        for (index, (code, crcs_ok)) in inspect_frames(&encoded, &lengths).into_iter().enumerate() {
+            assert_eq!(code, 9, "frame {index} does not declare 44.1 kHz");
+            assert!(crcs_ok, "frame {index} has a stale CRC");
+        }
+        let mut reader = claxon::FlacReader::new(std::io::Cursor::new(encoded))
+            .expect("patched stereo stream parses");
+        assert_eq!(reader.streaminfo().channels, 2);
+        let decoded: Vec<i32> = reader
+            .samples()
+            .map(|s| s.expect("sample decodes"))
+            .collect();
+        assert_eq!(&decoded[..samples.len()], &samples[..]);
     }
 
     /// The regression guard for issue #127: every frame header must name its
