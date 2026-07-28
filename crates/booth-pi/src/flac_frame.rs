@@ -143,29 +143,59 @@ fn frame_header_len(frame: &[u8]) -> Option<usize> {
     Some(FRAME_HEADER_PREFIX_LEN + coded_number_len + block_size_len + sample_rate_len + 1)
 }
 
-/// Checks that every frame boundary implied by `frame_lengths` really is one.
+/// Outcome of the pre-flight check run before anything is mutated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Preflight {
+    /// Every frame parses and leaves its sample rate unspecified.
+    Rewritable,
+    /// Every frame parses and already declares the target rate.
+    AlreadyExplicit,
+    /// A frame did not parse, its CRC-8 did not match, or the stream mixes
+    /// unspecified and explicit frames.
+    Ineligible,
+}
+
+/// Checks that every frame boundary implied by `frame_lengths` really is one,
+/// and that the whole stream is uniformly eligible for the rewrite.
 ///
 /// A frame must start with the sync code, parse as a header, and carry a
 /// CRC-8 that matches its own bytes. Requiring this for *all* frames before
 /// touching any of them means a bad offset makes the pass a no-op instead of
 /// letting it write garbage into the middle of the audio payload.
-fn frames_are_intact(encoded: &[u8], first_frame: usize, frame_lengths: &[usize]) -> bool {
+///
+/// Uniformity matters just as much: a stream that mixes unspecified and
+/// explicit frames would otherwise be half-rewritten, breaking the
+/// all-or-nothing guarantee that callers rely on.
+fn preflight(encoded: &[u8], first_frame: usize, frame_lengths: &[usize], code: u8) -> Preflight {
     let mut offset = first_frame;
+    let mut unspecified = 0usize;
+    let mut explicit = 0usize;
     for &len in frame_lengths {
         let Some(frame) = encoded.get(offset..offset + len) else {
-            return false;
+            return Preflight::Ineligible;
         };
         let Some(header_len) = frame_header_len(frame) else {
-            return false;
+            return Preflight::Ineligible;
         };
         if frame.len() < header_len + FRAME_FOOTER_LEN
             || frame[header_len - 1] != crc8(&frame[..header_len - 1])
         {
-            return false;
+            return Preflight::Ineligible;
+        }
+        match frame[2] & 0x0F {
+            0 => unspecified += 1,
+            existing if existing == code => explicit += 1,
+            _ => return Preflight::Ineligible,
         }
         offset += len;
     }
-    true
+    if unspecified == frame_lengths.len() {
+        Preflight::Rewritable
+    } else if explicit == frame_lengths.len() {
+        Preflight::AlreadyExplicit
+    } else {
+        Preflight::Ineligible
+    }
 }
 
 /// Rewrites one frame in place. Returns `false` if the frame does not look
@@ -222,12 +252,16 @@ pub fn rewrite_frame_sample_rates(
         tracing::warn!("encoded FLAC stream is missing its magic number; skipping header rewrite");
         return 0;
     }
-    if !frames_are_intact(encoded, first_frame, frame_lengths) {
-        tracing::warn!(
-            "encoded FLAC frame boundaries did not validate; skipping header rewrite. \
-             Recordings will not play back under Apple CoreAudio"
-        );
-        return 0;
+    match preflight(encoded, first_frame, frame_lengths, code) {
+        Preflight::Rewritable => {}
+        Preflight::AlreadyExplicit => return 0,
+        Preflight::Ineligible => {
+            tracing::warn!(
+                "encoded FLAC frames did not validate as uniformly rewritable; skipping \
+                 header rewrite. Recordings will not play back under Apple CoreAudio"
+            );
+            return 0;
+        }
     }
 
     let mut offset = first_frame;
@@ -241,13 +275,11 @@ pub fn rewrite_frame_sample_rates(
         }
         offset += len;
     }
-    if rewritten != frame_lengths.len() {
-        tracing::warn!(
-            rewritten,
-            total_frames = frame_lengths.len(),
-            "only some FLAC frame headers could be rewritten"
-        );
-    }
+    debug_assert_eq!(
+        rewritten,
+        frame_lengths.len(),
+        "pre-flight promised every frame was rewritable"
+    );
     rewritten
 }
 
@@ -398,6 +430,50 @@ mod tests {
         }
         assert_eq!(offset, encoded.len(), "frame lengths must cover the stream");
         out
+    }
+
+    /// A stream where only some frames still say "unspecified" must be left
+    /// entirely alone rather than half-rewritten.
+    #[test]
+    fn mixed_streams_are_left_untouched() {
+        let samples: Vec<i32> = (0..12_000).map(|i: i32| (i % 97) - 48).collect();
+        let (encoded, lengths) = encode(&samples, 1, 48_000);
+        assert!(lengths.len() > 2, "need several frames to mix");
+
+        // Rewrite exactly one frame, then ask the pass to handle the rest.
+        let mut mixed = encoded.clone();
+        let first_frame = mixed.len() - lengths.iter().sum::<usize>();
+        assert!(rewrite_frame(
+            &mut mixed[first_frame..first_frame + lengths[0]],
+            10
+        ));
+        let before = mixed.clone();
+
+        assert_eq!(rewrite_frame_sample_rates(&mut mixed, &lengths, 48_000), 0);
+        assert_eq!(mixed, before, "a mixed stream must not be half-rewritten");
+    }
+
+    /// Running the pass twice must be a no-op the second time, not a
+    /// double-rewrite that corrupts the CRCs.
+    #[test]
+    fn rewriting_an_already_explicit_stream_is_idempotent() {
+        let samples: Vec<i32> = (0..12_000).map(|i: i32| (i % 97) - 48).collect();
+        let (mut encoded, lengths) = encode(&samples, 1, 48_000);
+        assert_eq!(
+            rewrite_frame_sample_rates(&mut encoded, &lengths, 48_000),
+            lengths.len()
+        );
+        let once = encoded.clone();
+        assert_eq!(
+            rewrite_frame_sample_rates(&mut encoded, &lengths, 48_000),
+            0
+        );
+        assert_eq!(encoded, once);
+        assert!(
+            inspect_frames(&encoded, &lengths)
+                .iter()
+                .all(|&(code, ok)| code == 10 && ok)
+        );
     }
 
     #[test]
