@@ -1,0 +1,41 @@
+# Raspberry Pi "personal tools" mise config.
+#
+# This file has NOTHING to do with the Telephone Booth application itself —
+# it is a convenience manifest for provisioning the maintainer's preferred
+# command-line tools on a Raspberry Pi.
+#
+# Targets 64-bit Raspberry Pi OS (arm64), which is what docs/raspberry-pi-setup.md
+# provisions. Several of these resolve aarch64 Linux binaries only, so this
+# manifest does not work on 32-bit armhf — and no single route reproduces the
+# whole set there, since atuin, zellij, and herdr have no 32-bit builds at all.
+# See docs/raspberry-pi-tools.md for what is available on armhf.
+#
+# Usage on the Pi:
+#
+#   mkdir -p ~/.config/mise
+#   cp packaging/raspberry-pi/mise.toml ~/.config/mise/config.toml
+#   mise trust ~/.config/mise/config.toml
+#   mise install
+#
+# mise itself is best installed from its own apt repo first — see
+# docs/raspberry-pi-tools.md. Everything below downloads a prebuilt binary
+# (no compiling).
+#
+
+[tools]
+tmux = "latest"
+bat = "latest"
+eza = "latest"
+neovim = "latest"
+starship = "latest"
+atuin = "latest"
+zellij = "latest"
+bottom = "latest"   # provides the `btm` binary
+delta = "latest"    # git-delta
+herdr = "latest"    # agent multiplexer for the terminal
+
+# fish has no short registry name in mise, so name the aqua backend directly.
+# Upstream ships a self-contained static aarch64 binary from 4.0 onward, which
+# is far newer than Debian's package (4.8.x vs trixie's 4.0.2). See
+# docs/raspberry-pi-tools.md before making this your login shell.
+"aqua:fish-shell/fish-shell" = "latest"
