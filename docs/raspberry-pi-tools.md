@@ -8,8 +8,11 @@ version of each.
 > **Assumes 64-bit Raspberry Pi OS (`arm64`)**, which is what
 > [the setup guide](raspberry-pi-setup.md) provisions (Pi 4 / 5, Raspberry Pi
 > OS Lite 64-bit). Several of these projects publish `aarch64` Linux binaries
-> only, so on a 32-bit `armhf` install the mise steps below will fail — use
-> apt there instead.
+> only, so the manifest below does not work on a 32-bit `armhf` install, and
+> there is no route that reproduces the whole set there: Debian packages
+> `fish`, `tmux`, `bat`, `neovim`, and (on Pi OS 13+) `eza`; `starship`,
+> `bottom`, and `git-delta` publish 32-bit ARM builds of their own; `atuin`,
+> `zellij`, and `herdr` have no 32-bit builds at all.
 
 There are two install routes:
 
@@ -56,8 +59,12 @@ sudo apt install -y mise
 Then activate it in your shell (fish shown; see the mise docs for bash/zsh):
 
 ```sh
+mkdir -p ~/.config/fish
 echo 'mise activate fish | source' >> ~/.config/fish/config.fish
 ```
+
+(`~/.config/fish` will not exist yet on a fresh Pi, and the redirect above
+creates the file but not its parent directory.)
 
 ## Install the tools
 
@@ -112,8 +119,9 @@ echo "$fish_path" | sudo tee -a /etc/shells
 chsh -s "$fish_path"
 ```
 
-The path stays stable across `mise upgrade` because the version is pinned to
-`latest` rather than a number.
+That path stays valid across `mise upgrade`: because the version is `latest`
+rather than a number, mise keeps `.../installs/<tool>/latest` as a symlink and
+repoints it at each new release, so `chsh` does not need repeating.
 
 > **Verify before you log out.** Your login shell now depends on mise, so
 > removing mise or running `mise prune` would leave you without a working

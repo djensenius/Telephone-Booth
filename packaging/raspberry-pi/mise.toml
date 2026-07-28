@@ -5,9 +5,10 @@
 # command-line tools on a Raspberry Pi.
 #
 # Targets 64-bit Raspberry Pi OS (arm64), which is what docs/raspberry-pi-setup.md
-# provisions. neovim, tmux, atuin, zellij, eza, and herdr resolve aarch64 Linux
-# binaries only, so on a 32-bit armhf install use apt instead — see
-# docs/raspberry-pi-tools.md.
+# provisions. Several of these resolve aarch64 Linux binaries only, so this
+# manifest does not work on 32-bit armhf — and no single route reproduces the
+# whole set there, since atuin, zellij, and herdr have no 32-bit builds at all.
+# See docs/raspberry-pi-tools.md for what is available on armhf.
 #
 # Usage on the Pi:
 #
