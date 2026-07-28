@@ -194,8 +194,14 @@ pub trait AudioSink: Send + Sync {
     async fn stop(&mut self) -> Result<(), AudioError>;
 
     /// Wait until the currently-playing source has finished naturally. Returns
-    /// immediately if nothing is playing. Cancel-safe: if a new `play` is
-    /// invoked the future may be dropped and the new one used.
+    /// immediately if nothing is playing.
+    ///
+    /// **Must be cancel-safe.** The runtime races this future against incoming
+    /// audio commands in a `tokio::select!`, so it is dropped whenever a
+    /// `stop`/`play` arrives first. An implementation must therefore not move
+    /// playback state out of `self` before the playback has actually ended: a
+    /// dropped future has to leave a subsequent [`AudioSink::stop`] able to
+    /// cancel the clip, otherwise a caller who hangs up keeps hearing it.
     async fn wait_for_end(&mut self) -> Result<(), AudioError>;
 }
 

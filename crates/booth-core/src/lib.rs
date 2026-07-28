@@ -184,6 +184,14 @@ pub enum Event {
         /// Id of the finished local recording.
         recording_id: RecordingId,
     },
+    /// The audio adapter could not start or finalize a recording, so no
+    /// [`Event::RecordingFinished`] will ever arrive. Without this the booth
+    /// would wait forever in [`State::Recording`] / [`State::FinishingRecording`]
+    /// and never return a dial tone to the next caller.
+    RecordingFailed {
+        /// Diagnostic message.
+        reason: String,
+    },
     /// The upload completed successfully.
     UploadComplete,
     /// The upload failed (we'll log + return to dial tone).
@@ -284,10 +292,11 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
     use Event as E;
     use State as S;
 
-    // Hanging up returns the booth to Idle in every state except while it is
-    // recording an answer. There, hanging up means "I'm done — send it": we
-    // finalize the recording and wait in `FinishingRecording` for its id so the
-    // upload still fires. See the `FinishingRecording` transitions below.
+    // Hanging up is a full reset of the booth's outputs: audio stops, the
+    // pulse timeout is cancelled, and we return to Idle in every state except
+    // while recording an answer. There, hanging up means "I'm done — send it":
+    // we finalize the recording and wait in `FinishingRecording` for its id so
+    // the upload still fires. See the `FinishingRecording` transitions below.
     if matches!(event, E::HookOn) {
         // Hanging up while recording means "I'm done — send it". Finalize the
         // recording and move to `FinishingRecording` so the background upload
@@ -300,6 +309,9 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                     on_hook: true,
                 },
                 vec![
+                    // Hanging up is a full reset of the booth's outputs: stop
+                    // any lingering playback before finalizing the recording.
+                    Effect::StopAudio,
                     Effect::StopRecording,
                     Effect::CancelPulseTimeout,
                     Effect::PutStatus(BoothStatus::Uploading),
@@ -317,7 +329,7 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                     question_id,
                     on_hook: true,
                 },
-                vec![],
+                vec![Effect::StopAudio, Effect::CancelPulseTimeout],
             );
         }
         return (
@@ -439,6 +451,45 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 on_hook: false,
             },
             vec![],
+        ),
+        // The audio adapter never produced a recording (start failed, or the
+        // finalize call found nothing in flight), so `RecordingFinished` will
+        // never arrive. Recover instead of waiting forever: an off-hook caller
+        // hears the busy tone, a hung-up booth resets silently.
+        (S::Recording { .. }, E::RecordingFailed { reason }) => (
+            S::Error {
+                reason: reason.clone(),
+            },
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy)),
+                Effect::Log {
+                    message: alloc::format!("recording failed: {reason}"),
+                },
+                // `StartRecording` was announced as `Recording`; correct that
+                // so the operator doesn't keep showing a recording that never
+                // happened (`Error`'s coarse status is `Idle`).
+                Effect::PutStatus(BoothStatus::Idle),
+            ],
+        ),
+        (S::FinishingRecording { on_hook: true, .. }, E::RecordingFailed { reason }) => (
+            S::Idle,
+            vec![
+                Effect::StopAudio,
+                Effect::Log {
+                    message: alloc::format!("recording failed after hangup: {reason}"),
+                },
+                Effect::PutStatus(BoothStatus::Idle),
+            ],
+        ),
+        (S::FinishingRecording { on_hook: false, .. }, E::RecordingFailed { reason }) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::Log {
+                    message: alloc::format!("recording failed: {reason}"),
+                },
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
         ),
         // Off-hook upload finished: caller is still holding the handset, so
         // return them to a dial tone.
@@ -645,6 +696,98 @@ mod tests {
     }
 
     #[test]
+    fn hangup_always_stops_audio() {
+        // Hanging up is a full reset of the booth's outputs: every state must
+        // stop playback so nothing keeps talking to an empty booth.
+        for state in [
+            State::DialTone,
+            State::Dialing { pulses: 3 },
+            State::PlayingQuestion {
+                question_id: "q1".into(),
+            },
+            State::Beep {
+                question_id: "q1".into(),
+            },
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            State::FinishingRecording {
+                question_id: "q1".into(),
+                on_hook: false,
+            },
+            State::Uploading {
+                recording_id: "rec-1".into(),
+                question_id: "q1".into(),
+                on_hook: false,
+            },
+            State::PlayingMessage,
+            State::PlayingInstructions,
+            State::CallUnavailable,
+            State::Error {
+                reason: "boom".into(),
+            },
+        ] {
+            let tag = state.tag();
+            let (_, effects) = handle(state, Event::HookOn);
+            assert!(
+                effects.contains(&Effect::StopAudio),
+                "hangup from {tag} did not stop audio: {effects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn recording_failure_recovers_instead_of_hanging() {
+        // If the adapter never produces a recording, `RecordingFinished` never
+        // arrives — the booth must recover rather than wedge forever.
+        let (next, effects) = handle(
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            Event::RecordingFailed {
+                reason: "no input device".into(),
+            },
+        );
+        assert!(matches!(next, State::Error { .. }));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy))))
+        );
+
+        // Hung up while finalizing: reset silently, no tone to an empty booth.
+        let (next, effects) = handle(
+            State::FinishingRecording {
+                question_id: "q1".into(),
+                on_hook: true,
+            },
+            Event::RecordingFailed {
+                reason: "no recording in progress".into(),
+            },
+        );
+        assert_eq!(next, State::Idle);
+        assert!(effects.contains(&Effect::StopAudio));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Play(_))));
+
+        // Still off-hook while finalizing: give the caller a dial tone back.
+        let (next, effects) = handle(
+            State::FinishingRecording {
+                question_id: "q1".into(),
+                on_hook: false,
+            },
+            Event::RecordingFailed {
+                reason: "no recording in progress".into(),
+            },
+        );
+        assert_eq!(next, State::DialTone);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
+        );
+    }
+
+    #[test]
     fn hangup_while_recording_finalizes_then_uploads() {
         // Hanging up mid-recording must NOT drop the answer: it finalizes the
         // recording and moves to FinishingRecording (still "uploading" status).
@@ -700,7 +843,9 @@ mod tests {
         };
         let (next, effects) = handle(state.clone(), Event::HookOn);
         assert_eq!(next, state);
-        assert!(effects.is_empty());
+        // Still a reset of the outputs, but the pending upload is preserved.
+        assert!(effects.contains(&Effect::StopAudio));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Play(_))));
     }
 
     #[test]
