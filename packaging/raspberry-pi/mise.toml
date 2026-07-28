@@ -2,8 +2,13 @@
 #
 # This file has NOTHING to do with the Telephone Booth application itself —
 # it is a convenience manifest for provisioning the maintainer's preferred
-# command-line tools on a Raspberry Pi (arm64 / armhf) when a distro apt
-# package is missing or too old.
+# command-line tools on a Raspberry Pi when a distro apt package is missing
+# or too old.
+#
+# ARCHITECTURE: this manifest targets 64-bit Raspberry Pi OS (arm64) only.
+# neovim, tmux, atuin, zellij, and herdr publish aarch64 Linux binaries but
+# no 32-bit ARM ones, so `mise install` will fail on armhf. On 32-bit Pi OS
+# use apt for those tools instead — see docs/raspberry-pi-tools.md.
 #
 # Usage on the Pi:
 #
@@ -14,11 +19,11 @@
 #
 # mise itself is best installed from its own apt repo first — see
 # docs/raspberry-pi-tools.md. Everything below downloads a prebuilt binary
-# for your architecture (no compiling) unless noted.
+# for your architecture (no compiling).
 
 [tools]
 # Keep these on latest releases via mise (Debian apt can lag behind).
-fish = "latest"
+# `fish` is not in the mise registry — install it with apt.
 tmux = "latest"
 bat = "latest"
 
@@ -29,12 +34,9 @@ atuin = "latest"
 zellij = "latest"
 bottom = "latest"   # provides the `btm` binary
 delta = "latest"    # git-delta
+herdr = "latest"    # agent multiplexer for the terminal
 
-# herdr publishes prebuilt release binaries on GitHub; fetch them with the
-# `ubi` backend (no Rust toolchain / compile step required).
-"ubi:ogulcancelik/herdr" = "latest"
-
-# The following also have first-class apt packages on Raspberry Pi OS and are
-# commonly installed with apt (see docs/raspberry-pi-tools.md). Uncomment
-# them here if you would rather manage everything through mise instead.
+# The following also has a first-class apt repo for Raspberry Pi OS and is
+# commonly installed that way (see docs/raspberry-pi-tools.md). Uncomment it
+# here if you would rather manage everything through mise instead.
 # eza = "latest"     # apt repo: deb.gierens.de
