@@ -23,7 +23,7 @@ There are two install routes:
 
 | Tool | Recommended install | apt alternative |
 | --- | --- | --- |
-| `fish` | apt — no mise package | Raspberry Pi OS (Debian) |
+| `fish` | mise (`aqua:fish-shell/fish-shell`) | Raspberry Pi OS, but far older |
 | `mise` | apt repo below | official mise apt repo |
 | `tmux` | mise (`tmux@latest`) | Raspberry Pi OS (Debian) |
 | `bat` | mise (`bat@latest`) | Raspberry Pi OS, as `batcat` |
@@ -70,47 +70,71 @@ mise trust ~/.config/mise/config.toml
 mise install
 ```
 
-That installs `tmux`, `bat`, `eza`, `neovim`, `starship`, `atuin`, `zellij`,
-`bottom`, `git-delta`, and `herdr` onto your `PATH` as prebuilt `aarch64`
-binaries — no compiling. `mise upgrade` later bumps them to the newest
-releases.
+That installs `fish`, `tmux`, `bat`, `eza`, `neovim`, `starship`, `atuin`,
+`zellij`, `bottom`, `git-delta`, and `herdr` onto your `PATH` as prebuilt
+`aarch64` binaries — no compiling. `mise upgrade` later bumps them to the
+newest releases.
 
 Or install them ad hoc:
 
 ```sh
 mise use -g tmux@latest bat@latest eza@latest neovim@latest starship@latest \
-  atuin@latest zellij@latest bottom@latest delta@latest herdr@latest
+  atuin@latest zellij@latest bottom@latest delta@latest herdr@latest \
+  "aqua:fish-shell/fish-shell@latest"
 ```
 
 > The Pi manifest is intentionally separate from the repo-root
 > [`mise.toml`](../mise.toml), which pins the Rust toolchain and build tooling
 > the booth itself needs.
 
-## fish — apt only
+## fish
 
-`fish` has no mise registry entry, so install it from Raspberry Pi OS:
+`fish` has no short registry name in mise, so it is referenced by its aqua
+backend, `aqua:fish-shell/fish-shell`. It is worth the extra typing: upstream
+ships a self-contained static `aarch64` binary from 4.0 onward, so mise gets
+you 4.8.x where Raspberry Pi OS 13 packages 4.0.2 (and Pi OS 12 packages
+3.6.0, before the Rust rewrite).
+
+The manifest above already includes it. Standalone:
 
 ```sh
-sudo apt update
-sudo apt install -y fish
+mise use -g "aqua:fish-shell/fish-shell@latest"
 ```
 
-Make it your login shell if you want:
+### Making it your login shell
+
+A mise-managed fish lives under your home directory rather than `/usr/bin`,
+so `chsh` needs the full path, and that path must be listed in `/etc/shells`:
 
 ```sh
-chsh -s "$(command -v fish)"
+fish_path="$(mise which fish)"
+echo "$fish_path" | sudo tee -a /etc/shells
+chsh -s "$fish_path"
 ```
+
+The path stays stable across `mise upgrade` because the version is pinned to
+`latest` rather than a number.
+
+> **Verify before you log out.** Your login shell now depends on mise, so
+> removing mise or running `mise prune` would leave you without a working
+> shell — awkward on a headless Pi, because a broken login shell also breaks
+> `ssh host <command>`. Open a second SSH session and confirm it works before
+> closing the first. If you would rather not couple the two, `sudo apt install
+> fish` gives you an older fish at `/usr/bin/fish` that nothing can take away.
 
 ## apt alternatives
 
 You do not need any of these if you used the mise manifest above — they are
 here for when you would rather have apt manage a tool.
 
-### tmux and bat
+### fish, tmux, and bat
 
 ```sh
-sudo apt install -y tmux bat
+sudo apt install -y fish tmux bat
 ```
+
+Debian's `fish` is well behind upstream — 4.0.2 on Pi OS 13, 3.6.0 on Pi OS 12
+— but it installs to `/usr/bin/fish` and is independent of mise.
 
 Debian installs the `bat` binary as `batcat` (name collision). Add a shim if
 you want the upstream command name:

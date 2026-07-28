@@ -20,8 +20,6 @@
 # docs/raspberry-pi-tools.md. Everything below downloads a prebuilt binary
 # (no compiling).
 #
-# `fish` is absent on purpose: it has no mise registry entry. Install it with
-# `sudo apt install fish`.
 
 [tools]
 tmux = "latest"
@@ -34,3 +32,9 @@ zellij = "latest"
 bottom = "latest"   # provides the `btm` binary
 delta = "latest"    # git-delta
 herdr = "latest"    # agent multiplexer for the terminal
+
+# fish has no short registry name in mise, so name the aqua backend directly.
+# Upstream ships a self-contained static aarch64 binary from 4.0 onward, which
+# is far newer than Debian's package (4.8.x vs trixie's 4.0.2). See
+# docs/raspberry-pi-tools.md before making this your login shell.
+"aqua:fish-shell/fish-shell" = "latest"
