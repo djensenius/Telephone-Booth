@@ -514,6 +514,119 @@ async fn abandoned_fetch_does_not_leak_into_the_next_call() -> Result<(), Box<dy
     Ok(())
 }
 
+/// Hanging up must silence playback even while a previous call's upload is
+/// still in flight. The upload used to hold the `AudioSource` lock for its
+/// whole (retried) lifetime, so the next call's `StartRecording` effect blocked
+/// the effect dispatcher and the `StopAudio` queued behind it never reached the
+/// sink — the caller hung up and the clip kept playing.
+#[tokio::test]
+async fn hangup_stops_playback_while_an_upload_is_still_running() -> Result<(), Box<dyn Error>> {
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.debug.allow_controls = true;
+    let bus = TelemetryBus::new(512);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    {
+        let state = handles.operator.state();
+        let mut s = state.lock().await;
+        for id in ["q-1", "q-2"] {
+            s.questions.push_back(booth_hal::OperatorQuestion {
+                id: id.to_string(),
+                audio_url: format!("https://mock.invalid/{id}.flac"),
+                audio_sha256: None,
+                description: None,
+            });
+        }
+    }
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    // First call: reach Recording, then start an upload that takes a long time.
+    drive_to_recording(&runtime.commands).await?;
+    handles.operator.state().lock().await.latency = Some(std::time::Duration::from_secs(3));
+    inject(
+        &runtime.commands,
+        Event::RecordingFinished {
+            recording_id: "rec-000001".to_string(),
+        },
+    )
+    .await?;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    inject(&runtime.commands, Event::HookOn).await?;
+
+    // Second call, while that upload is still running: play a question, reach
+    // Recording (which needs the audio source the upload used to hold), then
+    // hang up.
+    handles.operator.state().lock().await.latency = None;
+    drive_to_recording(&runtime.commands).await?;
+    inject(&runtime.commands, Event::HookOn).await?;
+
+    // The sink must go quiet well before the 3s upload finishes.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+    loop {
+        if handles.audio_sink.state().await.playing.is_none() {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("playback was still running 500ms after hangup".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    let _ = runtime.join.await?;
+    Ok(())
+}
+
+/// Drive a fresh call from on-hook through dialing 1 to `Recording`.
+async fn drive_to_recording(
+    commands: &tokio::sync::mpsc::Sender<RuntimeCommand>,
+) -> Result<(), Box<dyn Error>> {
+    inject(commands, Event::HookOff).await?;
+    inject(commands, Event::RotaryPulse).await?;
+    inject(commands, Event::Tick).await?;
+    wait_for_state(commands, "PlayingQuestion", |state| {
+        matches!(state, State::PlayingQuestion { .. })
+    })
+    .await?;
+    inject(commands, Event::PlaybackEnded).await?;
+    wait_for_state(commands, "Beep", |state| {
+        matches!(state, State::Beep { .. })
+    })
+    .await?;
+    inject(commands, Event::PlaybackEnded).await?;
+    wait_for_state(commands, "Recording", |state| {
+        matches!(state, State::Recording { .. })
+    })
+    .await
+}
+
+async fn wait_for_state(
+    commands: &tokio::sync::mpsc::Sender<RuntimeCommand>,
+    label: &str,
+    predicate: impl Fn(&State) -> bool + Send + Sync,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if predicate(&snapshot(commands).await?) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("never reached {label}").into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 /// Wait until a telemetry `Log` record containing `needle` is observed.
 async fn wait_for_log(bus: &TelemetryBus, needle: &str) -> Result<(), Box<dyn Error>> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);

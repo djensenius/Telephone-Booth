@@ -1290,10 +1290,9 @@ async fn effect_task(
                 let audio_src = Arc::clone(&audio_source);
                 operator_tasks.spawn(async move {
                     let started = Instant::now();
-                    let src = audio_src.lock().await;
                     let success = upload_recording(
                         &*op,
-                        Some(&**src),
+                        Some(&audio_src),
                         &path,
                         &ev_tx,
                         &b,
@@ -1577,9 +1576,15 @@ fn validate_upload_caps(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `audio_source` is taken as a shared handle rather than a borrowed guard so
+/// the lock is only held for the brief cleanup at the end. Holding it across
+/// the (retried, possibly minutes-long) upload would block every later
+/// `StartRecording` / `StopRecording` effect — and, because effects are
+/// dispatched in order, the `StopAudio` behind them — so a caller could hang up
+/// and keep hearing the clip until the upload finished.
 async fn upload_recording(
     operator: &dyn OperatorClient,
-    audio_source: Option<&dyn AudioSource>,
+    audio_source: Option<&Arc<Mutex<Box<dyn AudioSource>>>>,
     path: &str,
     event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
@@ -1625,10 +1630,11 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            if let Some(source) = audio_source
-                && let Err(err) = source.cleanup_recording(&recording_id).await
-            {
-                warn!(%recording_id, %err, "failed to clean up recording metadata");
+            if let Some(source) = audio_source {
+                let guard = source.lock().await;
+                if let Err(err) = guard.cleanup_recording(&recording_id).await {
+                    warn!(%recording_id, %err, "failed to clean up recording metadata");
+                }
             }
             let _ = event_tx.send(Event::UploadComplete).await;
             true
