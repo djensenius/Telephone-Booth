@@ -326,7 +326,7 @@ impl AudioSink for PiAudioSink {
     /// This must stay **cancel-safe**: the runtime races it against incoming
     /// audio commands in a `tokio::select!`, so the future is dropped whenever
     /// a `Stop` arrives first. It therefore only observes completion through a
-    /// watch channel and leaves the [`PlaybackTask`] in place until playback
+    /// watch channel and leaves the playback task in place until playback
     /// has actually ended — taking it up front would strand the cancel flag and
     /// join handle, leaving the following [`AudioSink::stop`] with nothing to
     /// cancel while the clip played on to the end.
