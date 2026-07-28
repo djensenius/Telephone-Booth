@@ -16,7 +16,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 ## Setup & Development
 
 - [Raspberry Pi setup](raspberry-pi-setup.md) — from-scratch Pi provisioning (OS, audio, Tailscale, deploy, wiring)
-- [Raspberry Pi extras](raspberry-pi-tools.md) — installing preferred CLI tools (fish, neovim, mise, eza) via apt or mise
+- [Raspberry Pi extras](raspberry-pi-tools.md) — installing preferred CLI tools (fish, neovim, eza) via mise or apt
 - [Getting started](getting-started.md) — clone → mise install → `just dev`
 - [Simulator TUI](simulator.md) — interactive `--simulator` flag for local testing without a phone
 - [Hardware](hardware.md) — wiring the rotary phone + GPIO pinout
