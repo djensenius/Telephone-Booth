@@ -465,6 +465,10 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::Log {
                     message: alloc::format!("recording failed: {reason}"),
                 },
+                // `StartRecording` was announced as `Recording`; correct that
+                // so the operator doesn't keep showing a recording that never
+                // happened (`Error`'s coarse status is `Idle`).
+                Effect::PutStatus(BoothStatus::Idle),
             ],
         ),
         (S::FinishingRecording { on_hook: true, .. }, E::RecordingFailed { reason }) => (

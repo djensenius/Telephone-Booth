@@ -19,8 +19,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
-    AudioError, AudioRef, AudioSink, AudioSource, BuiltinTone, GpioEdge, GpioError, GpioPort,
-    OperatorClient, OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
+    AudioError, AudioRef, AudioSink, AudioSource, BoothStatus, BuiltinTone, GpioEdge, GpioError,
+    GpioPort, OperatorClient, OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
 };
 use booth_pi::{
     AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
@@ -982,6 +982,10 @@ fn publish_audio_error(bus: &TelemetryBus, err: &AudioError) {
 /// Maximum number of concurrent operator/network tasks allowed in flight.
 const OPERATOR_CONCURRENCY: usize = 4;
 
+/// Depth of the serialized status-write queue. Deep enough that a slow operator
+/// never stalls the critical path, small enough to bound memory.
+const STATUS_QUEUE_DEPTH: usize = 32;
+
 fn log_operator_task_result(result: Result<(), tokio::task::JoinError>, message: &str) {
     if let Err(err) = result
         && !err.is_cancelled()
@@ -997,8 +1001,62 @@ fn is_operator_effect(effect: &Effect) -> bool {
             | Effect::FetchRandomQuestion
             | Effect::FetchRandomMessage
             | Effect::FetchInstructions
-            | Effect::PutStatus(_)
     )
+}
+
+/// Serialize `PutStatus` writes onto a single task so the operator always sees
+/// transitions in the order the state machine produced them. Running them in
+/// the concurrent operator pool let a retried older write (e.g. `Uploading`)
+/// land after a newer one (e.g. `Idle`) and leave the operator stale.
+fn spawn_status_writer(
+    operator: Arc<dyn OperatorClient>,
+    bus: TelemetryBus,
+) -> (mpsc::Sender<BoothStatus>, JoinHandle<()>) {
+    let (tx, mut rx) = mpsc::channel::<BoothStatus>(STATUS_QUEUE_DEPTH);
+    let handle = tokio::spawn(async move {
+        while let Some(status) = rx.recv().await {
+            if let Err(err) =
+                retry_operator("PUT /v1/status", &bus, || operator.put_status(status)).await
+            {
+                publish_operator_error(&bus, "put_status", &err);
+            }
+        }
+    });
+    (tx, handle)
+}
+
+/// Monotonic counter identifying the current call attempt. Bumped whenever the
+/// booth resets its audio (hangup, or a new digit), so an operator fetch that
+/// was in flight at the time can discard its result instead of playing an
+/// abandoned clip to the next caller.
+#[derive(Clone, Default)]
+struct FetchGeneration(Arc<AtomicU64>);
+
+impl FetchGeneration {
+    fn invalidate(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn current(&self) -> FetchToken {
+        FetchToken {
+            generation: self.clone(),
+            issued: self.0.load(Ordering::SeqCst),
+        }
+    }
+}
+
+/// Handle held by an in-flight operator fetch; [`FetchToken::is_current`] is
+/// `false` once the booth has reset since the fetch started.
+#[derive(Clone)]
+struct FetchToken {
+    generation: FetchGeneration,
+    issued: u64,
+}
+
+impl FetchToken {
+    fn is_current(&self) -> bool {
+        self.generation.0.load(Ordering::SeqCst) == self.issued
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1019,6 +1077,8 @@ async fn effect_task(
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     let mut pending_operator_effects = VecDeque::new();
     let mut effect_rx_closed = false;
+    let fetch_generation = FetchGeneration::default();
+    let (status_tx, status_task) = spawn_status_writer(Arc::clone(&operator), bus.clone());
 
     loop {
         // Drain any already-finished operator tasks so the set stays tidy.
@@ -1068,8 +1128,9 @@ async fn effect_task(
             }
             Effect::StopAudio => {
                 // Stopping audio also invalidates any operator clip that was
-                // fetched but never played (e.g. the caller hung up while the
-                // fetch was in flight), so it can't leak into the next call.
+                // fetched but never played, and any fetch still in flight, so
+                // an abandoned call can't leak a clip into the next one.
+                fetch_generation.invalidate();
                 *next_remote_audio.lock().await = None;
                 let _ = audio_tx.send(AudioCommand::Stop).await;
             }
@@ -1255,8 +1316,9 @@ async fn effect_task(
                 let b = bus.clone();
                 let nra = Arc::clone(&next_remote_audio);
                 let rd = recordings_dir.clone();
+                let token = fetch_generation.current();
                 operator_tasks.spawn(async move {
-                    fetch_random_question(&*op, &ev_tx, &b, &nra, &rd).await;
+                    fetch_random_question(&*op, &ev_tx, &b, &nra, &rd, &token).await;
                 });
             }
             Effect::FetchRandomMessage => {
@@ -1265,8 +1327,9 @@ async fn effect_task(
                 let b = bus.clone();
                 let nra = Arc::clone(&next_remote_audio);
                 let rd = recordings_dir.clone();
+                let token = fetch_generation.current();
                 operator_tasks.spawn(async move {
-                    fetch_random_message(&*op, &ev_tx, &b, &nra, &rd).await;
+                    fetch_random_message(&*op, &ev_tx, &b, &nra, &rd, &token).await;
                 });
             }
             Effect::FetchInstructions => {
@@ -1275,20 +1338,17 @@ async fn effect_task(
                 let b = bus.clone();
                 let nra = Arc::clone(&next_remote_audio);
                 let rd = recordings_dir.clone();
+                let token = fetch_generation.current();
                 operator_tasks.spawn(async move {
-                    fetch_instructions(&*op, &ev_tx, &b, &nra, &rd).await;
+                    fetch_instructions(&*op, &ev_tx, &b, &nra, &rd, &token).await;
                 });
             }
             Effect::PutStatus(status) => {
-                let op = Arc::clone(&operator);
-                let b = bus.clone();
-                operator_tasks.spawn(async move {
-                    if let Err(err) =
-                        retry_operator("PUT /v1/status", &b, || op.put_status(status)).await
-                    {
-                        publish_operator_error(&b, "put_status", &err);
-                    }
-                });
+                // Serialized on a dedicated task so an older status can never
+                // overtake a newer one and leave the operator stale.
+                if status_tx.send(status).await.is_err() {
+                    warn!("status writer stopped; dropping status update");
+                }
             }
         }
     }
@@ -1301,6 +1361,9 @@ async fn effect_task(
             warn!(%err, "operator background task panicked during shutdown");
         }
     }
+    // Close the status queue and let the writer flush what is already queued.
+    drop(status_tx);
+    log_operator_task_result(status_task.await, "status writer task panicked");
 }
 
 async fn resolve_audio_ref(
@@ -1351,6 +1414,7 @@ async fn fetch_random_question(
     bus: &TelemetryBus,
     next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
     recordings_dir: &Path,
+    token: &FetchToken,
 ) {
     match retry_operator("GET /v1/questions/random", bus, || {
         operator.random_question()
@@ -1358,6 +1422,13 @@ async fn fetch_random_question(
     .await
     {
         Ok(question) => {
+            // The booth reset (hangup, or a new digit) while this fetch was in
+            // flight, so the clip belongs to an abandoned call: drop it instead
+            // of playing it to whoever picks up next.
+            if !token.is_current() {
+                debug!("discarding question fetched for an abandoned call");
+                return;
+            }
             *next_remote_audio.lock().await = Some(operator_audio_ref(
                 question.audio_url,
                 question.audio_sha256.as_deref(),
@@ -1371,6 +1442,9 @@ async fn fetch_random_question(
         }
         Err(err) => {
             publish_operator_error(bus, "random_question", &err);
+            if !token.is_current() {
+                return;
+            }
             let _ = event_tx
                 .send(Event::QuestionFailed {
                     reason: err.to_string(),
@@ -1386,9 +1460,14 @@ async fn fetch_random_message(
     bus: &TelemetryBus,
     next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
     recordings_dir: &Path,
+    token: &FetchToken,
 ) {
     match retry_operator("GET /v1/messages/random", bus, || operator.random_message()).await {
         Ok(message) => {
+            if !token.is_current() {
+                debug!("discarding message fetched for an abandoned call");
+                return;
+            }
             *next_remote_audio.lock().await = Some(operator_audio_ref(
                 message.audio_url,
                 message.audio_sha256.as_deref(),
@@ -1398,6 +1477,9 @@ async fn fetch_random_message(
         }
         Err(err) => {
             publish_operator_error(bus, "random_message", &err);
+            if !token.is_current() {
+                return;
+            }
             let _ = event_tx
                 .send(Event::MessageFailed {
                     reason: err.to_string(),
@@ -1413,6 +1495,7 @@ async fn fetch_instructions(
     bus: &TelemetryBus,
     next_remote_audio: &Arc<Mutex<Option<AudioRef>>>,
     recordings_dir: &Path,
+    token: &FetchToken,
 ) {
     match retry_operator("GET /v1/instructions/current", bus, || {
         operator.instructions()
@@ -1420,6 +1503,10 @@ async fn fetch_instructions(
     .await
     {
         Ok(instructions) => {
+            if !token.is_current() {
+                debug!("discarding instructions fetched for an abandoned call");
+                return;
+            }
             *next_remote_audio.lock().await = Some(operator_audio_ref(
                 instructions.audio_url,
                 instructions.audio_sha256.as_deref(),
@@ -1429,6 +1516,9 @@ async fn fetch_instructions(
         }
         Err(err) => {
             publish_operator_error(bus, "instructions", &err);
+            if !token.is_current() {
+                return;
+            }
             let _ = event_tx
                 .send(Event::InstructionsFailed {
                     reason: err.to_string(),
