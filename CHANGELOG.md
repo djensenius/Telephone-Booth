@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/djensenius/Telephone-Booth/compare/v0.8.2...v0.8.3) (2026-07-28)
+
+
+### Bug Fixes
+
+* **pi:** write explicit sample rate in FLAC frame headers ([#130](https://github.com/djensenius/Telephone-Booth/issues/130)) ([988ba53](https://github.com/djensenius/Telephone-Booth/commit/988ba53bdac8adfa8fd21934fd5198175d9eb5d8)), closes [#127](https://github.com/djensenius/Telephone-Booth/issues/127)
+
 ## [0.8.2](https://github.com/djensenius/Telephone-Booth/compare/v0.8.1...v0.8.2) (2026-07-28)
 
 
