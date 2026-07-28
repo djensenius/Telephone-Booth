@@ -1052,19 +1052,42 @@ fn finalize_recording(
         .map_err(|(_, err)| {
             AudioError::Codec(format!("verify FLAC encoder config: {err}").into())
         })?;
+    // `flacenc` always emits whole blocks: a trailing partial block is padded
+    // out by the encoder, but its `STREAMINFO` `total_samples` and MD5
+    // signature are computed as if it were not, so the file fails `flac -t`.
+    // Padding up front means what we declare is exactly what we encode.
+    let block_samples = encoder.block_size * usize::from(config.channels);
+    let mut block_aligned = std::borrow::Cow::Borrowed(samples);
+    if block_samples > 0 && !samples.len().is_multiple_of(block_samples) {
+        let padded_len = samples.len().div_ceil(block_samples) * block_samples;
+        block_aligned.to_mut().resize(padded_len, 0);
+    }
     let source = flacenc::source::MemSource::from_samples(
-        samples,
+        &block_aligned,
         usize::from(config.channels),
         16,
         config.sample_rate_hz as usize,
     );
     let stream = flacenc::encode_with_fixed_block_size(&encoder, source, encoder.block_size)
         .map_err(|err| AudioError::Codec(format!("encode FLAC recording: {err:?}").into()))?;
+    let frame_lengths: Vec<usize> = (0..stream.frame_count())
+        .filter_map(|index| stream.frame(index))
+        .map(|frame| frame.count_bits() >> 3)
+        .collect();
     let mut sink = flacenc::bitsink::ByteSink::new();
     stream
         .write(&mut sink)
         .map_err(|err| AudioError::Codec(format!("serialize FLAC recording: {err}").into()))?;
-    let encoded = sink.as_slice();
+    let mut encoded_buf = sink.into_inner();
+    // `flacenc` writes sample-rate code 0 ("see STREAMINFO") in every frame
+    // header, which Apple CoreAudio silently decodes as zero frames. Patch in
+    // the explicit code before the bytes ever hit disk.
+    crate::flac_frame::rewrite_frame_sample_rates(
+        &mut encoded_buf,
+        &frame_lengths,
+        config.sample_rate_hz,
+    );
+    let encoded = &encoded_buf[..];
     let sha256 = hex_sha256(encoded);
     let temp_path = std::path::Path::new(&config.recordings_dir).join(format!(
         ".recording-{}-{}.flac",
@@ -1304,6 +1327,40 @@ mod tests {
         let handle = finalize_recording(&config, &samples).expect("encode stereo");
         assert_eq!(handle.duration_ms, 1_000);
         let _ = std::fs::remove_file(&handle.path);
+    }
+
+    /// `flacenc` pads a trailing partial block out to a whole block but
+    /// computes `total_samples` and the `STREAMINFO` MD5 as if it had not,
+    /// which makes `flac -t` reject the file. Padding up front keeps the
+    /// declared length and the encoded length identical.
+    #[test]
+    fn recording_is_block_aligned_and_self_consistent() {
+        let config = config_with_channels(1);
+        // Deliberately not a multiple of the 4096-sample default block size.
+        let samples: Vec<i32> = (0..50_000)
+            .map(|i| ((f64::from(i) / 20.0).sin() * 8000.0) as i32)
+            .collect();
+        let handle = finalize_recording(&config, &samples).expect("encode mono");
+
+        let bytes = std::fs::read(&handle.path).expect("read recording");
+        let _ = std::fs::remove_file(&handle.path);
+        let mut reader =
+            claxon::FlacReader::new(std::io::Cursor::new(bytes)).expect("recording parses");
+        let declared = reader.streaminfo().samples.expect("total_samples is set");
+        let decoded: Vec<i32> = reader
+            .samples()
+            .map(|s| s.expect("sample decodes"))
+            .collect();
+
+        assert_eq!(
+            declared,
+            decoded.len() as u64,
+            "STREAMINFO total_samples must match what is actually encoded"
+        );
+        assert!(declared >= 50_000, "no captured audio may be dropped");
+        assert_eq!(&decoded[..samples.len()], &samples[..]);
+        // Reported duration stays the length actually captured, not the pad.
+        assert_eq!(handle.duration_ms, 1_041);
     }
 
     #[test]

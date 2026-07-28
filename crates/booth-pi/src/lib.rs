@@ -21,6 +21,8 @@ use booth_hal::PinRole;
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+#[cfg(feature = "audio")]
+mod flac_frame;
 pub mod mixer;
 pub mod url_policy;
 
