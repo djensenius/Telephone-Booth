@@ -290,10 +290,17 @@ impl AudioSink for PiAudioSink {
             let task_cancel = Arc::clone(&cancel);
             let config = self.config.clone();
             let telemetry = self.telemetry.clone();
+            let (done_tx, done) = tokio::sync::watch::channel(false);
             let handle = tokio::task::spawn_blocking(move || {
-                play_blocking(config, telemetry, playable, task_cancel)
+                let result = play_blocking(config, telemetry, playable, task_cancel);
+                let _ = done_tx.send(true);
+                result
             });
-            self.playback = Some(PlaybackTask { cancel, handle });
+            self.playback = Some(PlaybackTask {
+                cancel,
+                handle,
+                done,
+            });
             Ok(())
         }
     }
@@ -314,6 +321,15 @@ impl AudioSink for PiAudioSink {
         }
     }
 
+    /// Wait for the current playback to finish naturally.
+    ///
+    /// This must stay **cancel-safe**: the runtime races it against incoming
+    /// audio commands in a `tokio::select!`, so the future is dropped whenever
+    /// a `Stop` arrives first. It therefore only observes completion through a
+    /// watch channel and leaves the [`PlaybackTask`] in place until playback
+    /// has actually ended — taking it up front would strand the cancel flag and
+    /// join handle, leaving the following [`AudioSink::stop`] with nothing to
+    /// cancel while the clip played on to the end.
     async fn wait_for_end(&mut self) -> Result<(), AudioError> {
         #[cfg(not(feature = "audio"))]
         {
@@ -322,6 +338,20 @@ impl AudioSink for PiAudioSink {
 
         #[cfg(feature = "audio")]
         {
+            let Some(task) = self.playback.as_ref() else {
+                return Ok(());
+            };
+            let mut done = task.done.clone();
+            loop {
+                if *done.borrow_and_update() {
+                    break;
+                }
+                // `changed()` is cancel-safe, and nothing has been removed from
+                // `self` at this point, so dropping this future is harmless.
+                if done.changed().await.is_err() {
+                    break;
+                }
+            }
             if let Some(task) = self.playback.take() {
                 join_audio_task(task.handle).await?;
             }
@@ -496,6 +526,10 @@ impl AudioSource for PiAudioSource {
 struct PlaybackTask {
     cancel: Arc<std::sync::atomic::AtomicBool>,
     handle: tokio::task::JoinHandle<Result<(), AudioError>>,
+    /// Flipped to `true` by the playback task when it finishes. Lets
+    /// [`AudioSink::wait_for_end`] observe completion without taking ownership
+    /// of the task, which is what makes it cancel-safe.
+    done: tokio::sync::watch::Receiver<bool>,
 }
 
 #[cfg(feature = "audio")]
@@ -1203,6 +1237,52 @@ mod tests {
             recordings_dir: dir.to_string_lossy().into_owned(),
             mixer: None,
         }
+    }
+
+    /// A long clip must stop the moment the caller hangs up. The runtime races
+    /// `wait_for_end` against incoming audio commands in a `tokio::select!`, so
+    /// `wait_for_end` gets dropped when a `Stop` wins. If it has already taken
+    /// the playback task out of the sink, the cancel flag is stranded and the
+    /// clip plays to the end while `stop()` silently does nothing — exactly the
+    /// "hung up but the prompt kept playing" symptom.
+    #[cfg(feature = "audio")]
+    #[tokio::test]
+    async fn stop_cancels_playback_after_wait_for_end_was_cancelled() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut sink = PiAudioSink::new(config_with_channels(1));
+
+        // Stand in for a long clip: a blocking task that runs until cancelled.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task_cancel = Arc::clone(&cancel);
+        let (done_tx, done) = tokio::sync::watch::channel(false);
+        let handle = tokio::task::spawn_blocking(move || {
+            while !task_cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let _ = done_tx.send(true);
+            Ok(())
+        });
+        sink.playback = Some(PlaybackTask {
+            cancel: Arc::clone(&cancel),
+            handle,
+            done,
+        });
+
+        // The caller hangs up: `Stop` wins the select and `wait_for_end` is
+        // dropped mid-flight.
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+            _ = sink.wait_for_end() => panic!("playback ended on its own"),
+        }
+
+        sink.stop().await.expect("stop playback");
+        assert!(
+            cancel.load(Ordering::SeqCst),
+            "stop() did not cancel playback, so the clip would keep playing after a hangup"
+        );
+        assert!(sink.playback.is_none());
     }
 
     #[test]
