@@ -38,3 +38,16 @@ Record and store **FLAC** (16-bit, 48 kHz, mono).
   rules in `docs/azure-storage.md` cover this.
 - Encoding takes a few hundred ms of CPU on a Pi 4 per recording. Within
   budget.
+- `flacenc` needs two structural fix-ups after encoding, applied in
+  `crates/booth-pi/src/flac_frame.rs` and `finalize_recording`:
+  - It writes sample-rate code `0` ("read it from `STREAMINFO`") in every
+    frame header. That is spec-legal, but Apple CoreAudio decodes zero
+    frames from such a stream, so recordings were silent in Finder,
+    QuickTime, and the operator's browser player on macOS. We rewrite the
+    field to the explicit code for the stream's rate and recompute the
+    header CRC-8 and frame CRC-16. No audio is re-encoded.
+  - It pads a trailing partial block out to a whole block, but computes
+    `total_samples` and the `STREAMINFO` MD5 as if it had not, which makes
+    `flac -t` reject the file. We pad the sample buffer to a whole number
+    of blocks before encoding so the declared length matches what is
+    actually stored.
