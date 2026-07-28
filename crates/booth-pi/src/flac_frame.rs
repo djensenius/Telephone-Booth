@@ -243,7 +243,13 @@ pub fn rewrite_frame_sample_rates(
         );
         return 0;
     };
-    let total: usize = frame_lengths.iter().sum();
+    let Some(total) = frame_lengths
+        .iter()
+        .try_fold(0usize, |acc, &len| acc.checked_add(len))
+    else {
+        tracing::warn!("FLAC frame lengths overflow; skipping header rewrite");
+        return 0;
+    };
     let Some(first_frame) = encoded.len().checked_sub(total) else {
         tracing::warn!("FLAC frame lengths exceed the encoded stream; skipping header rewrite");
         return 0;
@@ -474,6 +480,19 @@ mod tests {
                 .iter()
                 .all(|&(code, ok)| code == 10 && ok)
         );
+    }
+
+    #[test]
+    fn overflowing_frame_lengths_leave_the_stream_untouched() {
+        let frame = synthetic_frame();
+        let mut encoded = b"fLaC".to_vec();
+        encoded.extend_from_slice(&frame);
+        let original = encoded.clone();
+        assert_eq!(
+            rewrite_frame_sample_rates(&mut encoded, &[usize::MAX, 2], 48_000),
+            0
+        );
+        assert_eq!(encoded, original);
     }
 
     #[test]
