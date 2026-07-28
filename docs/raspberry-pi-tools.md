@@ -21,9 +21,9 @@ you can paste the commands verbatim.
 
 | Tool | apt source? | Recommended install |
 | --- | --- | --- |
-| `fish` | Yes — Raspberry Pi OS (Debian) | `apt install fish` |
-| `tmux` | Yes — Raspberry Pi OS (Debian) | `apt install tmux` |
-| `bat` | Yes — Raspberry Pi OS (Debian) | `apt install bat` (binary: `batcat`) |
+| `fish` | Yes — Raspberry Pi OS (Debian) | mise (`fish@latest`) |
+| `tmux` | Yes — Raspberry Pi OS (Debian) | mise (`tmux@latest`) |
+| `bat` | Yes — Raspberry Pi OS (Debian) | mise (`bat@latest`) |
 | `mise` | Yes — official apt repo | apt repo below |
 | `eza` | Yes — official apt repo (`deb.gierens.de`) | apt repo below |
 | `neovim` (latest) | No arm apt/`.deb` | mise |
@@ -36,18 +36,27 @@ you can paste the commands verbatim.
 
 ## Tools available from apt
 
-### Already packaged in Raspberry Pi OS
+### Latest `fish`, `tmux`, and `bat` via mise
 
-`fish`, `tmux`, and `bat` ship in the Debian repositories that Raspberry Pi OS
-is built on, so no extra source is needed:
+If you want the newest releases of these three tools, install them through
+mise (the Debian/Raspberry Pi OS packages can lag upstream):
+
+```sh
+mise use -g fish@latest tmux@latest bat@latest
+```
+
+### APT fallback (`fish`, `tmux`, `bat`)
+
+If you prefer apt-managed packages, all three are available directly in
+Raspberry Pi OS:
 
 ```sh
 sudo apt update
 sudo apt install -y fish tmux bat
 ```
 
-Note: Debian ships `bat` as `batcat` (the `bat` name clashed with another
-package). Add a shim if you want the upstream name:
+Debian installs the `bat` binary as `batcat` (name collision). Add a shim if
+you want the upstream command name:
 
 ```sh
 mkdir -p ~/.local/bin
@@ -103,8 +112,8 @@ sudo apt install -y eza
 
 The rest have no apt repository that serves current `arm64`/`armhf` builds:
 
-- **`neovim`** — upstream only ships an `amd64` `.deb`; the Debian package is
-  stale.
+- **`neovim`** — upstream does not publish a Linux `.deb` at all; Debian's apt
+  package is stale.
 - **`starship`**, **`atuin`** — distributed via install scripts / binaries, no
   apt repo.
 - **`zellij`** — GitHub release binaries only.
@@ -131,9 +140,8 @@ sudo dpkg -i git-delta_VERSION_arm64.deb
 ## The Raspberry Pi mise config
 
 [`packaging/raspberry-pi/mise.toml`](../packaging/raspberry-pi/mise.toml)
-installs every tool above that lacks a good apt package, plus optional
-(commented-out) entries for the apt-packaged ones if you would rather manage
-everything through mise. Install mise first (apt repo above), then:
+installs every tool above that lacks a good apt package and also pins
+`fish`/`tmux`/`bat` to `latest`. Install mise first (apt repo above), then:
 
 ```sh
 mkdir -p ~/.config/mise
@@ -142,10 +150,9 @@ mise trust ~/.config/mise/config.toml
 mise install
 ```
 
-`mise install` downloads a prebuilt binary for your Pi's architecture for each
-tool (no compiling), drops them on your `PATH`, and `mise upgrade` later bumps
-them all to the newest release. `herdr` is fetched with mise's `ubi` backend
-straight from its GitHub releases.
+`mise install` installs the configured tool versions onto your `PATH`, and
+`mise upgrade` later bumps them to the newest releases. `herdr` is fetched with
+mise's `ubi` backend straight from its GitHub releases.
 
 > This config is intentionally separate from the repo-root
 > [`mise.toml`](../mise.toml), which pins the Rust toolchain and build tooling

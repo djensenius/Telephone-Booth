@@ -17,6 +17,11 @@
 # for your architecture (no compiling) unless noted.
 
 [tools]
+# Keep these on latest releases via mise (Debian apt can lag behind).
+fish = "latest"
+tmux = "latest"
+bat = "latest"
+
 # Tools with no good Raspberry Pi apt package — mise manages these.
 neovim = "latest"
 starship = "latest"
@@ -30,7 +35,6 @@ delta = "latest"    # git-delta
 "ubi:ogulcancelik/herdr" = "latest"
 
 # The following also have first-class apt packages on Raspberry Pi OS and are
-# usually better installed with apt (see docs/raspberry-pi-tools.md). Uncomment
+# commonly installed with apt (see docs/raspberry-pi-tools.md). Uncomment
 # them here if you would rather manage everything through mise instead.
-# bat = "latest"     # apt package installs the binary as `batcat`
 # eza = "latest"     # apt repo: deb.gierens.de
