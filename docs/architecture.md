@@ -57,8 +57,8 @@ States: `Idle`, `DialTone`, `Dialing { pulses }`, `PlayingQuestion`, `Beep`,
 `PlayingMessage`, `PlayingInstructions`, `CallUnavailable`, `Error { reason }`.
 
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
-`DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `UploadComplete`,
-`UploadFailed`, `Tick`.
+`DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `RecordingFailed`,
+`UploadComplete`, `UploadFailed`, `Tick`.
 
 Effects the runtime executes: `Play(AudioRef)`, `Stop`, `StartRecording`,
 `StopRecording`, `Upload`, `FetchRandomQuestion`, `FetchRandomMessage`,
@@ -72,6 +72,12 @@ Digit 1 fetches a random question; digit 2 fetches a random message;
 digit 0 plays the operator-recorded `Instructions` audio; digits 3..=9
 play the bundled "call cannot be completed as dialed" prompt.
 
+Hanging up is a **full reset of the booth's outputs**: every state stops
+playback (`StopAudio`) and cancels the pulse timeout, so nothing keeps talking
+to an empty booth. Stopping audio also drops any operator clip that was fetched
+but never played, so a clip fetched for an abandoned call cannot leak into the
+next one.
+
 Hanging up while `Recording` moves to `FinishingRecording` (not straight to
 `Idle`) so the finalized answer is still uploaded — the natural "talk, then
 hang up" gesture. If the caller lifts the handset again before finalization
@@ -81,6 +87,11 @@ post-upload routing changes. `on_hook` (carried from `FinishingRecording` into
 returns to `Idle` silently instead of playing a dial tone to an empty booth.
 Recordings shorter than `audio.min_recording_secs` are discarded rather than
 uploaded.
+
+If the audio adapter cannot start or finalize a recording, the runtime feeds in
+`RecordingFailed` so the booth recovers instead of waiting forever for a
+`RecordingFinished` that will never arrive: an off-hook caller hears the busy
+tone (or gets a dial tone back), a hung-up booth resets silently to `Idle`.
 
 See [`debug-panel.md`](debug-panel.md) for the live telemetry stream the
 state machine drives.

@@ -241,6 +241,8 @@ pub struct MockRuntimeHandles {
     pub gpio: booth_mock::GpioInjector,
     /// Inspectable mock audio sink.
     pub audio_sink: booth_mock::MockAudioSink,
+    /// Inspectable mock audio source (shares state with the runtime's copy).
+    pub audio_source: booth_mock::MockAudioSource,
     /// Inspectable mock operator client.
     pub operator: booth_mock::MockOperatorClient,
 }
@@ -371,12 +373,13 @@ pub fn build_mock_adapters(bus: &TelemetryBus) -> (RuntimeAdapters, MockRuntimeH
     let adapters = RuntimeAdapters::new(
         Box::new(gpio),
         Box::new(audio_sink.clone()),
-        Box::new(audio_source),
+        Box::new(audio_source.clone()),
         Arc::new(operator.clone()),
     );
     let handles = MockRuntimeHandles {
         gpio: gpio_injector,
         audio_sink,
+        audio_source,
         operator,
     };
     (adapters, handles)
@@ -1064,12 +1067,23 @@ async fn effect_task(
                 let _ = audio_tx.send(AudioCommand::Play(source)).await;
             }
             Effect::StopAudio => {
+                // Stopping audio also invalidates any operator clip that was
+                // fetched but never played (e.g. the caller hung up while the
+                // fetch was in flight), so it can't leak into the next call.
+                *next_remote_audio.lock().await = None;
                 let _ = audio_tx.send(AudioCommand::Stop).await;
             }
             Effect::StartRecording => {
                 let mut src = audio_source.lock().await;
                 if let Err(err) = src.start().await {
                     publish_audio_error(&bus, &err);
+                    // Nothing is recording, so no `RecordingFinished` will ever
+                    // arrive; tell the core so it doesn't wait forever.
+                    let _ = event_tx
+                        .send(Event::RecordingFailed {
+                            reason: err.to_string(),
+                        })
+                        .await;
                 }
             }
             Effect::StopRecording => {
@@ -1092,8 +1106,26 @@ async fn effect_task(
                             .send(Event::RecordingFinished { recording_id })
                             .await;
                     }
-                    Ok(None) => {}
-                    Err(err) => publish_audio_error(&bus, &err),
+                    // No recording was in flight, so there is nothing to
+                    // finalize or upload. Unblock the core instead of leaving
+                    // it stuck in `FinishingRecording` with no dial tone for
+                    // the next caller.
+                    Ok(None) => {
+                        warn!("stop recording requested but no recording was in progress");
+                        let _ = event_tx
+                            .send(Event::RecordingFailed {
+                                reason: "no recording in progress".to_string(),
+                            })
+                            .await;
+                    }
+                    Err(err) => {
+                        publish_audio_error(&bus, &err);
+                        let _ = event_tx
+                            .send(Event::RecordingFailed {
+                                reason: err.to_string(),
+                            })
+                            .await;
+                    }
                 }
             }
             Effect::ArmPulseTimeout => {

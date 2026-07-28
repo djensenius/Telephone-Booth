@@ -358,3 +358,93 @@ async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Err
     let _ = std::fs::remove_dir_all(&rec_dir);
     Ok(())
 }
+
+/// Hanging up must always reset the booth, even when the audio adapter has no
+/// recording to finalize. Without a `RecordingFailed` fallback the runtime
+/// would never emit `RecordingFinished`, leaving the state machine stuck in
+/// `FinishingRecording` with no dial tone for the next caller.
+#[tokio::test]
+async fn hangup_with_no_recording_in_flight_resets_to_idle() -> Result<(), Box<dyn Error>> {
+    use booth_hal::AudioSource;
+
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.debug.allow_controls = true;
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    {
+        let state = handles.operator.state();
+        let mut s = state.lock().await;
+        s.questions.push_back(booth_hal::OperatorQuestion {
+            id: "q-1".to_string(),
+            audio_url: "https://mock.invalid/q1.flac".to_string(),
+            audio_sha256: None,
+            description: None,
+        });
+    }
+    let mut audio_source = handles.audio_source.clone();
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    inject(&runtime.commands, Event::HookOff).await?;
+    inject(&runtime.commands, Event::RotaryPulse).await?;
+    inject(&runtime.commands, Event::Tick).await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if matches!(
+            snapshot(&runtime.commands).await?,
+            State::PlayingQuestion { .. }
+        ) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("never reached PlayingQuestion".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        if matches!(snapshot(&runtime.commands).await?, State::Recording { .. }) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("never reached Recording".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    // Simulate the adapter losing the recording (e.g. the capture stream died),
+    // so finalizing it on hangup yields nothing to upload.
+    audio_source.stop().await?;
+
+    inject(&runtime.commands, Event::HookOn).await?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        if snapshot(&runtime.commands).await? == State::Idle {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("booth stayed wedged instead of resetting to Idle on hangup".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    let _ = runtime.join.await?;
+    Ok(())
+}
