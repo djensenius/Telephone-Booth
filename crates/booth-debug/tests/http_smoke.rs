@@ -46,6 +46,28 @@ async fn health_state_and_events_are_served() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Poll `/v1/status-led` until it reports `expected_colour`, or give up.
+async fn poll_status_led(
+    client: &reqwest::Client,
+    base_url: &str,
+    expected_colour: &str,
+) -> Result<Value, Box<dyn Error>> {
+    for _ in 0..100 {
+        let body: Value = client
+            .get(format!("{base_url}/v1/status-led"))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if body.get("colour").and_then(Value::as_str) == Some(expected_colour) {
+            return Ok(body);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    Err(format!("timed out waiting for status LED colour {expected_colour}").into())
+}
+
 #[tokio::test]
 async fn status_led_snapshot_tracks_telemetry() -> Result<(), Box<dyn Error>> {
     let server = common::spawn(DebugConfig::default()).await?;
@@ -73,14 +95,9 @@ async fn status_led_snapshot_tracks_telemetry() -> Result<(), Box<dyn Error>> {
         at_monotonic_ns: 9,
     });
 
-    // The newest event wins.
-    let snapshot: Value = client
-        .get(format!("{}/v1/status-led", server.base_url))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    // The newest event wins. The cache is fed by a background subscription, so
+    // poll briefly rather than assuming the task has already been scheduled.
+    let snapshot = poll_status_led(&client, &server.base_url, "blue").await?;
     assert_eq!(snapshot.get("colour").and_then(Value::as_str), Some("blue"));
     assert_eq!(
         snapshot.get("patternLabel").and_then(Value::as_str),
@@ -91,6 +108,26 @@ async fn status_led_snapshot_tracks_telemetry() -> Result<(), Box<dyn Error>> {
         Some(9)
     );
     assert!(snapshot.get("updatedAt").and_then(Value::as_str).is_some());
+
+    // The replay ring is small (32 in tests) and audio telemetry is high-rate,
+    // so the indication must survive its own record being evicted.
+    for _ in 0..64 {
+        server.bus.publish(TelemetryEvent::Error {
+            source: "test".to_string(),
+            message: "filler".to_string(),
+        });
+    }
+    let after_eviction = poll_status_led(&client, &server.base_url, "blue").await?;
+    assert_eq!(
+        after_eviction.get("colour").and_then(Value::as_str),
+        Some("blue")
+    );
+    assert!(
+        after_eviction
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .is_some()
+    );
 
     Ok(())
 }

@@ -933,6 +933,15 @@ async fn gpio_task(
                     if !reconcile_hook(new_gpio.as_ref(), &event_tx, &bus).await {
                         break;
                     }
+                    // Same reasoning for the power button: a press that started
+                    // during the outage would otherwise leave `power_button_task`
+                    // unaware, so the eventual release reads as a stray edge and
+                    // neither reboot nor power-off happens.
+                    if !reconcile_power_button(new_gpio.as_ref(), power_button_tx.as_ref(), &bus)
+                        .await
+                    {
+                        break;
+                    }
                     current = Some(new_gpio);
                 }
                 Err(rebuild_err) => {
@@ -1013,6 +1022,38 @@ async fn reconcile_hook(
     }
 }
 
+/// Re-forward the current power-button level after the GPIO adapter is rebuilt.
+///
+/// Rebuilt pollers seed their level without emitting an edge, so a press that
+/// began during the outage would never reach [`power_button_task`]; its release
+/// would then be discarded as a stray edge and the requested reboot / power-off
+/// would silently never happen. A redundant press level is harmless — the task
+/// treats it as "keep waiting" — so it is safe to always forward. Returns
+/// `false` only when the receiver is gone (runtime shutting down).
+async fn reconcile_power_button(
+    gpio: &dyn GpioPort,
+    power_button_tx: Option<&mpsc::Sender<bool>>,
+    bus: &TelemetryBus,
+) -> bool {
+    let Some(tx) = power_button_tx else {
+        return true;
+    };
+    match gpio.snapshot(PinRole::PowerButton).await {
+        Ok(level) => {
+            bus.publish(TelemetryEvent::GpioEdge(GpioEdge {
+                role: PinRole::PowerButton,
+                level,
+                at_monotonic_ns: monotonic_ns(),
+            }));
+            tx.send(level).await.is_ok()
+        }
+        Err(err) => {
+            warn!(%err, "failed to reconcile power button state after gpio rebuild");
+            true
+        }
+    }
+}
+
 fn event_from_gpio(edge: GpioEdge) -> Option<Event> {
     match edge.role {
         PinRole::Hook => Some(if edge.level {
@@ -1053,6 +1094,11 @@ async fn power_button_task(
         let mut held = false;
         loop {
             tokio::select! {
+                // Biased so an elapsed hold threshold deterministically wins
+                // over a release that became ready in the same poll. Without
+                // this, a release landing exactly on the threshold could reboot
+                // instead of powering off, contradicting `hold_ms`.
+                biased;
                 () = &mut sleep, if !held => {
                     held = true;
                     if event_tx.send(Event::PowerButtonHeld).await.is_err() {

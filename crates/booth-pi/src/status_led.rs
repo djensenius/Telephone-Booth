@@ -79,7 +79,7 @@ mod imp {
     use rppal::gpio::{Gpio, OutputPin};
     use tokio::sync::Mutex;
     use tokio::task::JoinHandle;
-    use tracing::info;
+    use tracing::{info, warn};
 
     use super::{
         ANIMATION_TICK, LedColour, LedError, LedPattern, PWM_FREQUENCY_HZ, StatusLed,
@@ -232,10 +232,16 @@ mod imp {
                     ticker.tick().await;
                     let Some(lit) = lit_fraction(pattern, start.elapsed(), ceiling) else {
                         // One-shot pattern finished: leave the channel off.
-                        let _ = channels.lock().await.apply(colour, 0.0);
+                        if let Err(err) = channels.lock().await.apply(colour, 0.0) {
+                            warn!(%err, %colour, %pattern, "failed to park status LED channel");
+                        }
                         break;
                     };
-                    if channels.lock().await.apply(colour, lit).is_err() {
+                    // The runtime has already reported this indication as
+                    // active, so a mid-animation PWM failure must not be
+                    // swallowed: log it before giving up on the animation.
+                    if let Err(err) = channels.lock().await.apply(colour, lit) {
+                        warn!(%err, %colour, %pattern, "status LED animation stopped after a write failure");
                         break;
                     }
                 }

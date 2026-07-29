@@ -443,6 +443,13 @@ struct AppState {
     bus: TelemetryBus,
     runtime_tx: mpsc::Sender<RuntimeCommand>,
     cert_fingerprint: Arc<String>,
+    /// Latest status-LED indication, kept outside the bounded replay ring.
+    ///
+    /// The ring evicts oldest-first and high-rate `AudioLevel` records can push
+    /// an LED change out within minutes, so reconstructing "current" from
+    /// replay history alone would make the endpoint forget an indication that
+    /// is still physically lit.
+    status_led: Arc<Mutex<Option<StatusLedSnapshot>>>,
 }
 
 /// Start enabled debug listeners and return a task handle that owns them.
@@ -483,11 +490,20 @@ pub async fn serve_with_handles(
 
     let tls = generate_tls_config()?;
     let fingerprint = tls.fingerprint.clone();
+    // Seed from whatever is still in the ring, then keep the cache current from
+    // the live subscription so eviction cannot lose the indication.
+    let status_led = Arc::new(Mutex::new(snapshot_status_led(&bus)));
+    let led_task = tokio::spawn(track_status_led(
+        bus.clone(),
+        bus.subscribe(),
+        Arc::clone(&status_led),
+    ));
     let state = AppState {
         config: Arc::new(config.clone()),
         bus,
         runtime_tx,
         cert_fingerprint: Arc::new(fingerprint.clone()),
+        status_led,
     };
     let authed_router = build_router(state.clone());
     let loopback_router = metrics_render.map_or_else(
@@ -562,6 +578,7 @@ pub async fn serve_with_handles(
                 tracing::error!(error = %err, "debug listener task panicked");
             }
         }
+        led_task.abort();
     });
 
     Ok(ServeHandles {
@@ -739,7 +756,11 @@ async fn gpio_snapshot(State(state): State<AppState>) -> Json<GpioSnapshot> {
 }
 
 async fn status_led_snapshot(State(state): State<AppState>) -> Json<StatusLedSnapshot> {
-    Json(snapshot_status_led(&state.bus))
+    let cached = state.status_led.lock().clone();
+    Json(cached.unwrap_or_else(|| StatusLedSnapshot {
+        pattern_label: LedPattern::default().to_string(),
+        ..StatusLedSnapshot::default()
+    }))
 }
 
 async fn audio_snapshot(State(state): State<AppState>) -> Json<AudioMeterSnapshot> {
@@ -1152,29 +1173,57 @@ fn snapshot_gpio(bus: &TelemetryBus) -> GpioSnapshot {
     GpioSnapshot { pins, updated_at }
 }
 
-fn snapshot_status_led(bus: &TelemetryBus) -> StatusLedSnapshot {
-    let mut snapshot = StatusLedSnapshot {
-        pattern_label: LedPattern::default().to_string(),
-        ..StatusLedSnapshot::default()
-    };
-    for record in bus.snapshot_since(None) {
-        if let TelemetryEvent::StatusLed {
+fn snapshot_status_led(bus: &TelemetryBus) -> Option<StatusLedSnapshot> {
+    bus.snapshot_since(None)
+        .into_iter()
+        .rev()
+        .find_map(|record| status_led_from_record(&record))
+}
+
+fn status_led_from_record(record: &TelemetryRecord) -> Option<StatusLedSnapshot> {
+    match record.event {
+        TelemetryEvent::StatusLed {
             colour,
             pattern,
             at_monotonic_ns,
-        } = record.event
-        {
-            snapshot = StatusLedSnapshot {
-                colour,
-                pattern,
-                pattern_label: pattern.to_string(),
-                at_monotonic_ns,
-                updated_at: Some(system_time_to_rfc3339(record.ts)),
-                last_event_id: record.id,
-            };
+        } => Some(StatusLedSnapshot {
+            colour,
+            pattern,
+            pattern_label: pattern.to_string(),
+            at_monotonic_ns,
+            updated_at: Some(system_time_to_rfc3339(record.ts)),
+            last_event_id: record.id,
+        }),
+        _ => None,
+    }
+}
+
+/// Keep `cache` current from the live telemetry subscription.
+///
+/// The replay ring is bounded and evicts oldest-first, so the current LED
+/// indication must not be reconstructed from history alone. On lag (a slow
+/// subscriber dropping records) the cache is re-seeded from whatever the ring
+/// still holds, which is the best available approximation.
+async fn track_status_led(
+    bus: TelemetryBus,
+    mut rx: broadcast::Receiver<TelemetryRecord>,
+    cache: Arc<Mutex<Option<StatusLedSnapshot>>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(record) => {
+                if let Some(snapshot) = status_led_from_record(&record) {
+                    *cache.lock() = Some(snapshot);
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                if let Some(snapshot) = snapshot_status_led(&bus) {
+                    *cache.lock() = Some(snapshot);
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
-    snapshot
 }
 
 fn snapshot_audio(bus: &TelemetryBus) -> AudioMeterSnapshot {
