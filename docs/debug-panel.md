@@ -93,6 +93,13 @@ Every event on `/debug/stream` is one JSON object per line:
 `id` is a monotonically increasing event counter; pass `?since=<id>` to
 catch up after a reconnect.
 
+The websocket has one deliberate exception: it leads each connection with the
+retained `status_led` record, and re-sends it when a lagging subscriber has
+skipped frames, so a client always knows the current indication even though the
+LED is level-triggered and its record can be far older than the replay window.
+Clients that track a reconnect cursor must therefore keep the **maximum** `id`
+they have seen, not the last one.
+
 ## Standalone UI
 
 `GET /` (after Bearer auth via a one-time token in the URL fragment or a

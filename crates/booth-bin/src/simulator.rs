@@ -567,7 +567,14 @@ async fn attach_telemetry_loop(config: AttachConfig, tx: mpsc::Sender<TelemetryM
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<TelemetryRecord>(&text) {
                                 Ok(record) => {
-                                    replay_from = Some(record.id);
+                                    // The server leads a connection (and lag
+                                    // recovery) with the retained status-LED
+                                    // record, whose id can be older than the
+                                    // cursor. Take the max so reconnecting
+                                    // never replays history already seen.
+                                    replay_from = Some(
+                                        replay_from.map_or(record.id, |seen| seen.max(record.id)),
+                                    );
                                     if tx.send(TelemetryMessage::Record(record)).await.is_err() {
                                         return;
                                     }
@@ -585,7 +592,14 @@ async fn attach_telemetry_loop(config: AttachConfig, tx: mpsc::Sender<TelemetryM
                         Some(Ok(Message::Binary(bytes))) => {
                             match serde_json::from_slice::<TelemetryRecord>(&bytes) {
                                 Ok(record) => {
-                                    replay_from = Some(record.id);
+                                    // The server leads a connection (and lag
+                                    // recovery) with the retained status-LED
+                                    // record, whose id can be older than the
+                                    // cursor. Take the max so reconnecting
+                                    // never replays history already seen.
+                                    replay_from = Some(
+                                        replay_from.map_or(record.id, |seen| seen.max(record.id)),
+                                    );
                                     if tx.send(TelemetryMessage::Record(record)).await.is_err() {
                                         return;
                                     }

@@ -67,9 +67,14 @@ Add a status-LED and power-button port, keeping the core pure.
   press and the requested reboot is simply never emitted — but the failure mode
   is "nothing happens", never "the booth powers off". For the same reason the
   runtime's `gpio_task` hands hook / rotary events to a forwarder task through
-  an unbounded queue, so a stalled core cannot block edge intake and delay a
-  release past `hold_ms`, and `power_button_task` re-checks for a queued release
-  when the hold timer fires.
+  a second bounded queue, so a stalled core cannot block edge intake and delay a
+  release past `hold_ms`. That queue provides no stronger delivery guarantee
+  than the Pi one: when it fills — which needs the core wedged for both queue
+  depths — hook / rotary events are dropped and counted
+  (`booth_gpio_events_dropped_total`) rather than allowed to grow without
+  bound. Power-button signals never travel on it. Finally,
+  `power_button_task` re-checks for a queued release when the hold timer
+  fires.
 
 ## Consequences
 
