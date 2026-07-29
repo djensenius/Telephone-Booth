@@ -62,6 +62,45 @@ The WebSocket is **operator-side only** — the phone client doesn't open
 it. Status updates from the phone client are HTTP `PUT`s; the operator
 backend fan-outs to connected browsers.
 
+## Audit trail
+
+Every write the client makes is recorded by the operator backend with the
+acting principal, the client IP, the request path, the response status and a
+timestamp. See
+[`docs/audit-log.md`](https://github.com/djensenius/Telephone-Booth-Operator/blob/main/docs/audit-log.md)
+in the operator repo.
+
+There is no operator user behind these calls, so **the API token _is_ the
+identity**. The trail shows `token:<label>`, which is the label typed when the
+token was created — so give each booth its own token with a label that names
+the machine (`booth-1`, `booth-lobby`), never a shared one. A revoked token
+keeps its history: entries are append-only and the label was captured at the
+time of the action.
+
+Which calls are recorded:
+
+| Call                              | Recorded as         | Notes                                    |
+| --------------------------------- | ------------------- | ---------------------------------------- |
+| `POST /v1/messages`               | `message.create`    | Includes a failed attempt (`401`/`409`)  |
+| `POST /v1/messages/{id}/complete` | `message.complete`  | Records the verification outcome         |
+| `PUT  /v1/status`                 | —                   | Telemetry; excluded by default           |
+| `PUT  /v1/system`                 | —                   | Telemetry; excluded by default           |
+| `POST /v1/events`                 | —                   | Telemetry; excluded by default           |
+| `GET` calls                       | —                   | Reads are never audited                  |
+
+Status, system and event pushes are heartbeats that would otherwise bury the
+trail in noise, so the operator backend skips them unless an admin sets
+`AUDIT_LOG_TELEMETRY=true`. They are still visible in the sessions and events
+screens, which is where they belong.
+
+Rejected writes are recorded too — that is the point. If a booth's token is
+revoked mid-shift, the `401`s show up in the trail with the token label, the IP
+and the time, which is usually the fastest way to confirm what happened.
+
+The client sends `User-Agent: telephone-booth/<version>`, which the backend
+stores alongside each entry, so it is easy to tell a booth's writes apart from
+a `curl` run by hand with the same token.
+
 ## Common errors
 
 | HTTP   | Likely cause                                                       |
