@@ -493,9 +493,11 @@ pub async fn serve_with_handles(
     // Seed from whatever is still in the ring; the tracker that keeps the cache
     // current is spawned only once all fallible setup below has succeeded, so an
     // early error return cannot leave a detached task draining telemetry
-    // forever. Subscribe now so records published during setup are not missed.
-    let status_led = Arc::new(Mutex::new(snapshot_status_led(&bus)));
+    // forever. Subscribe *before* seeding so a record published between the two
+    // is covered by the subscription rather than falling into a gap; an overlap
+    // is harmless because the subscription only replays newer records.
     let led_rx = bus.subscribe();
+    let status_led = Arc::new(Mutex::new(snapshot_status_led(&bus)));
     let state = AppState {
         config: Arc::new(config.clone()),
         bus,

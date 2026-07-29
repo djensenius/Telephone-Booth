@@ -55,7 +55,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use url::Url;
 
-use crate::{RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime};
+use crate::{
+    PowerButtonConfig, RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime,
+};
 use booth_hal::RuntimeMode;
 
 const EVENT_HISTORY: usize = 64;
@@ -120,10 +122,23 @@ pub async fn run_simulator(
     // The power button is opt-in in production, but the simulator is the surface
     // for exercising it, so enable it here (the simulator uses a mock power
     // controller, so no real reboot/poweroff can happen).
-    let power_button_hold_ms = runtime_config.power_button.hold_ms;
+    // `validate_config` only rejects a zero hold threshold when the button is
+    // enabled, so a config that leaves it off can carry `hold_ms = 0` through
+    // validation. Forcing the feature on here would then make the hold timer
+    // ready immediately and turn even a short `[p]` press into a power-off, so
+    // repair the threshold before enabling.
     if !runtime_config.power_button.enabled {
+        if runtime_config.power_button.hold_ms == 0 {
+            let fallback = PowerButtonConfig::default().hold_ms;
+            tracing::warn!(
+                "simulator mode: [power_button] hold_ms = 0 is unusable; \
+                 using the default {fallback} ms instead"
+            );
+            runtime_config.power_button.hold_ms = fallback;
+        }
         runtime_config.power_button.enabled = true;
     }
+    let power_button_hold_ms = runtime_config.power_button.hold_ms;
 
     // Surface what the web simulator URL will be (or why it won't be
     // reachable) BEFORE the runtime starts. The debug surface logs its own
@@ -153,6 +168,12 @@ pub async fn run_simulator(
         );
     }
 
+    // Subscribe *before* the runtime starts: the telemetry bus is a broadcast
+    // channel with no replay for new receivers, so a feed created afterwards
+    // misses the boot and ready status-LED records. On an idle booth the next
+    // LED change may be hours away, leaving the TUI showing `off`.
+    let feed = TelemetryFeed::local(&bus);
+
     let handle = spawn_runtime(
         runtime_config,
         adapters,
@@ -167,13 +188,7 @@ pub async fn run_simulator(
 
     let mut state = SimulatorState::new(mock_io, false, log_path);
     state.power_button_hold_ms = power_button_hold_ms;
-    drive_tui(
-        Some(handle),
-        TelemetryFeed::local(&bus),
-        state,
-        Some(injector),
-    )
-    .await
+    drive_tui(Some(handle), feed, state, Some(injector)).await
 }
 
 /// Run the read-only hardware monitor TUI to completion.

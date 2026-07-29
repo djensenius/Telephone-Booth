@@ -526,9 +526,12 @@ three cathodes (`R`/`G`/`B`) are each driven low to light that colour.
 > **⚠️ Colour codes mean different things on the two harnesses.** On the dial +
 > hook harness, white/red/green/blue are hook/pulse/gate/common (see
 > [As-built dial + hook wiring](#as-built-dial--hook-wiring-reference-booth)).
-> On this button harness the same colours are anode/red-cathode/green-cathode/
-> blue-cathode plus a white switch lead. **Label both bundles** so they are
-> never confused during install.
+> On this button harness they are, per the table above: **red = LED anode
+> (3V3)**, **yellow = red cathode**, **green = green cathode**, **blue = blue
+> cathode**, **white = switch to BCM 26**, **black = switch to GND**. Note in
+> particular that white is a *switch* lead here and red is *3V3* — wiring
+> either by dial-harness habit shorts the LED supply. **Label both bundles** so
+> they are never confused during install.
 
 ### Only one colour at a time (shared current limit)
 

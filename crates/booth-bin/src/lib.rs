@@ -1127,12 +1127,25 @@ async fn power_button_task(
         let mut held = false;
         loop {
             tokio::select! {
-                // Biased so an elapsed hold threshold deterministically wins
-                // over a release that became ready in the same poll. Without
-                // this, a release landing exactly on the threshold could reboot
-                // instead of powering off, contradicting `hold_ms`.
+                // Biased so the timer is polled first: `select!` does not
+                // record which future became ready first, so an unbiased race
+                // at the threshold is decided arbitrarily. Powering the host
+                // off is the irreversible outcome, so the timer branch first
+                // re-checks whether a release is already queued and defers to
+                // it — a tie, or a release that arrived while this task was not
+                // being polled, degrades to a short press (reboot).
                 biased;
                 () = &mut sleep, if !held => {
+                    if let Some(released) = drain_release(&mut rx) {
+                        if released
+                            && event_tx.send(Event::PowerButtonPressed).await.is_err()
+                        {
+                            return;
+                        }
+                        // `None` means the channel closed mid-press; either way
+                        // this press is finished.
+                        break;
+                    }
                     held = true;
                     if event_tx.send(Event::PowerButtonHeld).await.is_err() {
                         return;
@@ -1156,6 +1169,25 @@ async fn power_button_task(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Consume any levels already queued for a press in progress, reporting whether
+/// the press is over.
+///
+/// Returns `None` while the button is still pressed (nothing queued, or only
+/// redundant press levels), `Some(true)` when a release is already waiting, and
+/// `Some(false)` when the channel closed. Used at the hold deadline so a
+/// release that landed before the threshold — but was not yet polled — cannot
+/// be misread as a continued hold and power the host off.
+fn drain_release(rx: &mut mpsc::Receiver<bool>) -> Option<bool> {
+    loop {
+        match rx.try_recv() {
+            Ok(true) => {}
+            Ok(false) => return Some(true),
+            Err(mpsc::error::TryRecvError::Empty) => return None,
+            Err(mpsc::error::TryRecvError::Disconnected) => return Some(false),
         }
     }
 }
@@ -2942,6 +2974,43 @@ mod tests {
             1,
             "the adapter should be rebuilt exactly once"
         );
+    }
+
+    /// A release that is already queued at the hold deadline must win.
+    ///
+    /// `select!` cannot tell which future became ready first, so if this task
+    /// is not polled between a release and the threshold both branches are
+    /// ready at once. The timer is polled first (deliberately), so it has to
+    /// re-check the channel and fail safe to a short press rather than power
+    /// the host off.
+    #[tokio::test(start_paused = true)]
+    async fn queued_release_at_the_hold_deadline_is_a_short_press() {
+        use crate::power_button_task;
+        use std::time::Duration;
+
+        let (level_tx, level_rx) = mpsc::channel::<bool>(16);
+        let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(8);
+        let task = tokio::spawn(power_button_task(
+            level_rx,
+            event_tx,
+            Duration::from_secs(3),
+        ));
+
+        level_tx.send(true).await.expect("press");
+        // Let the task observe the press and park on the hold timer.
+        tokio::task::yield_now().await;
+        // Cross the threshold while the task is not being polled, then release:
+        // both select branches are now ready simultaneously.
+        tokio::time::advance(Duration::from_millis(3100)).await;
+        level_tx.send(false).await.expect("release");
+
+        assert_eq!(
+            event_rx.recv().await,
+            Some(booth_core::Event::PowerButtonPressed),
+            "an already-queued release must not be reported as a hold"
+        );
+
+        task.abort();
     }
 
     /// A stalled core must not delay power-button edges.
