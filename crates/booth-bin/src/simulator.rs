@@ -117,6 +117,14 @@ pub async fn run_simulator(
         runtime_config.debug.allow_controls = true;
     }
 
+    // The power button is opt-in in production, but the simulator is the surface
+    // for exercising it, so enable it here (the simulator uses a mock power
+    // controller, so no real reboot/poweroff can happen).
+    let power_button_hold_ms = runtime_config.power_button.hold_ms;
+    if !runtime_config.power_button.enabled {
+        runtime_config.power_button.enabled = true;
+    }
+
     // Surface what the web simulator URL will be (or why it won't be
     // reachable) BEFORE the runtime starts. The debug surface logs its own
     // `MissingToken` error at `error!` level if it can't start, but that's
@@ -157,7 +165,8 @@ pub async fn run_simulator(
         },
     );
 
-    let state = SimulatorState::new(mock_io, false, log_path);
+    let mut state = SimulatorState::new(mock_io, false, log_path);
+    state.power_button_hold_ms = power_button_hold_ms;
     drive_tui(
         Some(handle),
         TelemetryFeed::local(&bus),
@@ -805,6 +814,11 @@ struct SimulatorState {
     hook_known: bool,
     current_state: String,
     booth_status: String,
+    /// Human-readable current status LED colour + pattern (from telemetry).
+    led: String,
+    /// Configured power-button hold threshold (ms) used to time the injected
+    /// long-press keybinding so it crosses the runtime's threshold.
+    power_button_hold_ms: u64,
     audio_in: LevelView,
     audio_out: LevelView,
     history: VecDeque<HistoryEntry>,
@@ -841,6 +855,8 @@ impl SimulatorState {
             hook_known: !read_only,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
+            led: "off".to_string(),
+            power_button_hold_ms: 3000,
             audio_in: LevelView::default(),
             audio_out: LevelView::default(),
             history: VecDeque::with_capacity(EVENT_HISTORY),
@@ -861,6 +877,8 @@ impl SimulatorState {
             hook_known: false,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
+            led: "off".to_string(),
+            power_button_hold_ms: 3000,
             audio_in: LevelView::default(),
             audio_out: LevelView::default(),
             history: VecDeque::with_capacity(EVENT_HISTORY),
@@ -900,6 +918,20 @@ impl SimulatorState {
                     self.note_read_only();
                 }
             }
+            KeyCode::Char('p') => {
+                if let Some(injector) = injector {
+                    self.short_power_press(injector).await;
+                } else {
+                    self.note_read_only();
+                }
+            }
+            KeyCode::Char('P') => {
+                if let Some(injector) = injector {
+                    self.long_power_press(injector).await;
+                } else {
+                    self.note_read_only();
+                }
+            }
             _ => {}
         }
         Action::Continue
@@ -913,6 +945,67 @@ impl SimulatorState {
                 "Live hardware monitor — use the real phone (input is read-only)."
             },
             Style::default().fg(Color::Yellow),
+        );
+    }
+
+    async fn short_power_press(&mut self, injector: &booth_mock::GpioInjector) {
+        // Press then release immediately: shorter than the hold threshold, so
+        // the runtime synthesizes PowerButtonPressed -> Effect::Reboot.
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: true,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: false,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        self.set_status(
+            "Power button: short press (reboot)".to_string(),
+            Style::default().fg(Color::Cyan),
+        );
+        self.push_history(
+            "inject: power button short press (reboot)".to_string(),
+            Style::default().fg(Color::Cyan),
+        );
+    }
+
+    async fn long_power_press(&mut self, injector: &booth_mock::GpioInjector) {
+        // Press now, then release after the hold threshold elapses (in a
+        // detached task so the TUI stays responsive). The runtime's timer fires
+        // first and synthesizes PowerButtonHeld -> Effect::PowerOff.
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: true,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        let release = injector.clone();
+        let delay = Duration::from_millis(self.power_button_hold_ms.saturating_add(300));
+        let ns = self.monotonic_ns();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            release
+                .push(GpioEdge {
+                    role: PinRole::PowerButton,
+                    level: false,
+                    at_monotonic_ns: ns,
+                })
+                .await;
+        });
+        self.set_status(
+            "Power button: holding (power off)".to_string(),
+            Style::default().fg(Color::Red),
+        );
+        self.push_history(
+            "inject: power button hold (power off)".to_string(),
+            Style::default().fg(Color::Red),
         );
     }
 
@@ -1049,6 +1142,16 @@ impl SimulatorState {
                     ts,
                     text: format!("{level} [{target}] {message}"),
                     style: Style::default().fg(color),
+                });
+            }
+            TelemetryEvent::StatusLed {
+                colour, pattern, ..
+            } => {
+                self.led = format!("{colour} / {pattern}");
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("status LED -> {colour} / {pattern}"),
+                    style: Style::default().fg(Color::Yellow),
                 });
             }
             TelemetryEvent::GpioEdge(edge) => {
@@ -1223,6 +1326,8 @@ impl SimulatorState {
             ),
             Span::raw("   status="),
             Span::styled(self.booth_status.clone(), Style::default().fg(Color::Green)),
+            Span::raw("   led="),
+            Span::styled(self.led.clone(), Style::default().fg(Color::Magenta)),
             Span::raw("   hook="),
             Span::styled(
                 hook,
@@ -1284,7 +1389,7 @@ impl SimulatorState {
         } else if self.read_only {
             "Controls: [q]/Esc/Ctrl+C quit   (live hardware — dial the real phone)"
         } else {
-            "Controls: [h]/space toggle hook   [0-9] dial digit   [q]/Esc/Ctrl+C quit"
+            "Controls: [h]/space toggle hook   [0-9] dial digit   [p] power reboot   [P] power off   [q]/Esc/Ctrl+C quit"
         };
         let log_line = self.log_path.as_ref().map_or_else(
             || "Log: <stdout>".to_string(),

@@ -1120,6 +1120,7 @@ fn snapshot_gpio(bus: &TelemetryBus) -> GpioSnapshot {
         PinRole::Hook => 0,
         PinRole::RotaryRead => 1,
         PinRole::RotaryPulse => 2,
+        PinRole::PowerButton => 3,
     });
     GpioSnapshot { pins, updated_at }
 }

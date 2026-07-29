@@ -479,6 +479,7 @@ pub fn record_telemetry_event(event: &TelemetryEvent) {
         | TelemetryEvent::UploadStarted { .. }
         | TelemetryEvent::AudioDeviceChange { .. }
         | TelemetryEvent::GpioEdge(_)
+        | TelemetryEvent::StatusLed { .. }
         | TelemetryEvent::SystemSample { .. }
         | TelemetryEvent::Log { .. } => {
             // No counter for these in v1 — the structured event is the

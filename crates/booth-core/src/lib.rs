@@ -25,7 +25,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use booth_hal::{AudioRef, BoothStatus, BuiltinTone, QuestionId, RecordingId};
+use booth_hal::{
+    AudioRef, BoothStatus, BuiltinTone, LedColour, LedPattern, QuestionId, RecordingId,
+};
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of rotary pulses we accept for a single digit. North
@@ -36,6 +38,86 @@ pub const MAX_PULSES_PER_DIGIT: u8 = 10;
 /// Idle window before a sequence of pulses is closed and decoded into a
 /// digit. The runtime supplies a `Tick` event when this elapses.
 pub const PULSE_GROUP_TIMEOUT_MS: u64 = 350;
+
+/// Brightness (`0..=255`) used for a "dim" steady status-LED indication, e.g.
+/// the idle-on-hook green. Low enough to be unobtrusive in a dark booth.
+pub const LED_BRIGHTNESS_DIM: u8 = 40;
+
+/// Brightness (`0..=255`) used for a "bright" steady status-LED indication,
+/// e.g. an active dial tone or recording.
+pub const LED_BRIGHTNESS_FULL: u8 = 255;
+
+/// Period, in milliseconds, of a slow status-LED pulse (used for
+/// booting / degraded indications). One full dark→bright→dark cycle.
+pub const LED_SLOW_PULSE_MS: u32 = 2000;
+
+/// Period, in milliseconds, of a fast status-LED blink (used for
+/// uploading / error indications). One full on+off cycle.
+pub const LED_FAST_BLINK_MS: u32 = 300;
+
+/// Duration, in milliseconds, of the fade-to-off shown while the booth is
+/// shutting down.
+pub const LED_FADE_MS: u32 = 1500;
+
+/// Status-LED indication (colour + animation) for a booth [`State`].
+///
+/// This is the single source of truth for the state → LED mapping. The
+/// runtime never mixes channels (see [`booth_hal::LedColour`]); every state
+/// resolves to exactly one colour. States that are conceptually "playback"
+/// (message / instructions / call-unavailable prompts) share the steady-blue
+/// indication of [`State::PlayingQuestion`]. The transient runtime-only
+/// "booting" and "shutting down" indications are emitted directly by the
+/// runtime, not by [`handle`], because they do not correspond to a core state.
+#[must_use]
+pub fn status_led_for(state: &State) -> (LedColour, LedPattern) {
+    match state {
+        // On hook: a calm, dim green "ready" glow.
+        State::Idle => (
+            LedColour::Green,
+            LedPattern::Steady {
+                brightness: LED_BRIGHTNESS_DIM,
+            },
+        ),
+        // Off hook and dialing: bright green.
+        State::DialTone | State::Dialing { .. } => (
+            LedColour::Green,
+            LedPattern::Steady {
+                brightness: LED_BRIGHTNESS_FULL,
+            },
+        ),
+        // Any prompt playback: steady blue.
+        State::PlayingQuestion { .. }
+        | State::PlayingMessage
+        | State::PlayingInstructions
+        | State::CallUnavailable => (
+            LedColour::Blue,
+            LedPattern::Steady {
+                brightness: LED_BRIGHTNESS_FULL,
+            },
+        ),
+        // Beep and recording the caller's answer: steady red.
+        State::Beep { .. } | State::Recording { .. } => (
+            LedColour::Red,
+            LedPattern::Steady {
+                brightness: LED_BRIGHTNESS_FULL,
+            },
+        ),
+        // Finalizing / uploading a recording: fast blue blink.
+        State::FinishingRecording { .. } | State::Uploading { .. } => (
+            LedColour::Blue,
+            LedPattern::Blink {
+                period_ms: LED_FAST_BLINK_MS,
+            },
+        ),
+        // A non-fatal error: fast red blink.
+        State::Error { .. } => (
+            LedColour::Red,
+            LedPattern::Blink {
+                period_ms: LED_FAST_BLINK_MS,
+            },
+        ),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -227,6 +309,12 @@ pub enum Event {
     },
     /// A periodic tick from the runtime, used (only) to time out pulse groups.
     Tick,
+    /// The physical power button was pressed and released before the hold
+    /// threshold (a short press). The runtime does all press-duration timing;
+    /// the core never reads a clock.
+    PowerButtonPressed,
+    /// The physical power button was held past the configured threshold.
+    PowerButtonHeld,
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +362,21 @@ pub enum Effect {
         /// Short message.
         message: String,
     },
+    /// Drive the RGB status LED to `colour` with `pattern`. Emitted on every
+    /// state transition whose LED indication changes. Executed by the runtime
+    /// through the [`booth_hal::StatusLed`] port.
+    SetStatusLed {
+        /// Colour to show (single channel; never mixed).
+        colour: LedColour,
+        /// Animation to apply.
+        pattern: LedPattern,
+    },
+    /// Reboot the host (short press of the physical power button). Executed by
+    /// the runtime through the [`booth_hal::PowerController`] port.
+    Reboot,
+    /// Power the host off (hold of the physical power button). Executed by the
+    /// runtime through the [`booth_hal::PowerController`] port.
+    PowerOff,
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +392,20 @@ pub enum Effect {
 /// (especially [`Effect::PutStatus`]) rather than published directly here.
 #[must_use]
 pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
+    let led_before = status_led_for(&state);
+    let (next, mut effects) = handle_inner(state, event);
+    let led_after = status_led_for(&next);
+    // Emit a status-LED update on every transition whose indication changes.
+    // The core is the single source of truth for the state → LED mapping; the
+    // runtime just executes the resulting effect against the HAL port.
+    if led_after != led_before {
+        let (colour, pattern) = led_after;
+        effects.push(Effect::SetStatusLed { colour, pattern });
+    }
+    (next, effects)
+}
+
+fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
     use Event as E;
     use State as S;
 
@@ -612,6 +729,12 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::PutStatus(BoothStatus::DialTone),
             ],
         ),
+
+        // ---- Physical power button (timing done by the runtime) ----
+        // A short press reboots; a hold powers off. The booth's call state is
+        // irrelevant, so keep it unchanged and just emit the effect.
+        (state, E::PowerButtonPressed) => (state, vec![Effect::Reboot]),
+        (state, E::PowerButtonHeld) => (state, vec![Effect::PowerOff]),
 
         // ---- Catch-all: anything not enumerated is a no-op ----
         (state, _) => (state, vec![]),
@@ -1039,5 +1162,106 @@ mod tests {
             ),
             "expected the first effect to be a Log naming the dialed digit, got {effects:?}"
         );
+    }
+
+    /// Every state the machine can be in, for exhaustive LED-mapping tests.
+    fn all_states() -> Vec<State> {
+        vec![
+            State::Idle,
+            State::DialTone,
+            State::Dialing { pulses: 0 },
+            State::Dialing { pulses: 5 },
+            State::PlayingQuestion {
+                question_id: "q1".into(),
+            },
+            State::Beep {
+                question_id: "q1".into(),
+            },
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            State::FinishingRecording {
+                question_id: "q1".into(),
+                on_hook: true,
+            },
+            State::Uploading {
+                recording_id: "rec-1".into(),
+                question_id: "q1".into(),
+                on_hook: false,
+            },
+            State::PlayingMessage,
+            State::PlayingInstructions,
+            State::CallUnavailable,
+            State::Error {
+                reason: "boom".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn status_led_mapping_snapshot() {
+        let rows: Vec<String> = all_states()
+            .into_iter()
+            .map(|state| {
+                let tag = state.tag();
+                let (colour, pattern) = status_led_for(&state);
+                format!("{tag:<20} -> {colour} / {pattern}")
+            })
+            .collect();
+        insta::assert_snapshot!(rows.join("\n"));
+    }
+
+    #[test]
+    fn power_button_press_reboots_and_hold_powers_off() {
+        for state in all_states() {
+            let (next, effects) = handle(state.clone(), Event::PowerButtonPressed);
+            assert_eq!(next.tag(), state.tag(), "press must not change state");
+            assert!(
+                effects.contains(&Effect::Reboot),
+                "press from {} should reboot, got {effects:?}",
+                state.tag()
+            );
+
+            let (next, effects) = handle(state.clone(), Event::PowerButtonHeld);
+            assert_eq!(next.tag(), state.tag(), "hold must not change state");
+            assert!(
+                effects.contains(&Effect::PowerOff),
+                "hold from {} should power off, got {effects:?}",
+                state.tag()
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// A random walk of events never panics and always leaves the LED in a
+        /// defined, single-channel state (mixing is physically impossible, so
+        /// `LedColour` cannot represent two channels at once by construction —
+        /// this asserts the mapping is total).
+        #[test]
+        fn random_walk_keeps_led_single_channel(seq in proptest::collection::vec(0u8..16, 0..200)) {
+            let mut state = State::Idle;
+            for code in seq {
+                let event = match code {
+                    0 => Event::HookOff,
+                    1 => Event::HookOn,
+                    2 => Event::RotaryPulse,
+                    3 => Event::Tick,
+                    4 => Event::PlaybackEnded,
+                    5 => Event::RecordingFinished { recording_id: "rec".into() },
+                    6 => Event::QuestionReady { question_id: "q".into() },
+                    7 => Event::MessageReady,
+                    8 => Event::InstructionsReady,
+                    9 => Event::UploadComplete,
+                    10 => Event::UploadFailed { reason: "x".into() },
+                    11 => Event::PowerButtonPressed,
+                    12 => Event::PowerButtonHeld,
+                    _ => Event::Tick,
+                };
+                let (next, _effects) = handle(state, event);
+                state = next;
+                // The mapping is total and returns exactly one colour.
+                let (_colour, _pattern) = status_led_for(&state);
+            }
+        }
     }
 }

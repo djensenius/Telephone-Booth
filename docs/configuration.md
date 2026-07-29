@@ -20,11 +20,31 @@ config as TOML with secrets redacted to the last 4 characters.
 hook_bcm         = 17        # physical pin 11
 rotary_pulse_bcm = 27        # physical pin 13
 rotary_gate_bcm  = 22        # physical pin 15
+power_button_bcm = 26        # physical pin 37 (only polled when [power_button].enabled)
 pull             = "up"      # "up" | "down"
 debounce_ms      = 25
 invert.hook      = false
 invert.rotary_pulse = true
 invert.rotary_gate  = false
+invert.power_button = true   # Adafruit 3350 switch is active-low against the pull-up
+
+# Optional physical power button (Adafruit 3350). Default-off: an existing
+# booth is unaffected until enabled = true. Short press -> reboot; press and
+# hold past hold_ms -> power off. See hardware.md "Power button and status LED".
+[power_button]
+enabled = false
+hold_ms = 3000
+
+# Optional RGB status LED ring (Adafruit 3350). Default-off. Only one cathode
+# is ever driven at a time (the ring shares a single current limit, so colours
+# cannot be mixed). brightness is a global 0.0..=1.0 ceiling.
+[status_led]
+enabled    = false
+red_bcm    = 5               # physical pin 29
+green_bcm  = 6               # physical pin 31
+blue_bcm   = 13              # physical pin 33
+active_low = true
+brightness = 1.0
 
 [audio]
 device_substring   = "Focusrite"
@@ -132,6 +152,31 @@ user-visible fact than "mock adapters underneath" — the simulator can be
 paired with the real `booth-pi` audio + operator adapters and the badge
 should still say `SIM`.
 
+### Power button and status LED
+
+Both `[power_button]` and `[status_led]` are **opt-in and default-off**, so an
+existing booth is unaffected when it upgrades. Enable them only once the
+Adafruit 3350 button is wired per
+[hardware.md](hardware.md#power-button-and-status-led).
+
+| Key                     | Default | Meaning                                                                 |
+| ----------------------- | ------- | ----------------------------------------------------------------------- |
+| `power_button.enabled`  | `false` | Poll the button pin and act on presses.                                 |
+| `power_button.hold_ms`  | `3000`  | Hold duration that turns a reboot press into a power-off.               |
+| `gpio.power_button`     | `26`    | BCM pin for the switch (alias `power_button_bcm`).                       |
+| `status_led.enabled`    | `false` | Drive the RGB status ring from the booth state machine.                 |
+| `status_led.red`        | `5`     | BCM pin for the red cathode (alias `red_bcm`).                           |
+| `status_led.green`      | `6`     | BCM pin for the green cathode (alias `green_bcm`).                       |
+| `status_led.blue`       | `13`    | BCM pin for the blue cathode (alias `blue_bcm`).                         |
+| `status_led.active_low` | `true`  | Drive a cathode low to light it (Adafruit 3350 common-anode wiring).    |
+| `status_led.brightness` | `1.0`   | Global brightness ceiling, `0.0..=1.0`, scaling every pattern.          |
+
+A short press reboots (`systemctl reboot`); a hold past `hold_ms` powers off
+(`systemctl poweroff`). Only one LED colour is ever lit at a time — the ring
+shares a single current limit, so colours cannot be mixed. When either feature
+is enabled, its pins must not collide with the phone-harness pins or each other,
+or `validate_config` fails at startup.
+
 ### Observability
 
 When `observability.enabled = true` (the default) the runtime installs
@@ -225,6 +270,16 @@ settings:
 | `gpio.debounce_ms`                              | `BOOTH_GPIO_DEBOUNCE_MS`                                                          |
 | `gpio.pull`                                     | `BOOTH_GPIO_PULL` (`up` or `down`)                                                |
 | `gpio.invert.*`                                 | `BOOTH_GPIO_INVERT_HOOK`, `BOOTH_GPIO_INVERT_ROTARY_PULSE`, `BOOTH_GPIO_INVERT_ROTARY_READ` |
+| `gpio.power_button`                             | `BOOTH_GPIO_POWER_BUTTON` or `BOOTH_GPIO_POWER_BUTTON_BCM`                        |
+| `gpio.invert.power_button`                      | `BOOTH_GPIO_INVERT_POWER_BUTTON`                                                  |
+| `power_button.enabled`                          | `BOOTH_POWER_BUTTON_ENABLED`                                                      |
+| `power_button.hold_ms`                          | `BOOTH_POWER_BUTTON_HOLD_MS`                                                      |
+| `status_led.enabled`                            | `BOOTH_STATUS_LED_ENABLED`                                                        |
+| `status_led.red`                                | `BOOTH_STATUS_LED_RED` or `BOOTH_STATUS_LED_RED_BCM`                              |
+| `status_led.green`                              | `BOOTH_STATUS_LED_GREEN` or `BOOTH_STATUS_LED_GREEN_BCM`                          |
+| `status_led.blue`                               | `BOOTH_STATUS_LED_BLUE` or `BOOTH_STATUS_LED_BLUE_BCM`                            |
+| `status_led.active_low`                         | `BOOTH_STATUS_LED_ACTIVE_LOW`                                                     |
+| `status_led.brightness`                         | `BOOTH_STATUS_LED_BRIGHTNESS`                                                     |
 | `observability.enabled`                         | `BOOTH_OBSERVABILITY_ENABLED`                                                     |
 | `observability.booth_id`                        | `BOOTH_OBSERVABILITY_BOOTH_ID`                                                    |
 | `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY_FORWARD_ENABLED`                                             |

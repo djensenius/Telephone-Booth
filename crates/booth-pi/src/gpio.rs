@@ -34,21 +34,29 @@ mod imp {
     /// pulse-per-second rotary dial.
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
-    /// Logical input roles, in a fixed order that matches [`role_index`].
-    const ROLES: [PinRole; 3] = [PinRole::Hook, PinRole::RotaryPulse, PinRole::RotaryRead];
+    /// Logical input roles, in a fixed order that matches [`role_index`]. The
+    /// power button is only polled when it is configured; the others always
+    /// are.
+    const ROLES: [PinRole; 4] = [
+        PinRole::Hook,
+        PinRole::RotaryPulse,
+        PinRole::RotaryRead,
+        PinRole::PowerButton,
+    ];
 
     const fn role_index(role: PinRole) -> usize {
         match role {
             PinRole::Hook => 0,
             PinRole::RotaryPulse => 1,
             PinRole::RotaryRead => 2,
+            PinRole::PowerButton => 3,
         }
     }
 
     /// Raspberry Pi GPIO implementation for the booth input pins.
     pub struct PiGpioPort {
         rx: mpsc::Receiver<GpioEdge>,
-        levels: Arc<[AtomicBool; 3]>,
+        levels: Arc<[AtomicBool; 4]>,
         poll_task: JoinHandle<()>,
         started_at: Instant,
     }
@@ -58,6 +66,7 @@ mod imp {
         hook: InputPin,
         rotary_pulse: InputPin,
         rotary_read: InputPin,
+        power_button: Option<InputPin>,
     }
 
     impl PiPins {
@@ -66,6 +75,15 @@ mod imp {
                 PinRole::Hook => self.hook.is_high(),
                 PinRole::RotaryPulse => self.rotary_pulse.is_high(),
                 PinRole::RotaryRead => self.rotary_read.is_high(),
+                PinRole::PowerButton => self.power_button.as_ref().is_some_and(InputPin::is_high),
+            }
+        }
+
+        /// Whether `role` is actually wired and should be polled.
+        fn is_active(&self, role: PinRole) -> bool {
+            match role {
+                PinRole::PowerButton => self.power_button.is_some(),
+                _ => true,
             }
         }
     }
@@ -86,10 +104,16 @@ mod imp {
             })?;
             let gpio = Gpio::new()
                 .map_err(|err| GpioError::Setup(format!("failed to open gpio: {err}").into()))?;
+            let power_button = if config.power_button_enabled {
+                Some(open_input(&gpio, &config, PinRole::PowerButton)?)
+            } else {
+                None
+            };
             let pins = PiPins {
                 hook: open_input(&gpio, &config, PinRole::Hook)?,
                 rotary_pulse: open_input(&gpio, &config, PinRole::RotaryPulse)?,
                 rotary_read: open_input(&gpio, &config, PinRole::RotaryRead)?,
+                power_button,
                 _gpio: gpio,
             };
 
@@ -100,6 +124,7 @@ mod imp {
                 AtomicBool::new(logical_level(&pins, &config, PinRole::Hook)),
                 AtomicBool::new(logical_level(&pins, &config, PinRole::RotaryPulse)),
                 AtomicBool::new(logical_level(&pins, &config, PinRole::RotaryRead)),
+                AtomicBool::new(logical_level(&pins, &config, PinRole::PowerButton)),
             ]);
 
             let (tx, rx) = mpsc::channel(usize::from(config.channel_capacity).max(1));
@@ -110,6 +135,8 @@ mod imp {
                 hook_bcm = config.bcm_for(PinRole::Hook),
                 rotary_pulse_bcm = config.bcm_for(PinRole::RotaryPulse),
                 rotary_read_bcm = config.bcm_for(PinRole::RotaryRead),
+                power_button_bcm = config.power_button_enabled
+                    .then(|| config.bcm_for(PinRole::PowerButton)),
                 debounce_ms = config.debounce_ms,
                 poll_interval_ms = POLL_INTERVAL.as_millis(),
                 pull = ?config.pull,
@@ -184,7 +211,7 @@ mod imp {
     async fn poll_edges(
         pins: PiPins,
         config: GpioConfig,
-        levels: Arc<[AtomicBool; 3]>,
+        levels: Arc<[AtomicBool; 4]>,
         tx: mpsc::Sender<GpioEdge>,
         debounce: Duration,
         started_at: Instant,
@@ -198,8 +225,9 @@ mod imp {
             logical_level(&pins, &config, PinRole::Hook),
             logical_level(&pins, &config, PinRole::RotaryPulse),
             logical_level(&pins, &config, PinRole::RotaryRead),
+            logical_level(&pins, &config, PinRole::PowerButton),
         ];
-        let mut pending: [Option<(bool, Instant)>; 3] = [None, None, None];
+        let mut pending: [Option<(bool, Instant)>; 4] = [None, None, None, None];
 
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -209,6 +237,10 @@ mod imp {
             let now = Instant::now();
 
             for role in ROLES {
+                // Skip unwired optional inputs (the power button when disabled).
+                if !pins.is_active(role) {
+                    continue;
+                }
                 let idx = role_index(role);
                 let raw = apply_invert(pins.physical_high(role), config.inverted(role));
 
@@ -274,6 +306,7 @@ mod imp {
             PinRole::Hook => "Hook",
             PinRole::RotaryPulse => "RotaryPulse",
             PinRole::RotaryRead => "RotaryRead",
+            PinRole::PowerButton => "PowerButton",
         }
     }
 

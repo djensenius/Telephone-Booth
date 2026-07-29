@@ -492,3 +492,91 @@ The Pi should boot off an SD card (or, preferably, an SSD via USB3) running
 Raspberry Pi OS 64-bit. The systemd unit installed by the `.deb` package
 waits for `network-online.target` so the client never tries to contact the
 operator before networking is up. See [`packaging.md`](packaging.md).
+
+## Power button and status LED
+
+An optional **Adafruit 3350** illuminated pushbutton adds a physical
+power/reset control plus an RGB status ring that mirrors the booth's state
+machine. Both features are **opt-in and default-off**, so an existing booth is
+completely unaffected until you wire the button and enable it in config.
+
+The button is a momentary, normally-open (NO) switch combined with an RGB LED
+ring. It is wired active-low against the Pi's internal pull-up: pressing it
+pulls the switch pin low; each LED cathode is driven low to light that colour.
+
+### Wiring (reference booth)
+
+The reference booth (Raspberry Pi 4 Model B, Debian 13 trixie) lands the button
+on pins chosen to avoid the AudioInjector Flatmax HAT (I2S `18/19/20/21`, I2C
+`2/3`), the HAT EEPROM pins (`0/1`), and the existing phone harness
+(`17/22/27`):
+
+| Button tab (Adafruit 3350) | Wire   | Terminal | BCM | Physical pin |
+| -------------------------- | ------ | -------- | --- | ------------ |
+| C+ (top-left)              | red    | 3V3      | —   | 17           |
+| R  (top-right)             | yellow | IO5      | 5   | 29           |
+| G  (bottom-right)          | green  | IO6      | 6   | 31           |
+| B  (bottom-left)           | blue   | IO13     | 13  | 33           |
+| switch (mid-right, large)  | white  | IO26     | 26  | 37           |
+| switch (mid-left, large)   | black  | GND      | —   | 39           |
+
+The LED ring shares a **common anode** on the 3V3 rail (button tab `C+`); the
+three cathodes (`R`/`G`/`B`) are each driven low to light that colour.
+
+> **⚠️ Colour codes mean different things on the two harnesses.** On the dial +
+> hook harness, white/red/green/blue are hook/pulse/gate/common (see
+> [As-built dial + hook wiring](#as-built-dial--hook-wiring-reference-booth)).
+> On this button harness the same colours are anode/red-cathode/green-cathode/
+> blue-cathode plus a white switch lead. **Label both bundles** so they are
+> never confused during install.
+
+### Only one colour at a time (shared current limit)
+
+The Adafruit 3350 ring has a **single shared current-limiting resistor** across
+all three cathodes — not one resistor per colour. This was verified on the
+bench: if two or more cathodes are driven low at once, only the colour with the
+lowest forward voltage lights (**red beats green, green beats blue**). Colour
+mixing is therefore **physically impossible**, and time-multiplexing the
+channels was tested and rejected as visibly unstable.
+
+The firmware reflects this hardware fact: the [`booth_hal::LedColour`] type can
+only ever be `Off`, `Red`, `Green`, or `Blue` — an unmixable colour is
+unrepresentable — and the Pi adapter always drives at most one cathode low,
+holding the other two high. See
+[ADR 0009](adr/0009-status-led-power-button.md) for the full rationale.
+
+### Colour and pattern per state
+
+| Booth state                    | Colour | Pattern            |
+| ------------------------------ | ------ | ------------------ |
+| Booting / not ready            | blue   | slow pulse         |
+| Idle (on hook)                 | green  | dim steady         |
+| Dial tone / dialling           | green  | bright steady      |
+| Playing a prompt               | blue   | steady             |
+| Beep / recording               | red    | steady             |
+| Finalising / uploading         | blue   | fast blink         |
+| Error                          | red    | fast blink         |
+| Shutting down                  | red    | fade to off        |
+
+"Booting" and "shutting down" are transient runtime indications emitted
+directly by the runtime; every other row is derived from the pure core's state
+via `booth_core::status_led_for`.
+
+### Button behaviour
+
+- **Short press** (released before the hold threshold) → **reboot**
+  (`systemctl reboot`).
+- **Press and hold** past the threshold (default **3000 ms**,
+  `power_button.hold_ms`) → **power off** (`systemctl poweroff`).
+
+### Pi 4 wake caveat
+
+On the Raspberry Pi 4, waking a **halted** Pi with a GPIO requires **BCM 3**
+(I2C1 SCL) — which is already shared with the audio codec on the AudioInjector
+HAT and so is unavailable here. This button can therefore **reboot** and
+**power off** the booth, but it **cannot power a halted booth back on**. If you
+need a physical "turn it back on" control, fit an **inline switch on the PSU**
+upstream of the Pi instead.
+
+See [`configuration.md`](configuration.md) for every config key and environment
+override.
