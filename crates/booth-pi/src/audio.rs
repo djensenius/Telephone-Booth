@@ -43,6 +43,15 @@ const BEEP_FLAC: &[u8] = include_bytes!("../assets/beep.flac");
 const LINE_BUSY_FLAC: &[u8] = include_bytes!("../assets/line-busy.flac");
 const CALL_UNAVAILABLE_FLAC: &[u8] = include_bytes!("../assets/call-unavailable.flac");
 
+/// How many times to retry publishing the terminal (silent) audio level when
+/// the telemetry channel is full during stream teardown.
+#[cfg(feature = "audio")]
+const TERMINAL_LEVEL_SEND_ATTEMPTS: u32 = 20;
+
+/// Backoff between terminal audio-level publish attempts, in milliseconds.
+#[cfg(feature = "audio")]
+const TERMINAL_LEVEL_SEND_BACKOFF_MS: u64 = 5;
+
 /// Metadata for a finalized Pi recording.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordingHandle {
@@ -1228,17 +1237,68 @@ impl LevelMeter {
         } else {
             (self.sum_squares / self.observed as f32).sqrt()
         };
-        if let Some(tx) = &self.telemetry {
-            let _ = tx.try_send(TelemetryEvent::AudioLevel(booth_hal::AudioLevel {
-                channel: self.channel,
-                peak: self.peak,
-                rms,
-                at_monotonic_ns: monotonic_ns(),
-            }));
-        }
+        self.emit(self.peak, rms, false);
         self.observed = 0;
         self.sum_squares = 0.0;
         self.peak = 0.0;
+    }
+
+    /// Report the final level for a stream that is being torn down.
+    ///
+    /// Audio-level telemetry is sample-driven, so without this the last
+    /// non-zero reading would stay on the wire forever and operator VU meters
+    /// would freeze at it. Flushing the partial block keeps the tail of the
+    /// audio, and the trailing silent reading tells clients authoritatively
+    /// that the audio path went quiet instead of leaving them to infer it from
+    /// the absence of further events.
+    fn finish(&mut self) {
+        if self.observed > 0 {
+            self.flush();
+        }
+        self.emit(0.0, 0.0, true);
+    }
+
+    fn emit(&self, peak: f32, rms: f32, blocking: bool) {
+        let Some(tx) = &self.telemetry else {
+            return;
+        };
+        let event = TelemetryEvent::AudioLevel(booth_hal::AudioLevel {
+            channel: self.channel,
+            peak,
+            rms,
+            at_monotonic_ns: monotonic_ns(),
+        });
+        if !blocking {
+            let _ = tx.try_send(event);
+            return;
+        }
+        // The terminal reading is the one clients cannot afford to lose, so
+        // retry briefly if the telemetry channel is momentarily full. This runs
+        // on the thread tearing the stream down, never on the audio callback.
+        let mut pending = event;
+        for _ in 0..TERMINAL_LEVEL_SEND_ATTEMPTS {
+            match tx.try_send(pending) {
+                Ok(()) => return,
+                Err(mpsc::error::TrySendError::Full(event)) => {
+                    pending = event;
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        TERMINAL_LEVEL_SEND_BACKOFF_MS,
+                    ));
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
+        warn!(
+            channel = ?self.channel,
+            "dropped terminal audio level telemetry; channel stayed full"
+        );
+    }
+}
+
+#[cfg(feature = "audio")]
+impl Drop for LevelMeter {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 
@@ -1397,6 +1457,86 @@ mod tests {
         assert!(
             err.to_string().contains("exceeds cap"),
             "unexpected error: {err}"
+        );
+    }
+
+    fn drain_levels(rx: &mut mpsc::Receiver<TelemetryEvent>) -> Vec<booth_hal::AudioLevel> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let TelemetryEvent::AudioLevel(level) = event {
+                out.push(level);
+            }
+        }
+        out
+    }
+
+    /// Audio-level telemetry is sample-driven, so when a stream stops the
+    /// partially accumulated block used to be discarded and no further events
+    /// were published. Operator VU meters then sat on the last non-zero
+    /// reading forever. Teardown must flush the tail and then state plainly
+    /// that the channel is silent.
+    #[test]
+    fn level_meter_flushes_tail_and_reports_silence_on_teardown() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut meter = LevelMeter::new(booth_hal::AudioChannel::Output, 40, Some(tx));
+
+        // One sample short of the 20 Hz flush interval (40 / 20 == 2).
+        meter.observe(1.0);
+        assert!(
+            drain_levels(&mut rx).is_empty(),
+            "partial block must not flush early"
+        );
+
+        drop(meter);
+
+        let levels = drain_levels(&mut rx);
+        assert_eq!(
+            levels.len(),
+            2,
+            "expected tail flush then silence: {levels:?}"
+        );
+        assert!((levels[0].peak - 1.0).abs() < f32::EPSILON);
+        assert!((levels[0].rms - 1.0).abs() < f32::EPSILON);
+        assert_eq!(levels[1].channel, booth_hal::AudioChannel::Output);
+        assert!((levels[1].peak).abs() < f32::EPSILON);
+        assert!((levels[1].rms).abs() < f32::EPSILON);
+    }
+
+    /// With nothing buffered there is no tail to flush, but clients still need
+    /// the authoritative "silent now" reading.
+    #[test]
+    fn level_meter_reports_silence_even_with_no_pending_samples() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let meter = LevelMeter::new(booth_hal::AudioChannel::Input, 40, Some(tx));
+        drop(meter);
+
+        let levels = drain_levels(&mut rx);
+        assert_eq!(
+            levels.len(),
+            1,
+            "expected a single silence reading: {levels:?}"
+        );
+        assert_eq!(levels[0].channel, booth_hal::AudioChannel::Input);
+        assert!((levels[0].peak).abs() < f32::EPSILON);
+        assert!((levels[0].rms).abs() < f32::EPSILON);
+    }
+
+    /// Silence while the stream is still open must be published, not skipped,
+    /// so "quiet" is never inferred from the absence of events.
+    #[test]
+    fn level_meter_publishes_silent_blocks_while_running() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut meter = LevelMeter::new(booth_hal::AudioChannel::Output, 40, Some(tx));
+        for _ in 0..4 {
+            meter.observe(0.0);
+        }
+
+        let levels = drain_levels(&mut rx);
+        assert_eq!(levels.len(), 2, "expected two 20 Hz blocks: {levels:?}");
+        assert!(
+            levels
+                .iter()
+                .all(|level| level.rms == 0.0 && level.peak == 0.0)
         );
     }
 }
