@@ -383,6 +383,17 @@ error messages) ever become labels.
 | `booth_audio_rms_amplitude`         | `channel` (`input`, `output`) — linear RMS amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_info`                        | `mode` (`real`, `mock`, `simulator`) — always 1.0; lets Grafana / VictoriaMetrics filter dashboards by runtime mode (e.g. `booth_calls_total * on(booth_id) group_left() booth_info{mode="real"}` to exclude mock / simulator booths). Cardinality is bounded to 3. |
 
+`AudioLevel` events are emitted at 20 Hz per channel side (input, output) for
+as long as an audio stream is open, independent of the device's channel
+count, and including while the signal is silent. When a stream is torn down the
+meter flushes its partial block and then publishes one final reading with
+`peak` and `rms` at `0.0`. That trailing reading is what returns VU meters —
+in the debug UI, `GET /audio`, and the operator clients — to the floor;
+without it a consumer cannot tell "silent" from "no longer reporting" and
+would hold the last non-zero level indefinitely. Absence of events still
+means "no audio path is open", so clients should also treat a stale feed as
+unknown rather than as a level.
+
 ### Histograms
 
 | Metric                                   | Labels    |
