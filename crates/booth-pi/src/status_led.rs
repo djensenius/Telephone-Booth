@@ -232,7 +232,9 @@ mod imp {
                     ticker.tick().await;
                     let Some(lit) = lit_fraction(pattern, start.elapsed(), ceiling) else {
                         // One-shot pattern finished: leave the channel off.
-                        if let Err(err) = channels.lock().await.apply(colour, 0.0) {
+                        // Bound to a local so the guard drops before logging.
+                        let parked = channels.lock().await.apply(colour, 0.0);
+                        if let Err(err) = parked {
                             warn!(%err, %colour, %pattern, "failed to park status LED channel");
                         }
                         break;
@@ -240,8 +242,12 @@ mod imp {
                     // The runtime has already reported this indication as
                     // active, so a mid-animation PWM failure must not be
                     // swallowed: log it before giving up on the animation.
-                    if let Err(err) = channels.lock().await.apply(colour, lit) {
-                        warn!(%err, %colour, %pattern, "status LED animation stopped after a write failure");
+                    let written = channels.lock().await.apply(colour, lit);
+                    if let Err(err) = written {
+                        warn!(
+                            %err, %colour, %pattern,
+                            "status LED animation stopped after a write failure"
+                        );
                         break;
                     }
                 }
