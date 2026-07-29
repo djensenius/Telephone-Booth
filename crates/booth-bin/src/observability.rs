@@ -858,6 +858,8 @@ fn should_forward(event: &TelemetryEvent) -> bool {
         // Skip high-rate meter / GPIO events that would flood the
         // operator. They're already covered by Prometheus metrics.
         TelemetryEvent::AudioLevel(_) | TelemetryEvent::GpioEdge(_) => false,
+        // High-frequency LED transitions are UI-only; don't forward them.
+        TelemetryEvent::StatusLed { .. } => false,
         // System samples have their own dedicated PUT /v1/system route.
         TelemetryEvent::SystemSample { .. } => false,
         // Synthetic call markers are already forwarded directly via
@@ -872,6 +874,7 @@ fn should_forward(event: &TelemetryEvent) -> bool {
 fn event_kind(event: &TelemetryEvent) -> &'static str {
     match event {
         TelemetryEvent::GpioEdge(_) => "gpio_edge",
+        TelemetryEvent::StatusLed { .. } => "status_led",
         TelemetryEvent::DigitDialed { .. } => "digit_dialed",
         TelemetryEvent::StateTransition { .. } => "state_transition",
         TelemetryEvent::AudioLevel(_) => "audio_level",

@@ -35,8 +35,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use booth_core::Event;
 use booth_hal::{
-    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, PinRole, SystemSnapshot,
-    TelemetryEvent,
+    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, LedColour, LedPattern,
+    PinRole, SystemSnapshot, TelemetryEvent,
 };
 use futures_util::FutureExt;
 use parking_lot::Mutex;
@@ -329,6 +329,28 @@ pub struct GpioSnapshot {
     pub updated_at: Option<String>,
 }
 
+/// Snapshot returned by `GET /v1/status-led`.
+///
+/// `updatedAt` is `None` when no `StatusLed` telemetry has been seen yet; the
+/// `colour` / `pattern` fields then carry their defaults (off / steady 0) and
+/// should be rendered as "unknown" rather than "the LED is off".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusLedSnapshot {
+    /// Colour currently shown (single channel; never mixed).
+    pub colour: LedColour,
+    /// Animation applied to the colour.
+    pub pattern: LedPattern,
+    /// Human-readable rendering of `pattern`, e.g. `pulse(2000ms)`.
+    pub pattern_label: String,
+    /// Runtime monotonic timestamp for the change, in nanoseconds.
+    pub at_monotonic_ns: u64,
+    /// RFC3339 timestamp for the change, when one has been observed.
+    pub updated_at: Option<String>,
+    /// Telemetry record id that carried the change.
+    pub last_event_id: u64,
+}
+
 /// Per-pin GPIO snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -421,6 +443,13 @@ struct AppState {
     bus: TelemetryBus,
     runtime_tx: mpsc::Sender<RuntimeCommand>,
     cert_fingerprint: Arc<String>,
+    /// Latest status-LED indication, kept outside the bounded replay ring.
+    ///
+    /// The ring evicts oldest-first and high-rate `AudioLevel` records can push
+    /// an LED change out within minutes, so reconstructing "current" from
+    /// replay history alone would make the endpoint forget an indication that
+    /// is still physically lit.
+    status_led: Arc<Mutex<Option<StatusLedSnapshot>>>,
 }
 
 /// Start enabled debug listeners and return a task handle that owns them.
@@ -461,11 +490,20 @@ pub async fn serve_with_handles(
 
     let tls = generate_tls_config()?;
     let fingerprint = tls.fingerprint.clone();
+    // Seed from whatever is still in the ring; the tracker that keeps the cache
+    // current is spawned only once all fallible setup below has succeeded, so an
+    // early error return cannot leave a detached task draining telemetry
+    // forever. Subscribe *before* seeding so a record published between the two
+    // is covered by the subscription rather than falling into a gap; an overlap
+    // is harmless because the subscription only replays newer records.
+    let led_rx = bus.subscribe();
+    let status_led = Arc::new(Mutex::new(snapshot_status_led(&bus)));
     let state = AppState {
         config: Arc::new(config.clone()),
         bus,
         runtime_tx,
         cert_fingerprint: Arc::new(fingerprint.clone()),
+        status_led,
     };
     let authed_router = build_router(state.clone());
     let loopback_router = metrics_render.map_or_else(
@@ -500,6 +538,13 @@ pub async fn serve_with_handles(
     }
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Past every `?` above: safe to spawn the long-lived tracker now.
+    let led_task = tokio::spawn(track_status_led(
+        state.bus.clone(),
+        led_rx,
+        Arc::clone(&state.status_led),
+    ));
 
     let handle = tokio::spawn(async move {
         // Convert the oneshot into a shared future so both listeners can
@@ -540,6 +585,7 @@ pub async fn serve_with_handles(
                 tracing::error!(error = %err, "debug listener task panicked");
             }
         }
+        led_task.abort();
     });
 
     Ok(ServeHandles {
@@ -602,6 +648,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/state", get(state_snapshot))
         .route("/v1/events", get(events_since))
         .route("/v1/gpio", get(gpio_snapshot))
+        .route("/v1/status-led", get(status_led_snapshot))
         .route("/v1/audio", get(audio_snapshot))
         .route("/v1/system", get(system_snapshot))
         .route("/v1/logs", get(logs))
@@ -713,6 +760,14 @@ async fn events_since(
 
 async fn gpio_snapshot(State(state): State<AppState>) -> Json<GpioSnapshot> {
     Json(snapshot_gpio(&state.bus))
+}
+
+async fn status_led_snapshot(State(state): State<AppState>) -> Json<StatusLedSnapshot> {
+    let cached = state.status_led.lock().clone();
+    Json(cached.unwrap_or_else(|| StatusLedSnapshot {
+        pattern_label: LedPattern::default().to_string(),
+        ..StatusLedSnapshot::default()
+    }))
 }
 
 async fn audio_snapshot(State(state): State<AppState>) -> Json<AudioMeterSnapshot> {
@@ -930,6 +985,15 @@ async fn ws_telemetry(
 async fn telemetry_socket(mut socket: WebSocket, state: AppState) {
     let mut receiver = state.bus.subscribe();
     let replay_from = read_replay_request(&mut socket).await;
+    // The status LED is level-triggered, so its record can be older than the
+    // replay window (or older than `replay_from` on a reconnect). Lead with the
+    // retained one so a client never has to infer the current indication from a
+    // history that no longer contains it.
+    if let Some(record) = state.bus.latest_status_led()
+        && send_record(&mut socket, &record).await.is_err()
+    {
+        return;
+    }
     for record in state.bus.snapshot_since(replay_from) {
         if send_record(&mut socket, &record).await.is_err() {
             return;
@@ -943,7 +1007,16 @@ async fn telemetry_socket(mut socket: WebSocket, state: AppState) {
                     return;
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(_skipped)) => {}
+            Err(broadcast::error::RecvError::Lagged(_skipped)) => {
+                // Skipped records may have included the LED change, and this
+                // connection stays open, so nothing else would resynchronize
+                // the client. Re-send the retained indication.
+                if let Some(record) = state.bus.latest_status_led()
+                    && send_record(&mut socket, &record).await.is_err()
+                {
+                    return;
+                }
+            }
             Err(broadcast::error::RecvError::Closed) => return,
         }
     }
@@ -1120,8 +1193,84 @@ fn snapshot_gpio(bus: &TelemetryBus) -> GpioSnapshot {
         PinRole::Hook => 0,
         PinRole::RotaryRead => 1,
         PinRole::RotaryPulse => 2,
+        PinRole::PowerButton => 3,
     });
     GpioSnapshot { pins, updated_at }
+}
+
+/// Current LED indication straight from the bus's durable slot.
+///
+/// Deliberately not reconstructed from the replay ring: the ring is bounded and
+/// the LED is level-triggered, so an indication that has been steady for a while
+/// is evicted long before it changes. Reading the retained record instead means
+/// recovery after subscriber lag can never fall back to a stale value.
+fn snapshot_status_led(bus: &TelemetryBus) -> Option<StatusLedSnapshot> {
+    bus.latest_status_led()
+        .as_ref()
+        .and_then(status_led_from_record)
+}
+
+fn status_led_from_record(record: &TelemetryRecord) -> Option<StatusLedSnapshot> {
+    match record.event {
+        TelemetryEvent::StatusLed {
+            colour,
+            pattern,
+            at_monotonic_ns,
+        } => Some(StatusLedSnapshot {
+            colour,
+            pattern,
+            pattern_label: pattern.to_string(),
+            at_monotonic_ns,
+            updated_at: Some(system_time_to_rfc3339(record.ts)),
+            last_event_id: record.id,
+        }),
+        _ => None,
+    }
+}
+
+/// Keep `cache` current from the live telemetry subscription.
+///
+/// The replay ring is bounded and evicts oldest-first, so the current LED
+/// indication must not be reconstructed from history alone. On lag (a slow
+/// subscriber dropping records) the cache is re-seeded from whatever the ring
+/// still holds, which is the best available approximation.
+async fn track_status_led(
+    bus: TelemetryBus,
+    mut rx: broadcast::Receiver<TelemetryRecord>,
+    cache: Arc<Mutex<Option<StatusLedSnapshot>>>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok(record) => {
+                if let Some(snapshot) = status_led_from_record(&record) {
+                    store_status_led(&cache, snapshot);
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                if let Some(snapshot) = snapshot_status_led(&bus) {
+                    store_status_led(&cache, snapshot);
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+/// Apply `snapshot` unless the cache already holds a newer record.
+///
+/// After a `Lagged` the cache is re-seeded from the ring's newest LED record,
+/// but the broadcast receiver resumes at the oldest record it still retains, so
+/// the next few `Ok(record)`s are older than what was just cached. Telemetry
+/// ids are monotonic, so comparing them keeps recovery from moving the cache
+/// backward.
+fn store_status_led(cache: &Mutex<Option<StatusLedSnapshot>>, snapshot: StatusLedSnapshot) {
+    let mut current = cache.lock();
+    if current
+        .as_ref()
+        .is_none_or(|held| snapshot.last_event_id >= held.last_event_id)
+    {
+        *current = Some(snapshot);
+    }
 }
 
 fn snapshot_audio(bus: &TelemetryBus) -> AudioMeterSnapshot {

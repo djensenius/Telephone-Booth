@@ -84,6 +84,7 @@ pub struct TelemetryBus {
     sender: broadcast::Sender<TelemetryRecord>,
     ring: Arc<RwLock<RingBuffer>>,
     next_id: Arc<AtomicU64>,
+    latest_status_led: Arc<RwLock<Option<TelemetryRecord>>>,
 }
 
 impl TelemetryBus {
@@ -94,6 +95,7 @@ impl TelemetryBus {
             sender,
             ring: Arc::new(RwLock::new(RingBuffer::new(capacity))),
             next_id: Arc::new(AtomicU64::new(0)),
+            latest_status_led: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -105,10 +107,38 @@ impl TelemetryBus {
             ts: SystemTime::now(),
             event,
         };
+        // The status LED is level-triggered: an unchanged indication is never
+        // re-published, so it can outlive the bounded ring by hours. Retain the
+        // latest one separately and synchronously, so a debug client that
+        // connects (or lags) long after the change still sees the truth.
+        if matches!(record.event, TelemetryEvent::StatusLed { .. }) {
+            let mut latest = self
+                .latest_status_led
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Ids are handed out before this lock, so a concurrent publisher
+            // can arrive here out of order. Keep the newest record or the slot
+            // could be permanently pinned to a superseded indication.
+            if latest.as_ref().is_none_or(|held| record.id > held.id) {
+                *latest = Some(record.clone());
+            }
+        }
         self.write_ring().push(record.clone());
         if self.sender.send(record).is_err() {
             // No active subscribers; the replay ring above remains authoritative.
         }
+    }
+
+    /// Latest [`TelemetryEvent::StatusLed`] record, retained independently of
+    /// the replay ring.
+    ///
+    /// Returns `None` only when the LED has never been driven.
+    #[must_use]
+    pub fn latest_status_led(&self) -> Option<TelemetryRecord> {
+        self.latest_status_led
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Subscribe to events published after this call for live debug streaming.
@@ -199,6 +229,48 @@ mod tests {
         assert_eq!(ids, vec![2, 3]);
         assert_eq!(ring.len(), 2);
         assert_eq!(ring.capacity(), 2);
+    }
+
+    /// The LED is level-triggered, so its record can be evicted from the
+    /// bounded ring long before the indication changes. The retained slot must
+    /// outlive eviction or the debug surface would report a stale colour.
+    #[test]
+    fn latest_status_led_survives_ring_eviction() {
+        use booth_hal::{LedColour, LedPattern};
+
+        let bus = TelemetryBus::new(2);
+        bus.publish(TelemetryEvent::StatusLed {
+            colour: LedColour::Green,
+            pattern: LedPattern::Steady { brightness: 255 },
+            at_monotonic_ns: 7,
+        });
+        assert!(bus.latest_status_led().is_some());
+
+        for _ in 0..4 {
+            bus.publish(TelemetryEvent::Log {
+                level: "info".to_string(),
+                target: "booth_telemetry::tests".to_string(),
+                message: "filler".to_string(),
+            });
+        }
+        assert!(
+            !bus.snapshot_since(None)
+                .iter()
+                .any(|record| matches!(record.event, TelemetryEvent::StatusLed { .. })),
+            "the LED record must have been evicted for this test to mean anything"
+        );
+
+        assert!(
+            matches!(
+                bus.latest_status_led().map(|record| record.event),
+                Some(TelemetryEvent::StatusLed {
+                    colour: LedColour::Green,
+                    at_monotonic_ns: 7,
+                    ..
+                })
+            ),
+            "the retained LED record must survive eviction"
+        );
     }
 
     #[test]

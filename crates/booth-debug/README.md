@@ -10,6 +10,7 @@ Embedded debug HTTP + WebSocket surface for the Telephone Booth Rust client.
 | `GET` | `/v1/state` | Current operator-compatible booth status snapshot. |
 | `GET` | `/v1/events?since=<seq>` | Retained telemetry records with ids greater than `since`. |
 | `GET` | `/v1/gpio` | Latest GPIO pin levels and edge timestamps from telemetry. |
+| `GET` | `/v1/status-led` | Current status-LED colour + pattern. `updatedAt` is `null` until the runtime drives the LED. |
 | `GET` | `/v1/audio` | Latest input/output audio meter values and device info. |
 | `GET` | `/v1/system` | Latest [`SystemSnapshot`](../../docs/observability.md#systemsnapshot-fields) (CPU/temp/mem/disk/net/uptime). |
 | `GET` | `/v1/logs?level=info&limit=200` | Recent tracing log lines from the in-process ring buffer. |
@@ -19,6 +20,13 @@ Embedded debug HTTP + WebSocket surface for the Telephone Booth Rust client.
 | `POST` | `/v1/simulate/pulse` | Inject N rotary pulses followed by `Tick`. Gated — see *Simulation controls* below. |
 | `WS` | `/v1/ws/telemetry` | Live `TelemetryRecord` JSON frames; optional first message `{\"replay_from\": seq}`. |
 | `GET` | `/metrics` | **Loopback only.** Prometheus text exposition. Skips bearer auth — Tailscale ACLs gate the loopback front door. |
+
+Every WebSocket connection is led by the retained `status_led` record (and it
+is re-sent after a lagging subscriber skips frames), because the LED is
+level-triggered and its record can be older than the replay window. That frame
+is the only one whose `id` may be lower than a previously seen one, so clients
+tracking a reconnect cursor must keep the **maximum** id seen rather than the
+last.
 
 All HTTP and WebSocket requests require `Authorization: Bearer <debug-token>` when `DebugConfig::token` is set, **except** `/metrics`, which is intentionally unauthenticated and mounted only on the loopback listener so vmagent can scrape it. WebSocket clients may also pass `Sec-WebSocket-Protocol: bearer.<token>`.
 

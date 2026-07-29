@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use booth_hal::{
     AudioChannel, AudioError, AudioLevel, AudioRef, AudioSink, AudioSource, BoothStatus,
-    EventBatchAck, GpioEdge, GpioError, GpioPort, OperatorClient, OperatorError, OperatorMessage,
-    OperatorQuestion, PinRole, RecordingId, Storage, StorageError, SystemSnapshot, TelemetryEvent,
-    UploadSlot,
+    EventBatchAck, GpioEdge, GpioError, GpioPort, LedColour, LedError, LedPattern, OperatorClient,
+    OperatorError, OperatorMessage, OperatorQuestion, PinRole, PowerController, PowerError,
+    RecordingId, StatusLed, Storage, StorageError, SystemSnapshot, TelemetryEvent, UploadSlot,
 };
 use booth_telemetry::TelemetryBus;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,18 @@ impl GpioInjector {
         {
             bus.publish(TelemetryEvent::GpioEdge(edge));
         }
+    }
+
+    /// Inject a [`PinRole::PowerButton`] edge. `pressed` is the logical level
+    /// (`true` = pressed, `false` = released), mirroring how the Pi adapter
+    /// reports the button after applying its active-low inversion.
+    pub async fn push_power_button(&self, pressed: bool) {
+        self.push(GpioEdge {
+            role: PinRole::PowerButton,
+            level: pressed,
+            at_monotonic_ns: 0,
+        })
+        .await;
     }
 }
 
@@ -553,6 +565,94 @@ impl OperatorClient for MockOperatorClient {
         let result = Ok(());
         self.finish_request(&request_id, started, &result);
         result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status LED
+// ---------------------------------------------------------------------------
+
+/// In-memory [`StatusLed`] that records every `(colour, pattern)` it is asked
+/// to show, for test assertions and the simulator's read-only view.
+///
+/// Deliberately does **not** publish telemetry: `TelemetryEvent::StatusLed` is
+/// published by the runtime once per accepted change, so an adapter that also
+/// published would double-report every indication.
+#[derive(Default, Clone)]
+pub struct MockStatusLed {
+    inner: Arc<Mutex<Vec<(LedColour, LedPattern)>>>,
+}
+
+impl MockStatusLed {
+    /// Create a mock status LED.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Full history of shown indications, oldest first.
+    pub async fn history(&self) -> Vec<(LedColour, LedPattern)> {
+        self.inner.lock().await.clone()
+    }
+
+    /// The most recently shown indication, if any.
+    pub async fn current(&self) -> Option<(LedColour, LedPattern)> {
+        self.inner.lock().await.last().copied()
+    }
+}
+
+#[async_trait]
+impl StatusLed for MockStatusLed {
+    async fn set(&self, colour: LedColour, pattern: LedPattern) -> Result<(), LedError> {
+        self.inner.lock().await.push((colour, pattern));
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Power control
+// ---------------------------------------------------------------------------
+
+/// A power action requested through a [`MockPowerController`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerAction {
+    /// [`PowerController::reboot`] was called.
+    Reboot,
+    /// [`PowerController::poweroff`] was called.
+    PowerOff,
+}
+
+/// In-memory [`PowerController`] that records requested actions instead of
+/// touching the host, so reboot / power-off flows can be integration-tested.
+#[derive(Default, Clone)]
+pub struct MockPowerController {
+    inner: Arc<Mutex<Vec<PowerAction>>>,
+}
+
+impl MockPowerController {
+    /// Create a new recording power controller.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// All power actions requested so far, oldest first.
+    pub async fn actions(&self) -> Vec<PowerAction> {
+        self.inner.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl PowerController for MockPowerController {
+    async fn reboot(&self) -> Result<(), PowerError> {
+        self.inner.lock().await.push(PowerAction::Reboot);
+        Ok(())
+    }
+
+    async fn poweroff(&self) -> Result<(), PowerError> {
+        self.inner.lock().await.push(PowerAction::PowerOff);
+        Ok(())
     }
 }
 

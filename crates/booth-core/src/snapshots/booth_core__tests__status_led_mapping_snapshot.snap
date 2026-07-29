@@ -1,0 +1,17 @@
+---
+source: crates/booth-core/src/lib.rs
+expression: "rows.join(\"\\n\")"
+---
+idle                 -> green / steady(40)
+dial_tone            -> green / steady(255)
+dialing              -> green / steady(255)
+dialing              -> green / steady(255)
+playing_question     -> blue / steady(255)
+beep                 -> red / steady(255)
+recording            -> red / steady(255)
+finishing_recording  -> blue / blink(300ms)
+uploading            -> blue / blink(300ms)
+playing_message      -> blue / steady(255)
+playing_instructions -> blue / steady(255)
+call_unavailable     -> blue / steady(255)
+error                -> red / blink(300ms)

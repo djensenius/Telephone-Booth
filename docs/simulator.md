@@ -37,7 +37,15 @@ the base URL is still the example URL or the token is empty.
 |----------------------|------------------------------------------------------------------------|
 | `h` or `Space`       | Toggle the hook switch (on-hook ↔ off-hook).                            |
 | `0` … `9`            | Dial a digit. A rotary "0" produces 10 pulses, otherwise N pulses.     |
+| `p`                  | Short press of the power button (reboot).                              |
+| `P`                  | Long press of the power button, held past `hold_ms` (power off).       |
 | `q`, `Esc`, `Ctrl+C` | Send a Shutdown command to the runtime and exit the simulator.         |
+
+The simulator enables the power button even when `[power_button] enabled` is
+`false` in config, and always runs it against a mock power controller — `p`
+and `P` therefore log the requested action instead of rebooting your machine.
+The `led=` field in the header mirrors the RGB status ring
+(`colour / pattern`) exactly as the Pi adapter would drive it.
 
 Each digit press injects the correct number of falling+rising rotary pulse
 edges, exactly as the GPIO adapter would observe them from a real dial. The
@@ -51,7 +59,7 @@ off an in-flight upload.
 
 ```text
 ╭─ Booth ─────────────────────────────────────────────────────────────╮
-│ Telephone Booth Simulator   [mock I/O]   state=idle   status=idle   │
+│ Telephone Booth Simulator  [mock I/O]  state=idle  led=green / ste… │
 ╰─────────────────────────────────────────────────────────────────────╯
 ╭─ Events (newest first) ─────────────────────────────────────────────╮
 │ 2025-01-02T12:34:56  state -> dial_tone (cause: HookOff)            │
@@ -62,7 +70,7 @@ off an in-flight upload.
 │ peak  0.12   rms  0.04  │ │ peak  0.40   rms  0.18  │
 ╰─────────────────────────╯ ╰─────────────────────────╯
 ╭─────────────────────────────────────────────────────────────────────╮
-│ Controls: [h]/space toggle hook   [0-9] dial digit   [q] quit       │
+│ Controls: [h]/space hook  [0-9] digit  [p] reboot  [P] off  [q] quit │
 │ Press [h] or space to lift the receiver.   Log: /tmp/telephone-...  │
 ╰─────────────────────────────────────────────────────────────────────╯
 ```

@@ -44,6 +44,22 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
 .ws-connected { color: var(--ok); }
 .ws-disconnected { color: var(--accent); }
 
+/* Status LED mirror: a dot tinted with the current colour plus its pattern. */
+.led-chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.85rem; color: var(--muted);
+}
+.led-dot {
+  width: 0.8rem; height: 0.8rem; border-radius: 50%;
+  background: #333; border: 1px solid var(--border);
+}
+.led-dot.led-off { background: #333; }
+.led-dot.led-red { background: #e04a4a; box-shadow: 0 0 6px #e04a4a; }
+.led-dot.led-green { background: #4ae07a; box-shadow: 0 0 6px #4ae07a; }
+.led-dot.led-blue { background: #4a8ae0; box-shadow: 0 0 6px #4a8ae0; }
+.led-dot.led-animated { animation: led-pulse 1.4s ease-in-out infinite; }
+@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
 .controls {
   display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;
 }
@@ -122,6 +138,10 @@ h2 { font-size: 1rem; margin-bottom: 0.5rem; color: var(--muted); }
   <h1>Telephone Booth Simulator</h1>
   <div class="status-bar">
     <span class="state" id="state-display">—</span>
+    <span class="led-chip" id="led-chip" title="Booth status LED">
+      <span class="led-dot led-off" id="led-dot"></span>
+      <span id="led-label">LED —</span>
+    </span>
     <span class="ws-status" id="ws-status">⚪ connecting…</span>
   </div>
 
@@ -181,6 +201,7 @@ function authenticate() {
   document.getElementById("app").style.display = "block";
   fetchConfig();
   fetchState();
+  fetchStatusLed();
   connectWs();
 }
 
@@ -267,6 +288,64 @@ function updateState(state) {
   }
 }
 
+// `/v1/status-led` mirrors the physical RGB ring. `updatedAt === null` means
+// the runtime has not driven the LED yet, so render "unknown" rather than
+// claiming the ring is dark.
+// Highest telemetry record id already rendered on the LED chip. The snapshot
+// fetch races live WebSocket records (it is started without awaiting, and again
+// on every reconnect), so a slow HTTP response could otherwise overwrite a
+// newer record and leave the chip stale until the next state change.
+let ledEventId = -1;
+
+async function fetchStatusLed() {
+  try {
+    const res = await fetch(baseUrl() + "/v1/status-led", { headers: headers() });
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    if (!data || data.updatedAt === null || data.updatedAt === undefined) {
+      // Nothing has driven the LED yet, so there is no newer record to lose.
+      if (ledEventId < 0) updateStatusLed(null, null);
+      return;
+    }
+    updateStatusLed(
+      data.colour,
+      data.patternLabel || describePattern(data.pattern),
+      data.lastEventId,
+    );
+  } catch (e) {
+    showError("Failed to fetch status LED: " + e.message);
+  }
+}
+
+function describePattern(pattern) {
+  if (!pattern || !pattern.pattern) return "";
+  switch (pattern.pattern) {
+    case "steady": return "steady(" + pattern.brightness + ")";
+    case "pulse": return "pulse(" + pattern.period_ms + "ms)";
+    case "blink": return "blink(" + pattern.period_ms + "ms)";
+    case "fade": return "fade(" + pattern.duration_ms + "ms)";
+    default: return pattern.pattern;
+  }
+}
+
+function updateStatusLed(colour, patternLabel, eventId) {
+  if (typeof eventId === "number") {
+    if (eventId < ledEventId) return;
+    ledEventId = eventId;
+  }
+  const dot = document.getElementById("led-dot");
+  const label = document.getElementById("led-label");
+  if (!dot || !label) return;
+  if (!colour) {
+    dot.className = "led-dot led-off";
+    label.textContent = "LED —";
+    return;
+  }
+  const animated = patternLabel && !patternLabel.startsWith("steady");
+  dot.className = "led-dot led-" + colour + (animated ? " led-animated" : "");
+  label.textContent = "LED " + colour + (patternLabel ? " / " + patternLabel : "");
+}
+
 function updateHookBtn() {
   const btn = document.getElementById("hook-btn");
   if (hookOff) {
@@ -332,6 +411,13 @@ function connectWs() {
     document.getElementById("ws-status").textContent = "🟢 connected";
     document.getElementById("ws-status").className = "ws-status ws-connected";
     fetchState();
+    // WebSocket replay is bounded, so an LED change during a long disconnect
+    // may already be evicted; re-seed the chip from the durable snapshot.
+    // Telemetry ids are process-local and restart at 1, so drop the barrier
+    // first: after a service restart every new record would otherwise look
+    // older than what the previous process had already rendered.
+    ledEventId = -1;
+    fetchStatusLed();
   };
 
   ws.onclose = () => {
@@ -359,6 +445,9 @@ function handleRecord(record) {
   if (record.kind === "state_transition" && record.to) {
     updateState(record.to);
   }
+  if (record.kind === "status_led") {
+    updateStatusLed(record.colour, describePattern(record.pattern), record.id);
+  }
   addEvent(summarizeRecord(record));
 }
 
@@ -376,6 +465,8 @@ function summarizeRecord(record) {
       return "digit " + record.digit + " (" + record.pulses + " pulses)";
     case "gpio_edge":
       return "gpio " + record.role + "=" + (record.level ? 1 : 0);
+    case "status_led":
+      return "led " + record.colour + " / " + describePattern(record.pattern);
     case "audio_level":
       return "audio peak=" + formatNumber(record.peak)
         + " rms=" + formatNumber(record.rms);

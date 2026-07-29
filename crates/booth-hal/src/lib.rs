@@ -56,6 +56,10 @@ pub enum PinRole {
     RotaryRead,
     /// Tracks the hook switch — `true` = on hook (idle), `false` = off hook.
     Hook,
+    /// Momentary power button — `true` = pressed, `false` = released. A short
+    /// press reboots the booth; a hold past the configured threshold powers it
+    /// off. Optional and default-off; only polled when explicitly enabled.
+    PowerButton,
 }
 
 /// A logical (not BCM) edge transition observed on a configured pin.
@@ -99,6 +103,164 @@ pub trait GpioPort: Send + Sync {
 
     /// Current sampled level of a configured pin, for diagnostic snapshots.
     async fn snapshot(&self, role: PinRole) -> Result<bool, GpioError>;
+}
+
+// ---------------------------------------------------------------------------
+// Status LED
+// ---------------------------------------------------------------------------
+
+/// Colour shown by the booth's RGB status LED.
+///
+/// Deliberately **not** an RGB triple. The reference hardware (an Adafruit
+/// 3350 pushbutton ring) shares a single current limit across its red, green
+/// and blue cathodes, so driving two channels at once only lights the colour
+/// with the lowest forward voltage — mixed colours (amber, cyan, magenta,
+/// white) are physically impossible. Modelling the colour as a closed set of
+/// single channels makes an unmixable colour unrepresentable in the type
+/// system. See `docs/adr/0009-status-led-power-button.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedColour {
+    /// All channels dark.
+    #[default]
+    Off,
+    /// Red channel only.
+    Red,
+    /// Green channel only.
+    Green,
+    /// Blue channel only.
+    Blue,
+}
+
+impl LedColour {
+    /// Stable lowercase tag (matches the serde representation).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Red => "red",
+            Self::Green => "green",
+            Self::Blue => "blue",
+        }
+    }
+}
+
+impl fmt::Display for LedColour {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// How a [`LedColour`] is animated.
+///
+/// Only a single colour channel is ever driven, so every pattern shapes the
+/// brightness of that one channel over time. Brightness is expressed as a
+/// `u8` in `0..=255`, where `0` is fully dark and `255` is full brightness;
+/// the adapter may scale it further by a global brightness ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "pattern", rename_all = "snake_case")]
+pub enum LedPattern {
+    /// Constant brightness.
+    Steady {
+        /// Channel brightness, `0..=255`.
+        brightness: u8,
+    },
+    /// Smoothly ramp brightness up and back down forever. `period_ms` is one
+    /// full cycle (dark → bright → dark) in milliseconds.
+    Pulse {
+        /// Full cycle length in milliseconds.
+        period_ms: u32,
+    },
+    /// Hard on/off toggle forever. `period_ms` is one full on+off cycle in
+    /// milliseconds (50 % duty).
+    Blink {
+        /// Full on+off cycle length in milliseconds.
+        period_ms: u32,
+    },
+    /// Ramp from full brightness down to off exactly once over `duration_ms`,
+    /// then stay off. Used for the "shutting down" indication.
+    Fade {
+        /// Fade-out length in milliseconds.
+        duration_ms: u32,
+    },
+}
+
+impl Default for LedPattern {
+    fn default() -> Self {
+        Self::Steady { brightness: 0 }
+    }
+}
+
+impl fmt::Display for LedPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Steady { brightness } => write!(f, "steady({brightness})"),
+            Self::Pulse { period_ms } => write!(f, "pulse({period_ms}ms)"),
+            Self::Blink { period_ms } => write!(f, "blink({period_ms}ms)"),
+            Self::Fade { duration_ms } => write!(f, "fade({duration_ms}ms)"),
+        }
+    }
+}
+
+/// Errors a [`StatusLed`] implementation can return.
+#[derive(Debug, thiserror::Error)]
+pub enum LedError {
+    /// The LED pins could not be configured (already in use, permission
+    /// denied, invalid BCM number, ...).
+    #[error("status led setup failed: {0}")]
+    Setup(Cow<'static, str>),
+    /// A hardware write to the LED pins failed.
+    #[error("status led write failed: {0}")]
+    Write(Cow<'static, str>),
+    /// The status LED is unavailable on this platform or build configuration.
+    #[error("status led unsupported: {0}")]
+    Unsupported(Cow<'static, str>),
+}
+
+/// Drives the booth's single RGB status LED.
+///
+/// Implementations **must** drive at most one colour channel at a time: the
+/// reference hardware cannot mix colours (see [`LedColour`]). Because the
+/// runtime calls [`StatusLed::set`] from the effect dispatcher without owning
+/// the adapter mutably, the method takes `&self`; adapters that need mutable
+/// hardware handles use interior mutability.
+#[cfg(feature = "std")]
+#[async_trait::async_trait]
+pub trait StatusLed: Send + Sync {
+    /// Show `colour` animated with `pattern`, replacing whatever was showing
+    /// before. Passing [`LedColour::Off`] turns every channel off regardless
+    /// of `pattern`.
+    async fn set(&self, colour: LedColour, pattern: LedPattern) -> Result<(), LedError>;
+}
+
+// ---------------------------------------------------------------------------
+// Power control
+// ---------------------------------------------------------------------------
+
+/// Errors a [`PowerController`] implementation can return.
+#[derive(Debug, thiserror::Error)]
+pub enum PowerError {
+    /// The power command could not be spawned or exited non-zero.
+    #[error("power command failed: {0}")]
+    Command(Cow<'static, str>),
+    /// Power control is unavailable on this platform or build configuration.
+    #[error("power control unsupported: {0}")]
+    Unsupported(Cow<'static, str>),
+}
+
+/// Reboots or powers off the host on behalf of the physical power button.
+///
+/// The pure core never shells out; it emits `Effect::Reboot` / `Effect::PowerOff`
+/// as data and the runtime routes those to this port. Real adapters invoke
+/// `systemctl`; mock adapters record the request so the flow can be tested
+/// without touching the host.
+#[cfg(feature = "std")]
+#[async_trait::async_trait]
+pub trait PowerController: Send + Sync {
+    /// Reboot the host.
+    async fn reboot(&self) -> Result<(), PowerError>;
+    /// Power the host off.
+    async fn poweroff(&self) -> Result<(), PowerError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -813,6 +975,15 @@ impl fmt::Display for CallOutcome {
 pub enum TelemetryEvent {
     /// A raw GPIO edge observed by the HAL adapter (post-debounce).
     GpioEdge(GpioEdge),
+    /// The status LED was set to a new colour + pattern by the runtime.
+    StatusLed {
+        /// Colour now shown (single channel; never mixed).
+        colour: LedColour,
+        /// Animation applied to the colour.
+        pattern: LedPattern,
+        /// Nanoseconds since runtime start.
+        at_monotonic_ns: u64,
+    },
     /// A fully-decoded rotary digit (0..=9).
     DigitDialed {
         /// Digit value, 0..=9.

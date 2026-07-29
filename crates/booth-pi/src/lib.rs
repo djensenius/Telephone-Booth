@@ -39,6 +39,12 @@ pub use operator::{PiOperatorClient, UploadError, validate_upload_url};
 
 pub mod gpio;
 
+pub mod power;
+pub use power::PiPowerController;
+
+pub mod status_led;
+pub use status_led::{NoopStatusLed, PiStatusLed};
+
 #[cfg(feature = "pi")]
 pub use gpio::PiGpioPort;
 
@@ -76,6 +82,22 @@ pub struct GpioConfig {
     /// Hook switch pin (physical 11 = BCM 17 by default).
     #[serde(default = "default_hook", alias = "hook_bcm")]
     pub hook: u8,
+    /// Optional momentary power-button pin (physical 37 = BCM 26 by default).
+    /// Only polled when `power_button_enabled` is `true`; the runtime derives
+    /// that flag from `[power_button].enabled` at adapter-construction time.
+    #[serde(default = "default_power_button", alias = "power_button_bcm")]
+    pub power_button: u8,
+    /// Whether to poll the [`power_button`](Self::power_button) pin. Defaults
+    /// to `false` so existing booths that have not wired a button are
+    /// unaffected.
+    ///
+    /// Derived by the runtime from `[power_button].enabled`, so it is
+    /// deliberately **not** part of the serialized config: accepting it in
+    /// `[gpio]` would offer a second, silently-overwritten source of truth, and
+    /// emitting it would make `print-config` show `false` for an enabled
+    /// button.
+    #[serde(skip)]
+    pub power_button_enabled: bool,
     /// Internal pull resistor applied to all configured inputs.
     #[serde(default)]
     pub pull: GpioPull,
@@ -123,6 +145,13 @@ pub struct GpioInvertConfig {
     /// Invert hook switch levels.
     #[serde(default)]
     pub hook: bool,
+    /// Invert power-button levels.
+    ///
+    /// Defaults to `true`: the Adafruit 3350 switch is wired active-low against
+    /// the internal pull-up (pressed pulls the pin low), so inverting yields a
+    /// logical `true` while the button is pressed.
+    #[serde(default = "default_invert_power_button")]
+    pub power_button: bool,
 }
 
 impl Default for GpioInvertConfig {
@@ -131,6 +160,7 @@ impl Default for GpioInvertConfig {
             rotary_pulse: default_invert_rotary_pulse(),
             rotary_read: false,
             hook: false,
+            power_button: default_invert_power_button(),
         }
     }
 }
@@ -144,6 +174,9 @@ fn default_rotary_read() -> u8 {
 fn default_hook() -> u8 {
     17
 }
+fn default_power_button() -> u8 {
+    26
+}
 fn default_debounce_ms() -> u64 {
     25
 }
@@ -153,6 +186,9 @@ fn default_channel_capacity() -> u16 {
 fn default_invert_rotary_pulse() -> bool {
     true
 }
+fn default_invert_power_button() -> bool {
+    true
+}
 
 impl Default for GpioConfig {
     fn default() -> Self {
@@ -160,6 +196,8 @@ impl Default for GpioConfig {
             rotary_pulse: default_rotary_pulse(),
             rotary_read: default_rotary_read(),
             hook: default_hook(),
+            power_button: default_power_button(),
+            power_button_enabled: false,
             pull: GpioPull::default(),
             debounce_ms: default_debounce_ms(),
             channel_capacity: default_channel_capacity(),
@@ -176,6 +214,7 @@ impl GpioConfig {
             PinRole::RotaryPulse => self.rotary_pulse,
             PinRole::RotaryRead => self.rotary_read,
             PinRole::Hook => self.hook,
+            PinRole::PowerButton => self.power_button,
         }
     }
 
@@ -186,6 +225,7 @@ impl GpioConfig {
             PinRole::RotaryPulse => self.invert.rotary_pulse,
             PinRole::RotaryRead => self.invert.rotary_read,
             PinRole::Hook => self.invert.hook,
+            PinRole::PowerButton => self.invert.power_button,
         }
     }
 }
@@ -466,6 +506,94 @@ impl Default for PiConfig {
             audio: AudioConfig::default(),
             operator: OperatorConfig::default(),
         }
+    }
+}
+
+/// Behaviour of the optional physical power button.
+///
+/// Default-off so existing booths without a button are unaffected. The button
+/// pin itself lives in [`GpioConfig::power_button`]; this struct controls
+/// whether the feature is active and how long a press must be held to count as
+/// a power-off rather than a reboot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PowerButtonConfig {
+    /// Whether the power button is wired and should be polled. Default `false`.
+    pub enabled: bool,
+    /// Hold duration, in milliseconds, at or above which a press powers the
+    /// booth off instead of rebooting it. Default `3000`.
+    pub hold_ms: u64,
+}
+
+fn default_power_button_hold_ms() -> u64 {
+    3000
+}
+
+impl Default for PowerButtonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hold_ms: default_power_button_hold_ms(),
+        }
+    }
+}
+
+/// Wiring and behaviour of the optional RGB status LED.
+///
+/// Default-off. Only one channel is ever driven at once (the reference LED
+/// ring shares a single current limit and cannot mix colours), so this struct
+/// carries the three cathode pins plus polarity and a global brightness
+/// ceiling rather than any per-colour calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StatusLedConfig {
+    /// Whether the status LED is wired and should be driven. Default `false`.
+    pub enabled: bool,
+    /// Red cathode BCM pin. Default `5`.
+    #[serde(alias = "red_bcm")]
+    pub red: u8,
+    /// Green cathode BCM pin. Default `6`.
+    #[serde(alias = "green_bcm")]
+    pub green: u8,
+    /// Blue cathode BCM pin. Default `13`.
+    #[serde(alias = "blue_bcm")]
+    pub blue: u8,
+    /// Whether the LED is active-low (common-anode wiring sinks each cathode to
+    /// light it). Default `true`.
+    pub active_low: bool,
+    /// Global brightness ceiling in `0.0..=1.0`, multiplied into every
+    /// pattern's per-channel brightness. Default `1.0`.
+    pub brightness: f32,
+}
+
+fn default_status_led_red() -> u8 {
+    5
+}
+fn default_status_led_green() -> u8 {
+    6
+}
+fn default_status_led_blue() -> u8 {
+    13
+}
+
+impl Default for StatusLedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            red: default_status_led_red(),
+            green: default_status_led_green(),
+            blue: default_status_led_blue(),
+            active_low: true,
+            brightness: 1.0,
+        }
+    }
+}
+
+impl StatusLedConfig {
+    /// Clamp the configured global brightness ceiling into `0.0..=1.0`.
+    #[must_use]
+    pub fn brightness_clamped(&self) -> f32 {
+        self.brightness.clamp(0.0, 1.0)
     }
 }
 

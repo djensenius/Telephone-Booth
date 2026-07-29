@@ -381,6 +381,16 @@ pub fn record_snapshot_gauges(snapshot: &SystemSnapshot) {
 // Telemetry consumer
 // ---------------------------------------------------------------------------
 
+/// Count a GPIO-derived core event that the runtime had to drop.
+///
+/// Dropping only happens when the core loop is wedged long enough to fill both
+/// the event channel and the handoff queue behind it; the counter makes that
+/// visible without letting the queue grow without bound. `role` must be a
+/// static label (see `booth-bin`'s `role_metric_label`).
+pub fn record_dropped_gpio_event(role: &'static str) {
+    metrics::counter!("booth_gpio_events_dropped_total", "role" => role).increment(1);
+}
+
 /// Update counters and histograms in response to each telemetry event.
 ///
 /// Public so `booth-bin` and tests can drive this from any source of
@@ -479,6 +489,7 @@ pub fn record_telemetry_event(event: &TelemetryEvent) {
         | TelemetryEvent::UploadStarted { .. }
         | TelemetryEvent::AudioDeviceChange { .. }
         | TelemetryEvent::GpioEdge(_)
+        | TelemetryEvent::StatusLed { .. }
         | TelemetryEvent::SystemSample { .. }
         | TelemetryEvent::Log { .. } => {
             // No counter for these in v1 — the structured event is the

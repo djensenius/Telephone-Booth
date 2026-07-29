@@ -20,11 +20,12 @@ use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BoothStatus, BuiltinTone, GpioEdge, GpioError,
-    GpioPort, OperatorClient, OperatorError, PinRole, RecordingId, RuntimeMode, TelemetryEvent,
+    GpioPort, LedColour, LedPattern, OperatorClient, OperatorError, PinRole, PowerController,
+    RecordingId, RuntimeMode, StatusLed, TelemetryEvent,
 };
 use booth_pi::{
     AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
-    PiAudioSink, PiAudioSource,
+    PiAudioSink, PiAudioSource, PowerButtonConfig, StatusLedConfig,
 };
 use booth_telemetry::TelemetryBus;
 use observability::{ObservabilityConfig, SessionHandle};
@@ -67,6 +68,10 @@ static OPERATOR_REQUEST_SEQ: AtomicU64 = AtomicU64::new(0);
 pub struct RuntimeConfig {
     /// GPIO input pin assignments and electrical settings.
     pub gpio: GpioConfig,
+    /// Optional physical power button (default-off).
+    pub power_button: PowerButtonConfig,
+    /// Optional RGB status LED (default-off).
+    pub status_led: StatusLedConfig,
     /// Audio device and recording settings.
     pub audio: AudioConfig,
     /// Operator API connection settings.
@@ -105,6 +110,8 @@ impl Default for RuntimeConfig {
         let pi = booth_pi::PiConfig::default();
         Self {
             gpio: pi.gpio,
+            power_button: PowerButtonConfig::default(),
+            status_led: StatusLedConfig::default(),
             audio: pi.audio,
             operator: pi.operator,
             debug: DebugConfig::default(),
@@ -190,6 +197,8 @@ pub struct RuntimeAdapters {
     audio_sink: Box<dyn AudioSink>,
     audio_source: Box<dyn AudioSource>,
     operator: Arc<dyn OperatorClient>,
+    status_led: Arc<dyn StatusLed>,
+    power: Arc<dyn PowerController>,
 }
 
 /// Factory that re-opens the GPIO pins and re-registers interrupts after the
@@ -205,6 +214,8 @@ impl RuntimeAdapters {
         audio_sink: Box<dyn AudioSink>,
         audio_source: Box<dyn AudioSource>,
         operator: Arc<dyn OperatorClient>,
+        status_led: Arc<dyn StatusLed>,
+        power: Arc<dyn PowerController>,
     ) -> Self {
         Self {
             gpio,
@@ -212,6 +223,8 @@ impl RuntimeAdapters {
             audio_sink,
             audio_source,
             operator,
+            status_led,
+            power,
         }
     }
 
@@ -245,6 +258,10 @@ pub struct MockRuntimeHandles {
     pub audio_source: booth_mock::MockAudioSource,
     /// Inspectable mock operator client.
     pub operator: booth_mock::MockOperatorClient,
+    /// Inspectable mock status LED (records colour/pattern history).
+    pub status_led: booth_mock::MockStatusLed,
+    /// Inspectable mock power controller (records reboot/poweroff actions).
+    pub power: booth_mock::MockPowerController,
 }
 
 /// Load the effective runtime config from defaults, an optional TOML file, and env overrides.
@@ -284,8 +301,19 @@ pub async fn check_runtime(config: &RuntimeConfig) -> Result<()> {
         .await
         .map_err(|err| anyhow!("audio device check failed: {err}"))?;
 
-    let _gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
+    // Mirror `build_pi_adapters`: the button pin is only reserved when the
+    // feature is on, so preflight has to derive the same flag or it would miss
+    // an invalid / already-claimed button pin and let the service fail during
+    // `ExecStart` instead (systemd restart loop).
+    let mut gpio_config = config.gpio.clone();
+    gpio_config.power_button_enabled = config.power_button.enabled;
+    let _gpio = booth_pi::gpio::PiGpioPort::new(gpio_config)
         .map_err(|err| anyhow!("gpio reservation check failed: {err}"))?;
+
+    if config.status_led.enabled {
+        let _led = booth_pi::PiStatusLed::new(&config.status_led)
+            .map_err(|err| anyhow!("status LED reservation check failed: {err}"))?;
+    }
 
     Ok(())
 }
@@ -322,7 +350,10 @@ pub fn build_pi_adapters(
         }
     });
 
-    let gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
+    let mut gpio_config = config.gpio.clone();
+    gpio_config.power_button_enabled = config.power_button.enabled;
+
+    let gpio = booth_pi::gpio::PiGpioPort::new(gpio_config.clone())
         .map_err(|err| anyhow!("open GPIO adapter: {err}"))?;
 
     if let Err(err) = booth_pi::apply_startup_mixer(&config.audio) {
@@ -347,17 +378,32 @@ pub fn build_pi_adapters(
 
     // Rebuild closure for the runtime's self-healing GPIO task: re-open the
     // pins and re-register interrupts from the same config after a stream loss.
-    let gpio_config = config.gpio.clone();
+    let rebuild_config = gpio_config.clone();
     let gpio_rebuild: GpioRebuild = Box::new(move || {
-        booth_pi::gpio::PiGpioPort::new(gpio_config.clone())
+        booth_pi::gpio::PiGpioPort::new(rebuild_config.clone())
             .map(|port| Box::new(port) as Box<dyn GpioPort>)
     });
+
+    // The status LED is opt-in: only drive real GPIO when enabled, otherwise
+    // use the no-op adapter so the runtime can call the port unconditionally
+    // without logging `Unsupported` on every transition.
+    let status_led: Arc<dyn StatusLed> = if config.status_led.enabled {
+        Arc::new(
+            booth_pi::PiStatusLed::new(&config.status_led)
+                .map_err(|err| anyhow!("open status LED adapter: {err}"))?,
+        )
+    } else {
+        Arc::new(booth_pi::NoopStatusLed)
+    };
+    let power: Arc<dyn PowerController> = Arc::new(booth_pi::PiPowerController::new());
 
     Ok(RuntimeAdapters::new(
         Box::new(gpio),
         Box::new(audio_sink),
         Box::new(audio_source),
         Arc::new(operator),
+        status_led,
+        power,
     )
     .with_gpio_rebuild(gpio_rebuild))
 }
@@ -369,18 +415,24 @@ pub fn build_mock_adapters(bus: &TelemetryBus) -> (RuntimeAdapters, MockRuntimeH
     let audio_sink = booth_mock::MockAudioSink::with_telemetry(bus);
     let audio_source = booth_mock::MockAudioSource::with_telemetry(bus);
     let operator = booth_mock::MockOperatorClient::with_telemetry(bus);
+    let status_led = booth_mock::MockStatusLed::new();
+    let power = booth_mock::MockPowerController::new();
 
     let adapters = RuntimeAdapters::new(
         Box::new(gpio),
         Box::new(audio_sink.clone()),
         Box::new(audio_source.clone()),
         Arc::new(operator.clone()),
+        Arc::new(status_led.clone()),
+        Arc::new(power.clone()),
     );
     let handles = MockRuntimeHandles {
         gpio: gpio_injector,
         audio_sink,
         audio_source,
         operator,
+        status_led,
+        power,
     };
     (adapters, handles)
 }
@@ -442,7 +494,17 @@ pub fn build_simulator_adapters(
     };
 
     Ok((
-        RuntimeAdapters::new(Box::new(gpio), audio_sink, audio_source, operator),
+        RuntimeAdapters::new(
+            Box::new(gpio),
+            audio_sink,
+            audio_source,
+            operator,
+            // The simulator always uses mock power/LED adapters so a dev machine
+            // never actually reboots or powers off, and the TUI can render the
+            // LED state from the telemetry bus.
+            Arc::new(booth_mock::MockStatusLed::new()),
+            Arc::new(booth_mock::MockPowerController::new()),
+        ),
         gpio_injector,
     ))
 }
@@ -479,6 +541,8 @@ async fn run_runtime(
         audio_sink,
         audio_source,
         operator,
+        status_led,
+        power,
     } = adapters;
 
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(EVENT_CHANNEL);
@@ -577,7 +641,41 @@ async fn run_runtime(
         }
     }
 
-    let gpio_task = tokio::spawn(gpio_task(gpio, gpio_rebuild, event_tx.clone(), bus.clone()));
+    // Drive the "booting" indication (blue slow pulse) as soon as the LED port
+    // is available. It is replaced with the idle indication once startup
+    // finishes (see the `status_led_for(&State::default())` call below), since
+    // the core only emits `Effect::SetStatusLed` when the indication *changes*
+    // and an on-hook booth may not transition for hours.
+    apply_status_led(
+        &status_led,
+        LedColour::Blue,
+        LedPattern::Pulse {
+            period_ms: booth_core::LED_SLOW_PULSE_MS,
+        },
+        &bus,
+        "booting",
+    )
+    .await;
+
+    // The power button is opt-in. When enabled, route its edges through a
+    // dedicated task that times the hold against tokio timers and synthesizes
+    // `PowerButtonPressed` (short press) or `PowerButtonHeld` (long hold).
+    let (power_button_tx, power_button_task) = if config.power_button.enabled {
+        let (tx, rx) = mpsc::channel::<PowerButtonSignal>(16);
+        let hold = Duration::from_millis(config.power_button.hold_ms);
+        let task = tokio::spawn(power_button_task(rx, event_tx.clone(), hold));
+        (Some(tx), Some(task))
+    } else {
+        (None, None)
+    };
+
+    let gpio_task = tokio::spawn(gpio_task(
+        gpio,
+        gpio_rebuild,
+        event_tx.clone(),
+        power_button_tx,
+        bus.clone(),
+    ));
     let audio_task = tokio::spawn(audio_task(
         audio_sink,
         audio_rx,
@@ -590,6 +688,8 @@ async fn run_runtime(
         audio_tx.clone(),
         Arc::clone(&audio_source),
         Arc::clone(&operator),
+        Arc::clone(&status_led),
+        Arc::clone(&power),
         event_tx.clone(),
         bus.clone(),
         Arc::clone(&next_remote_audio),
@@ -678,6 +778,15 @@ async fn run_runtime(
     let mut watchdog = arm_watchdog(options.notify_systemd);
 
     let mut state = State::default();
+
+    // Startup is done: replace the boot indication with the one the core maps
+    // to the initial state. Without this an on-hook booth would stay on the
+    // blue boot pulse until its first state transition, which may be hours.
+    {
+        let (colour, pattern) = booth_core::status_led_for(&state);
+        apply_status_led(&status_led, colour, pattern, &bus, "ready").await;
+    }
+
     let mut shutdown = shutdown_signal(options.listen_signals);
 
     loop {
@@ -722,8 +831,28 @@ async fn run_runtime(
 
     let _ = audio_tx.send(AudioCommand::Shutdown).await;
     gpio_task.abort();
+    if let Some(task) = power_button_task {
+        task.abort();
+    }
     audio_task.abort();
+    // Stop the effect dispatcher *before* the terminal indication so a queued
+    // `Effect::SetStatusLed` cannot overwrite the fade after it starts. `abort`
+    // only requests cancellation, so wait for the task to actually stop —
+    // otherwise an in-flight `apply_status_led` could still land afterwards.
     effect_task.abort();
+    let _ = effect_task.await;
+    // Drive the "shutting down" indication (red fade to off) directly, since the
+    // effect task is no longer processing `Effect::SetStatusLed`.
+    apply_status_led(
+        &status_led,
+        LedColour::Red,
+        LedPattern::Fade {
+            duration_ms: booth_core::LED_FADE_MS,
+        },
+        &bus,
+        "shutdown",
+    )
+    .await;
     // Give the event forwarder a chance to flush + durably spill buffered
     // telemetry (e.g. a pending CallEnded) before we abort the rest.
     let _ = obs_shutdown_tx.send(true);
@@ -748,6 +877,15 @@ async fn run_runtime(
             tracing::warn!("debug server did not shut down within timeout, aborting");
         }
     }
+
+    // The fade is animated by a task the adapter owns and aborts on drop, so
+    // hold the adapter alive until it has run to completion — otherwise a quiet
+    // shutdown collapses the fade into an immediate off. Only worth the delay
+    // when a real LED is attached.
+    if config.status_led.enabled {
+        tokio::time::sleep(Duration::from_millis(u64::from(booth_core::LED_FADE_MS))).await;
+    }
+    drop(status_led);
 
     Ok(state)
 }
@@ -791,8 +929,28 @@ async fn gpio_task(
     initial: Box<dyn GpioPort>,
     mut rebuild: Option<GpioRebuild>,
     event_tx: mpsc::Sender<Event>,
+    power_button_tx: Option<mpsc::Sender<PowerButtonSignal>>,
     bus: TelemetryBus,
 ) {
+    // Hook and rotary events are handed to a forwarder task through a second
+    // bounded queue so this loop never blocks on `event_tx`. A stalled core
+    // (e.g. an effect dispatcher busy playing a long clip) would otherwise
+    // freeze edge intake, and a power-button release stuck behind that stall
+    // past `hold_ms` would turn a short press into an unintended power-off.
+    // The forwarder still awaits `event_tx`, so end-to-end backpressure is
+    // preserved; when even the handoff queue is full the event is dropped and
+    // counted, matching the Pi poller's policy, rather than growing without
+    // bound while the core is wedged.
+    let (queued_tx, mut queued_rx) = mpsc::channel::<Event>(EVENT_CHANNEL);
+    let forward_task = tokio::spawn(async move {
+        while let Some(event) = queued_rx.recv().await {
+            if event_tx.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+    let event_tx = queued_tx;
+
     let mut current: Option<Box<dyn GpioPort>> = Some(initial);
     let mut backoff = GPIO_REBUILD_BACKOFF_BASE;
 
@@ -819,6 +977,15 @@ async fn gpio_task(
                     if !reconcile_hook(new_gpio.as_ref(), &event_tx, &bus).await {
                         break;
                     }
+                    // Same reasoning for the power button: a press that started
+                    // during the outage would otherwise leave `power_button_task`
+                    // unaware, so the eventual release reads as a stray edge and
+                    // neither reboot nor power-off happens.
+                    if !reconcile_power_button(new_gpio.as_ref(), power_button_tx.as_ref(), &bus)
+                        .await
+                    {
+                        break;
+                    }
                     current = Some(new_gpio);
                 }
                 Err(rebuild_err) => {
@@ -838,8 +1005,17 @@ async fn gpio_task(
                 // backoff so a future loss starts from the base delay.
                 backoff = GPIO_REBUILD_BACKOFF_BASE;
                 bus.publish(TelemetryEvent::GpioEdge(edge));
-                if let Some(event) = event_from_gpio(edge)
-                    && event_tx.send(event).await.is_err()
+                if edge.role == PinRole::PowerButton {
+                    // The power button's press-duration timing lives in
+                    // `power_button_task`; forward the raw logical level (true =
+                    // pressed) there instead of translating it into a core event.
+                    if let Some(tx) = power_button_tx.as_ref()
+                        && tx.send(PowerButtonSignal::Level(edge.level)).await.is_err()
+                    {
+                        break;
+                    }
+                } else if let Some(event) = event_from_gpio(edge)
+                    && !queue_event(&event_tx, event, edge.role)
                 {
                     break;
                 }
@@ -854,9 +1030,22 @@ async fn gpio_task(
                     message: err.to_string(),
                 });
                 warn!(%err, "gpio stream lost");
+                // A press being timed can no longer be released through this
+                // stream, and a rebuild can take tens of seconds. Fail safe by
+                // abandoning it: a still-pressed button starts a fresh window
+                // from the reconciled level after the rebuild.
+                if let Some(tx) = power_button_tx.as_ref()
+                    && tx.send(PowerButtonSignal::Interrupted).await.is_err()
+                {
+                    break;
+                }
             }
         }
     }
+
+    // Let already-queued events reach the core before this task ends.
+    drop(event_tx);
+    let _ = forward_task.await;
 }
 
 /// Re-emit the current hook level after the GPIO adapter is rebuilt so the core
@@ -879,7 +1068,7 @@ async fn reconcile_hook(
             };
             bus.publish(TelemetryEvent::GpioEdge(edge));
             if let Some(event) = event_from_gpio(edge) {
-                return event_tx.send(event).await.is_ok();
+                return queue_event(event_tx, event, PinRole::Hook);
             }
             true
         }
@@ -890,6 +1079,78 @@ async fn reconcile_hook(
     }
 }
 
+/// Re-forward the current power-button level after the GPIO adapter is rebuilt.
+///
+/// Rebuilt pollers seed their level without emitting an edge, so a press that
+/// began during the outage would never reach [`power_button_task`]; its release
+/// would then be discarded as a stray edge and the requested reboot / power-off
+/// would silently never happen. A redundant press level is harmless — the task
+/// treats it as "keep waiting" — so it is safe to always forward. Returns
+/// `false` only when the receiver is gone (runtime shutting down).
+async fn reconcile_power_button(
+    gpio: &dyn GpioPort,
+    power_button_tx: Option<&mpsc::Sender<PowerButtonSignal>>,
+    bus: &TelemetryBus,
+) -> bool {
+    let Some(tx) = power_button_tx else {
+        return true;
+    };
+    match gpio.snapshot(PinRole::PowerButton).await {
+        Ok(level) => {
+            bus.publish(TelemetryEvent::GpioEdge(GpioEdge {
+                role: PinRole::PowerButton,
+                level,
+                at_monotonic_ns: monotonic_ns(),
+            }));
+            tx.send(PowerButtonSignal::Level(level)).await.is_ok()
+        }
+        Err(err) => {
+            warn!(%err, "failed to reconcile power button state after gpio rebuild");
+            true
+        }
+    }
+}
+
+/// Hand `event` to the forwarder without blocking. Returns `false` only when
+/// the forwarder is gone (the runtime is shutting down); a full queue means the
+/// core is wedged, so the event is dropped and counted rather than stalling
+/// edge intake.
+fn queue_event(tx: &mpsc::Sender<Event>, event: Event, role: PinRole) -> bool {
+    match tx.try_send(event) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(dropped)) => {
+            booth_metrics::record_dropped_gpio_event(role_metric_label(role));
+            warn!(?dropped, "core event queue full; dropping gpio event");
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
+}
+
+/// Static metric label for a pin role (labels must not allocate per event).
+const fn role_metric_label(role: PinRole) -> &'static str {
+    match role {
+        PinRole::Hook => "hook",
+        PinRole::RotaryPulse => "rotary_pulse",
+        PinRole::RotaryRead => "rotary_read",
+        PinRole::PowerButton => "power_button",
+    }
+}
+
+/// What [`gpio_task`] tells [`power_button_task`] about the button.
+///
+/// Levels are the debounced logical state (`true` = pressed). `Interrupted`
+/// reports that the edge stream was lost, so an in-flight press can no longer
+/// be timed: the release may already have happened and rebuilds back off up to
+/// `GPIO_REBUILD_BACKOFF_MAX`, far longer than any hold threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerButtonSignal {
+    /// Debounced button level.
+    Level(bool),
+    /// The edge stream was lost; abandon any press being timed.
+    Interrupted,
+}
+
 fn event_from_gpio(edge: GpioEdge) -> Option<Event> {
     match edge.role {
         PinRole::Hook => Some(if edge.level {
@@ -898,7 +1159,108 @@ fn event_from_gpio(edge: GpioEdge) -> Option<Event> {
             Event::HookOff
         }),
         PinRole::RotaryPulse => (!edge.level).then_some(Event::RotaryPulse),
-        PinRole::RotaryRead => None,
+        PinRole::RotaryRead | PinRole::PowerButton => None,
+    }
+}
+
+/// Translate debounced power-button levels (from [`gpio_task`]) into core
+/// events, timing the hold against tokio timers.
+///
+/// A press starts a race between the release edge and a `hold` timer:
+///
+/// - if the timer fires first, the button is being held, so emit
+///   [`Event::PowerButtonHeld`] immediately and swallow the eventual release;
+/// - if the button is released before the timer, emit
+///   [`Event::PowerButtonPressed`] (a short press).
+///
+/// The core turns these into `Effect::PowerOff` / `Effect::Reboot`
+/// respectively. Runs until the level channel closes (runtime shutdown).
+async fn power_button_task(
+    mut rx: mpsc::Receiver<PowerButtonSignal>,
+    event_tx: mpsc::Sender<Event>,
+    hold_threshold: Duration,
+) {
+    // We only start timing on a press edge.
+    while let Some(signal) = rx.recv().await {
+        let PowerButtonSignal::Level(true) = signal else {
+            // A stray release, or a stream loss with nothing in flight.
+            continue;
+        };
+        let sleep = tokio::time::sleep(hold_threshold);
+        tokio::pin!(sleep);
+        let mut held = false;
+        loop {
+            tokio::select! {
+                // Biased so the timer is polled first: `select!` does not
+                // record which future became ready first, so an unbiased race
+                // at the threshold is decided arbitrarily. Powering the host
+                // off is the irreversible outcome, so the timer branch first
+                // re-checks whether a release is already queued and defers to
+                // it — a tie, or a release that arrived while this task was not
+                // being polled, degrades to a short press (reboot).
+                biased;
+                () = &mut sleep, if !held => {
+                    if let Some(released) = drain_release(&mut rx) {
+                        if released
+                            && event_tx.send(Event::PowerButtonPressed).await.is_err()
+                        {
+                            return;
+                        }
+                        // `None` means the channel closed mid-press; either way
+                        // this press is finished.
+                        break;
+                    }
+                    held = true;
+                    if event_tx.send(Event::PowerButtonHeld).await.is_err() {
+                        return;
+                    }
+                    // Keep draining until the physical release so the next press
+                    // starts a fresh timing window.
+                }
+                next = rx.recv() => {
+                    match next {
+                        // Released.
+                        Some(PowerButtonSignal::Level(false)) => {
+                            if !held && event_tx.send(Event::PowerButtonPressed).await.is_err() {
+                                return;
+                            }
+                            break;
+                        }
+                        // Redundant press edge; keep waiting.
+                        Some(PowerButtonSignal::Level(true)) => {}
+                        // The edge stream died mid-press: the release can no
+                        // longer arrive through it, so emit nothing and wait
+                        // for the reconciled level to start a fresh window.
+                        Some(PowerButtonSignal::Interrupted) => break,
+                        // Channel closed: runtime is shutting down.
+                        None => return,
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Consume any levels already queued for a press in progress, reporting whether
+/// the press is over.
+///
+/// Returns `None` while the button is still pressed (nothing queued, or only
+/// redundant press levels), `Some(true)` when a release is already waiting, and
+/// `Some(false)` when the press ended without one (lost edge stream, or the
+/// channel closed). Used at the hold deadline so a
+/// release that landed before the threshold — but was not yet polled — cannot
+/// be misread as a continued hold and power the host off.
+fn drain_release(rx: &mut mpsc::Receiver<PowerButtonSignal>) -> Option<bool> {
+    loop {
+        match rx.try_recv() {
+            Ok(PowerButtonSignal::Level(true)) => {}
+            Ok(PowerButtonSignal::Level(false)) => return Some(true),
+            // A lost edge stream ends the press without an action, same as the
+            // `Interrupted` arm in the select loop.
+            Ok(PowerButtonSignal::Interrupted) => return Some(false),
+            Err(mpsc::error::TryRecvError::Empty) => return None,
+            Err(mpsc::error::TryRecvError::Disconnected) => return Some(false),
+        }
     }
 }
 
@@ -1065,6 +1427,8 @@ async fn effect_task(
     audio_tx: mpsc::Sender<AudioCommand>,
     audio_source: Arc<Mutex<Box<dyn AudioSource>>>,
     operator: Arc<dyn OperatorClient>,
+    status_led: Arc<dyn StatusLed>,
+    power: Arc<dyn PowerController>,
     event_tx: mpsc::Sender<Event>,
     bus: TelemetryBus,
     next_remote_audio: Arc<Mutex<Option<AudioRef>>>,
@@ -1347,6 +1711,29 @@ async fn effect_task(
                 // overtake a newer one and leave the operator stale.
                 if status_tx.send(status).await.is_err() {
                     warn!("status writer stopped; dropping status update");
+                }
+            }
+            Effect::SetStatusLed { colour, pattern } => {
+                apply_status_led(&status_led, colour, pattern, &bus, "transition").await;
+            }
+            Effect::Reboot => {
+                info!("power button: rebooting host");
+                if let Err(err) = power.reboot().await {
+                    error!(%err, "failed to reboot host");
+                    bus.publish(TelemetryEvent::Error {
+                        source: "power".to_string(),
+                        message: format!("reboot failed: {err}"),
+                    });
+                }
+            }
+            Effect::PowerOff => {
+                info!("power button: powering off host");
+                if let Err(err) = power.poweroff().await {
+                    error!(%err, "failed to power off host");
+                    bus.publish(TelemetryEvent::Error {
+                        source: "power".to_string(),
+                        message: format!("poweroff failed: {err}"),
+                    });
                 }
             }
         }
@@ -1811,14 +2198,36 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
         bail!("observability.operator_forward.system_push_interval_ms must be greater than 0");
     }
 
-    let pins = [
+    // --- GPIO pin uniqueness ---
+    // Always include the phone pins; add the optional power-button and status-
+    // LED pins only when their features are enabled so a default-off booth is
+    // not constrained by unused pin defaults.
+    let mut pins: Vec<u8> = vec![
         config.gpio.hook,
         config.gpio.rotary_pulse,
         config.gpio.rotary_read,
     ];
-    let unique: HashSet<u8> = pins.into_iter().collect();
+    if config.power_button.enabled {
+        pins.push(config.gpio.power_button);
+    }
+    if config.status_led.enabled {
+        pins.push(config.status_led.red);
+        pins.push(config.status_led.green);
+        pins.push(config.status_led.blue);
+    }
+    let unique: HashSet<u8> = pins.iter().copied().collect();
     if unique.len() != pins.len() {
-        bail!("gpio pins must be unique");
+        bail!("gpio pins (including power button / status LED, when enabled) must be unique");
+    }
+
+    if config.power_button.enabled && config.power_button.hold_ms == 0 {
+        bail!("power_button.hold_ms must be greater than 0");
+    }
+    if config.status_led.enabled && !(0.0..=1.0).contains(&config.status_led.brightness) {
+        bail!(
+            "status_led.brightness ({}) must be between 0.0 and 1.0",
+            config.status_led.brightness
+        );
     }
 
     // --- Runtime startup mode: refuse a setting that the build can't honor ---
@@ -1883,6 +2292,52 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
             "BOOTH_GPIO_INVERT_ROTARY_GATE",
         ],
     )?;
+
+    // Power button (opt-in, default-off).
+    set_gpio_u8(
+        &mut config.gpio.power_button,
+        &["BOOTH_GPIO_POWER_BUTTON", "BOOTH_GPIO_POWER_BUTTON_BCM"],
+    )?;
+    set_gpio_bool(
+        &mut config.gpio.invert.power_button,
+        &["BOOTH_GPIO_INVERT_POWER_BUTTON"],
+    )?;
+    set_gpio_bool(
+        &mut config.power_button.enabled,
+        &["BOOTH_POWER_BUTTON_ENABLED"],
+    )?;
+    set_gpio_u64(
+        &mut config.power_button.hold_ms,
+        &["BOOTH_POWER_BUTTON_HOLD_MS"],
+    )?;
+
+    // Status LED (opt-in, default-off).
+    set_gpio_bool(
+        &mut config.status_led.enabled,
+        &["BOOTH_STATUS_LED_ENABLED"],
+    )?;
+    set_gpio_u8(
+        &mut config.status_led.red,
+        &["BOOTH_STATUS_LED_RED", "BOOTH_STATUS_LED_RED_BCM"],
+    )?;
+    set_gpio_u8(
+        &mut config.status_led.green,
+        &["BOOTH_STATUS_LED_GREEN", "BOOTH_STATUS_LED_GREEN_BCM"],
+    )?;
+    set_gpio_u8(
+        &mut config.status_led.blue,
+        &["BOOTH_STATUS_LED_BLUE", "BOOTH_STATUS_LED_BLUE_BCM"],
+    )?;
+    set_gpio_bool(
+        &mut config.status_led.active_low,
+        &["BOOTH_STATUS_LED_ACTIVE_LOW"],
+    )?;
+    if let Some(value) = env::var_os("BOOTH_STATUS_LED_BRIGHTNESS") {
+        config.status_led.brightness = value
+            .to_string_lossy()
+            .parse()
+            .context("parse BOOTH_STATUS_LED_BRIGHTNESS as f32")?;
+    }
 
     if let Some(value) = env::var_os("BOOTH_OBSERVABILITY_ENABLED") {
         config.observability.enabled =
@@ -2028,6 +2483,30 @@ fn redact_secret(secret: &str) -> String {
     let mut last_four = secret.chars().rev().take(4).collect::<Vec<_>>();
     last_four.reverse();
     format!("<redacted:{}>", last_four.into_iter().collect::<String>())
+}
+
+/// Drive the status LED and publish the resulting indication as telemetry.
+///
+/// Publication lives here rather than in the adapters so every backend (Pi,
+/// mock, no-op) surfaces exactly one `TelemetryEvent::StatusLed` per accepted
+/// change, and so runtime-driven indications (boot, ready, shutdown) are
+/// observable alongside the ones the core emits as `Effect::SetStatusLed`.
+async fn apply_status_led(
+    status_led: &Arc<dyn StatusLed>,
+    colour: LedColour,
+    pattern: LedPattern,
+    bus: &TelemetryBus,
+    reason: &'static str,
+) {
+    if let Err(err) = status_led.set(colour, pattern).await {
+        warn!(%err, ?colour, ?pattern, reason, "failed to drive status LED");
+        return;
+    }
+    bus.publish(TelemetryEvent::StatusLed {
+        colour,
+        pattern,
+        at_monotonic_ns: monotonic_ns(),
+    });
 }
 
 fn monotonic_ns() -> u64 {
@@ -2543,7 +3022,7 @@ mod tests {
 
         let bus = TelemetryBus::new(64);
         let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(16);
-        let task = tokio::spawn(gpio_task(first, Some(rebuild), event_tx, bus.clone()));
+        let task = tokio::spawn(gpio_task(first, Some(rebuild), event_tx, None, bus.clone()));
 
         // Pre-loss Hook edge, the reconciled hook level after rebuild, then the
         // post-rebuild RotaryPulse edge.
@@ -2569,10 +3048,245 @@ mod tests {
         );
     }
 
+    /// A release that is already queued at the hold deadline must win.
+    ///
+    /// `select!` cannot tell which future became ready first, so if this task
+    /// is not polled between a release and the threshold both branches are
+    /// ready at once. The timer is polled first (deliberately), so it has to
+    /// re-check the channel and fail safe to a short press rather than power
+    /// the host off.
+    #[tokio::test(start_paused = true)]
+    async fn queued_release_at_the_hold_deadline_is_a_short_press() {
+        use crate::{PowerButtonSignal, power_button_task};
+        use std::time::Duration;
+
+        let (level_tx, level_rx) = mpsc::channel::<PowerButtonSignal>(16);
+        let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(8);
+        let task = tokio::spawn(power_button_task(
+            level_rx,
+            event_tx,
+            Duration::from_secs(3),
+        ));
+
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("press");
+        // Let the task observe the press and park on the hold timer.
+        tokio::task::yield_now().await;
+        // Cross the threshold while the task is not being polled, then release:
+        // both select branches are now ready simultaneously.
+        tokio::time::advance(Duration::from_millis(3100)).await;
+        level_tx
+            .send(PowerButtonSignal::Level(false))
+            .await
+            .expect("release");
+
+        assert_eq!(
+            event_rx.recv().await,
+            Some(booth_core::Event::PowerButtonPressed),
+            "an already-queued release must not be reported as a hold"
+        );
+
+        task.abort();
+    }
+
+    /// Losing the edge stream mid-press must abandon the press, not power off.
+    ///
+    /// The release can no longer arrive through a dead stream and a rebuild
+    /// backs off for up to `GPIO_REBUILD_BACKOFF_MAX`, far longer than any hold
+    /// threshold, so letting the timer run would power the host off after a
+    /// press the user already released. A reconciled pressed level after the
+    /// rebuild starts a fresh window instead.
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_edge_stream_abandons_the_press_in_flight() {
+        use crate::{PowerButtonSignal, power_button_task};
+        use std::time::Duration;
+
+        let (level_tx, level_rx) = mpsc::channel::<PowerButtonSignal>(16);
+        let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(8);
+        let task = tokio::spawn(power_button_task(
+            level_rx,
+            event_tx,
+            Duration::from_secs(3),
+        ));
+
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("press");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        level_tx
+            .send(PowerButtonSignal::Interrupted)
+            .await
+            .expect("stream loss");
+        // Well past the threshold, and past the rebuild backoff ceiling.
+        tokio::time::advance(Duration::from_mins(1)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            event_rx.try_recv().is_err(),
+            "an interrupted press must not power the host off"
+        );
+
+        // The reconciled level after the rebuild starts a fresh window.
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("reconciled press");
+        tokio::time::advance(Duration::from_secs(4)).await;
+        assert_eq!(
+            event_rx.recv().await,
+            Some(booth_core::Event::PowerButtonHeld),
+        );
+
+        task.abort();
+    }
+
+    /// A stalled core must not delay power-button edges.
+    ///
+    /// Hook and rotary events are queued for a forwarder task, so `gpio_task`
+    /// keeps reading the edge stream even when nothing drains `event_tx`. If it
+    /// blocked instead, a release stuck behind the stall past `hold_ms` would
+    /// turn a short press into an unintended power-off.
+    #[tokio::test]
+    async fn power_button_edges_bypass_a_stalled_event_consumer() {
+        use crate::{PowerButtonSignal, gpio_task};
+        use booth_hal::{GpioEdge, GpioPort, PinRole};
+        use std::time::Duration;
+
+        let bus = TelemetryBus::new(64);
+        let (gpio, injector) = booth_mock::MockGpioPort::new();
+        // Capacity 1 with no consumer: the second hook event cannot be sent.
+        let (event_tx, _event_rx) = mpsc::channel::<booth_core::Event>(1);
+        let (button_tx, mut button_rx) = mpsc::channel::<PowerButtonSignal>(16);
+        let task = tokio::spawn(gpio_task(
+            Box::new(gpio) as Box<dyn GpioPort>,
+            None,
+            event_tx,
+            Some(button_tx),
+            bus.clone(),
+        ));
+
+        for _ in 0..4 {
+            injector
+                .push(GpioEdge {
+                    role: PinRole::Hook,
+                    level: false,
+                    at_monotonic_ns: 0,
+                })
+                .await;
+            injector
+                .push(GpioEdge {
+                    role: PinRole::Hook,
+                    level: true,
+                    at_monotonic_ns: 0,
+                })
+                .await;
+        }
+        injector.push_power_button(true).await;
+        injector.push_power_button(false).await;
+
+        let press = tokio::time::timeout(Duration::from_secs(2), button_rx.recv())
+            .await
+            .expect("press must not wait behind the stalled event consumer");
+        let release = tokio::time::timeout(Duration::from_secs(2), button_rx.recv())
+            .await
+            .expect("release must not wait behind the stalled event consumer");
+        assert_eq!(press, Some(PowerButtonSignal::Level(true)));
+        assert_eq!(release, Some(PowerButtonSignal::Level(false)));
+
+        task.abort();
+    }
+
     #[test]
     fn default_config_passes_validation() {
         let config = RuntimeConfig::default();
         validate_config(&config).expect("default config should be valid");
+    }
+
+    #[test]
+    fn power_button_and_status_led_default_off() {
+        let config = RuntimeConfig::default();
+        assert!(!config.power_button.enabled);
+        assert!(!config.status_led.enabled);
+        assert_eq!(config.power_button.hold_ms, 3000);
+        assert_eq!(config.gpio.power_button, 26);
+        assert_eq!(config.status_led.red, 5);
+        assert_eq!(config.status_led.green, 6);
+        assert_eq!(config.status_led.blue, 13);
+        assert!(config.status_led.active_low);
+    }
+
+    #[test]
+    fn parses_power_button_and_status_led_toml() {
+        let toml = r"
+[gpio]
+power_button_bcm = 26
+
+[power_button]
+enabled = true
+hold_ms = 2500
+
+[status_led]
+enabled = true
+red_bcm = 5
+green_bcm = 6
+blue_bcm = 13
+active_low = true
+brightness = 0.5
+";
+        let config: RuntimeConfig = toml::from_str(toml).expect("parse config");
+        assert!(config.power_button.enabled);
+        assert_eq!(config.power_button.hold_ms, 2500);
+        assert!(config.status_led.enabled);
+        assert!((config.status_led.brightness - 0.5).abs() < f32::EPSILON);
+        validate_config(&config).expect("enabled features with distinct pins are valid");
+    }
+
+    #[test]
+    fn rejects_overlapping_power_button_pin() {
+        let mut config = RuntimeConfig::default();
+        config.power_button.enabled = true;
+        config.gpio.power_button = config.gpio.hook;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("unique"));
+    }
+
+    #[test]
+    fn rejects_overlapping_status_led_pins() {
+        let mut config = RuntimeConfig::default();
+        config.status_led.enabled = true;
+        config.status_led.green = config.status_led.red;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("unique"));
+    }
+
+    #[test]
+    fn rejects_out_of_range_led_brightness() {
+        let mut config = RuntimeConfig::default();
+        config.status_led.enabled = true;
+        config.status_led.brightness = 1.5;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("brightness"));
+    }
+
+    #[test]
+    fn rejects_zero_power_button_hold() {
+        let mut config = RuntimeConfig::default();
+        config.power_button.enabled = true;
+        config.power_button.hold_ms = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("hold_ms"));
+    }
+
+    #[test]
+    fn disabled_features_ignore_pin_overlap() {
+        // With both features off, overlapping/default pins must not fail
+        // validation — a booth that never opts in is unaffected.
+        let mut config = RuntimeConfig::default();
+        config.gpio.power_button = config.gpio.hook;
+        config.status_led.red = config.gpio.hook;
+        validate_config(&config).expect("disabled features must not constrain pins");
     }
 
     #[test]

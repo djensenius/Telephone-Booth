@@ -34,21 +34,29 @@ mod imp {
     /// pulse-per-second rotary dial.
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
-    /// Logical input roles, in a fixed order that matches [`role_index`].
-    const ROLES: [PinRole; 3] = [PinRole::Hook, PinRole::RotaryPulse, PinRole::RotaryRead];
+    /// Logical input roles, in a fixed order that matches [`role_index`]. The
+    /// power button is only polled when it is configured; the others always
+    /// are.
+    const ROLES: [PinRole; 4] = [
+        PinRole::Hook,
+        PinRole::RotaryPulse,
+        PinRole::RotaryRead,
+        PinRole::PowerButton,
+    ];
 
     const fn role_index(role: PinRole) -> usize {
         match role {
             PinRole::Hook => 0,
             PinRole::RotaryPulse => 1,
             PinRole::RotaryRead => 2,
+            PinRole::PowerButton => 3,
         }
     }
 
     /// Raspberry Pi GPIO implementation for the booth input pins.
     pub struct PiGpioPort {
         rx: mpsc::Receiver<GpioEdge>,
-        levels: Arc<[AtomicBool; 3]>,
+        levels: Arc<[AtomicBool; 4]>,
         poll_task: JoinHandle<()>,
         started_at: Instant,
     }
@@ -58,6 +66,7 @@ mod imp {
         hook: InputPin,
         rotary_pulse: InputPin,
         rotary_read: InputPin,
+        power_button: Option<InputPin>,
     }
 
     impl PiPins {
@@ -66,6 +75,15 @@ mod imp {
                 PinRole::Hook => self.hook.is_high(),
                 PinRole::RotaryPulse => self.rotary_pulse.is_high(),
                 PinRole::RotaryRead => self.rotary_read.is_high(),
+                PinRole::PowerButton => self.power_button.as_ref().is_some_and(InputPin::is_high),
+            }
+        }
+
+        /// Whether `role` is actually wired and should be polled.
+        fn is_active(&self, role: PinRole) -> bool {
+            match role {
+                PinRole::PowerButton => self.power_button.is_some(),
+                _ => true,
             }
         }
     }
@@ -86,10 +104,16 @@ mod imp {
             })?;
             let gpio = Gpio::new()
                 .map_err(|err| GpioError::Setup(format!("failed to open gpio: {err}").into()))?;
+            let power_button = if config.power_button_enabled {
+                Some(open_input(&gpio, &config, PinRole::PowerButton)?)
+            } else {
+                None
+            };
             let pins = PiPins {
                 hook: open_input(&gpio, &config, PinRole::Hook)?,
                 rotary_pulse: open_input(&gpio, &config, PinRole::RotaryPulse)?,
                 rotary_read: open_input(&gpio, &config, PinRole::RotaryRead)?,
+                power_button,
                 _gpio: gpio,
             };
 
@@ -100,6 +124,7 @@ mod imp {
                 AtomicBool::new(logical_level(&pins, &config, PinRole::Hook)),
                 AtomicBool::new(logical_level(&pins, &config, PinRole::RotaryPulse)),
                 AtomicBool::new(logical_level(&pins, &config, PinRole::RotaryRead)),
+                AtomicBool::new(logical_level(&pins, &config, PinRole::PowerButton)),
             ]);
 
             let (tx, rx) = mpsc::channel(usize::from(config.channel_capacity).max(1));
@@ -110,6 +135,8 @@ mod imp {
                 hook_bcm = config.bcm_for(PinRole::Hook),
                 rotary_pulse_bcm = config.bcm_for(PinRole::RotaryPulse),
                 rotary_read_bcm = config.bcm_for(PinRole::RotaryRead),
+                power_button_bcm = config.power_button_enabled
+                    .then(|| config.bcm_for(PinRole::PowerButton)),
                 debounce_ms = config.debounce_ms,
                 poll_interval_ms = POLL_INTERVAL.as_millis(),
                 pull = ?config.pull,
@@ -184,7 +211,7 @@ mod imp {
     async fn poll_edges(
         pins: PiPins,
         config: GpioConfig,
-        levels: Arc<[AtomicBool; 3]>,
+        levels: Arc<[AtomicBool; 4]>,
         tx: mpsc::Sender<GpioEdge>,
         debounce: Duration,
         started_at: Instant,
@@ -198,8 +225,15 @@ mod imp {
             logical_level(&pins, &config, PinRole::Hook),
             logical_level(&pins, &config, PinRole::RotaryPulse),
             logical_level(&pins, &config, PinRole::RotaryRead),
+            logical_level(&pins, &config, PinRole::PowerButton),
         ];
-        let mut pending: [Option<(bool, Instant)>; 3] = [None, None, None];
+        let mut pending: [Option<(bool, Instant)>; 4] = [None, None, None, None];
+        // Power-button levels must not be dropped: losing a release turns a
+        // short press into an unintended power-off, because `power_button_task`
+        // cannot distinguish "still held" from "release never arrived". Retry
+        // an undeliverable button edge on the next tick, coalescing to the
+        // newest level (which is all the level-based consumer needs).
+        let mut pending_power: Option<GpioEdge> = None;
 
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -208,7 +242,16 @@ mod imp {
             ticker.tick().await;
             let now = Instant::now();
 
+            // Retry first so button edges stay in order relative to new ones.
+            if let Some(edge) = pending_power.take() {
+                pending_power = try_send_edge(&tx, edge);
+            }
+
             for role in ROLES {
+                // Skip unwired optional inputs (the power button when disabled).
+                if !pins.is_active(role) {
+                    continue;
+                }
                 let idx = role_index(role);
                 let raw = apply_invert(pins.physical_high(role), config.inverted(role));
 
@@ -227,7 +270,41 @@ mod imp {
                         if now.duration_since(since) >= debounce {
                             confirmed[idx] = raw;
                             pending[idx] = None;
-                            forward_edge(&tx, role, raw, started_at);
+                            if role == PinRole::PowerButton
+                                && let Some(waiting) = pending_power
+                            {
+                                // An older button level is still waiting. Sending
+                                // this one now would deliver it *before* the
+                                // retry, so the consumer would see a stale press
+                                // after a release and start timing a phantom
+                                // hold. Coalesce into the slot instead — except
+                                // that a waiting release always wins: dropping a
+                                // later press means "no action", while dropping
+                                // the release would merge two short presses into
+                                // one long hold and power the booth off.
+                                if waiting.level || !raw {
+                                    pending_power = Some(GpioEdge {
+                                        role,
+                                        level: raw,
+                                        at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+                                    });
+                                }
+                                continue;
+                            }
+                            if let Some(undelivered) = forward_edge(&tx, role, raw, started_at) {
+                                if undelivered.role == PinRole::PowerButton {
+                                    // Newest level wins; retried next tick.
+                                    warn!("power button edge queue full; retrying next tick");
+                                    pending_power = Some(undelivered);
+                                } else {
+                                    metrics::counter!(
+                                        "booth_gpio_edges_dropped_total",
+                                        "role" => role_label(undelivered.role)
+                                    )
+                                    .increment(1);
+                                    warn!(role = ?undelivered.role, "gpio edge queue full; dropping edge");
+                                }
+                            }
                         }
                     }
                     _ => pending[idx] = Some((raw, now)),
@@ -247,24 +324,41 @@ mod imp {
     ///
     /// Awaiting a bounded `send` would pause sampling of *all* pins whenever the
     /// queue is full (its capacity can be as low as 1), silently losing later
-    /// transitions. A non-blocking `try_send` keeps sampling alive; a full queue
-    /// drops the edge and bumps `booth_gpio_edges_dropped_total` instead.
-    fn forward_edge(tx: &mpsc::Sender<GpioEdge>, role: PinRole, level: bool, started_at: Instant) {
-        let edge = GpioEdge {
-            role,
-            level,
-            at_monotonic_ns: monotonic_ns(started_at.elapsed()),
-        };
+    /// transitions. A non-blocking `try_send` keeps sampling alive instead.
+    ///
+    /// Returns the edge back when the queue was full so the caller can decide
+    /// between dropping it (and bumping `booth_gpio_edges_dropped_total`) and
+    /// retrying it, as the power button requires.
+    fn forward_edge(
+        tx: &mpsc::Sender<GpioEdge>,
+        role: PinRole,
+        level: bool,
+        started_at: Instant,
+    ) -> Option<GpioEdge> {
+        try_send_edge(
+            tx,
+            GpioEdge {
+                role,
+                level,
+                at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+            },
+        )
+    }
 
+    /// Non-blocking delivery of an already-built edge. Returns `Some(edge)`
+    /// only when the queue was full, so it can be retried or accounted for.
+    fn try_send_edge(tx: &mpsc::Sender<GpioEdge>, edge: GpioEdge) -> Option<GpioEdge> {
+        let role = edge.role;
+        let level = edge.level;
         match tx.try_send(edge) {
-            Ok(()) => debug!(?role, level, "forwarded debounced gpio edge"),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                metrics::counter!("booth_gpio_edges_dropped_total", "role" => role_label(role))
-                    .increment(1);
-                warn!(?role, "gpio edge queue full; dropping edge");
+            Ok(()) => {
+                debug!(?role, level, "forwarded debounced gpio edge");
+                None
             }
+            Err(mpsc::error::TrySendError::Full(edge)) => Some(edge),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 debug!(?role, "gpio edge receiver dropped");
+                None
             }
         }
     }
@@ -274,6 +368,7 @@ mod imp {
             PinRole::Hook => "Hook",
             PinRole::RotaryPulse => "RotaryPulse",
             PinRole::RotaryRead => "RotaryRead",
+            PinRole::PowerButton => "PowerButton",
         }
     }
 

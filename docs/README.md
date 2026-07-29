@@ -61,3 +61,4 @@ rebuilds it from the filesystem; CI fails if it drifts.
 - [0006 — Observability stack](adr/0006-observability-stack.md)
 - [0007 — APT distribution](adr/0007-apt-distribution.md)
 - [0008 — Automated releases](adr/0008-automated-releases.md)
+- [0009 — Status LED and power button port](adr/0009-status-led-power-button.md)

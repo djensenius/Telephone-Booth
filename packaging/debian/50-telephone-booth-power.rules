@@ -1,0 +1,27 @@
+// Authorize the Telephone Booth runtime to reboot / power off the host.
+//
+// `telephone-booth.service` runs as the unprivileged `phonebooth` user with an
+// empty CapabilityBoundingSet and NoNewPrivileges=true, so `systemctl reboot`
+// and `systemctl poweroff` are routed through logind and fail the default
+// polkit check ("Interactive authentication required"). Without this rule the
+// power button's reboot (short press) and power-off (long hold) actions both
+// error out on a stock install.
+//
+// Scope is deliberately narrow: only the `phonebooth` system user, and only
+// the two logind actions the power button can trigger. The `*-ignore-inhibit`
+// variants are NOT granted, so a running inhibitor (e.g. an in-progress
+// unattended upgrade) still blocks the shutdown.
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "phonebooth") {
+        return undefined;
+    }
+    switch (action.id) {
+        case "org.freedesktop.login1.reboot":
+        case "org.freedesktop.login1.reboot-multiple-sessions":
+        case "org.freedesktop.login1.power-off":
+        case "org.freedesktop.login1.power-off-multiple-sessions":
+            return polkit.Result.YES;
+        default:
+            return undefined;
+    }
+});

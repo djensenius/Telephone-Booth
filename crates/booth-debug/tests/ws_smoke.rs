@@ -72,3 +72,46 @@ async fn websocket_echoes_bearer_subprotocol() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+/// The LED is level-triggered, so its record is evicted from the bounded replay
+/// ring long before the indication changes. A client that connects afterwards
+/// must still learn the current colour, so the socket leads with the retained
+/// record even though its id is older than everything replayed after it.
+#[tokio::test]
+async fn websocket_leads_with_the_retained_status_led() -> Result<(), Box<dyn Error>> {
+    use booth_hal::{LedColour, LedPattern};
+
+    let server = common::spawn(DebugConfig::default()).await?;
+    server.bus.publish(TelemetryEvent::StatusLed {
+        colour: LedColour::Green,
+        pattern: LedPattern::Steady { brightness: 255 },
+        at_monotonic_ns: 42,
+    });
+    for _ in 0..4 {
+        server.bus.publish(TelemetryEvent::Log {
+            level: "info".to_string(),
+            target: "ws_smoke".to_string(),
+            message: "filler".to_string(),
+        });
+    }
+
+    let ws_url = format!(
+        "{}/v1/ws/telemetry",
+        server.base_url.replacen("http://", "ws://", 1)
+    );
+    let (mut socket, _response) = connect_async(ws_url).await?;
+
+    let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await?
+        .ok_or_else(|| io::Error::other("websocket closed before the seed frame"))??;
+    let value: Value = serde_json::from_str(&frame.into_text()?)?;
+
+    assert_eq!(
+        value.get("kind").and_then(Value::as_str),
+        Some("status_led")
+    );
+    assert_eq!(value.get("colour").and_then(Value::as_str), Some("green"));
+    assert_eq!(value.get("id").and_then(Value::as_u64), Some(1));
+
+    Ok(())
+}

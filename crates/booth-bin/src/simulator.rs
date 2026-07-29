@@ -55,7 +55,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use url::Url;
 
-use crate::{RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime};
+use crate::{
+    PowerButtonConfig, RuntimeConfig, RuntimeOptions, build_simulator_adapters, spawn_runtime,
+};
 use booth_hal::RuntimeMode;
 
 const EVENT_HISTORY: usize = 64;
@@ -117,6 +119,27 @@ pub async fn run_simulator(
         runtime_config.debug.allow_controls = true;
     }
 
+    // The power button is opt-in in production, but the simulator is the surface
+    // for exercising it, so enable it here (the simulator uses a mock power
+    // controller, so no real reboot/poweroff can happen).
+    // `validate_config` only rejects a zero hold threshold when the button is
+    // enabled, so a config that leaves it off can carry `hold_ms = 0` through
+    // validation. Forcing the feature on here would then make the hold timer
+    // ready immediately and turn even a short `[p]` press into a power-off, so
+    // repair the threshold before enabling.
+    if !runtime_config.power_button.enabled {
+        if runtime_config.power_button.hold_ms == 0 {
+            let fallback = PowerButtonConfig::default().hold_ms;
+            tracing::warn!(
+                "simulator mode: [power_button] hold_ms = 0 is unusable; \
+                 using the default {fallback} ms instead"
+            );
+            runtime_config.power_button.hold_ms = fallback;
+        }
+        runtime_config.power_button.enabled = true;
+    }
+    let power_button_hold_ms = runtime_config.power_button.hold_ms;
+
     // Surface what the web simulator URL will be (or why it won't be
     // reachable) BEFORE the runtime starts. The debug surface logs its own
     // `MissingToken` error at `error!` level if it can't start, but that's
@@ -145,6 +168,12 @@ pub async fn run_simulator(
         );
     }
 
+    // Subscribe *before* the runtime starts: the telemetry bus is a broadcast
+    // channel with no replay for new receivers, so a feed created afterwards
+    // misses the boot and ready status-LED records. On an idle booth the next
+    // LED change may be hours away, leaving the TUI showing `off`.
+    let feed = TelemetryFeed::local(&bus);
+
     let handle = spawn_runtime(
         runtime_config,
         adapters,
@@ -157,14 +186,9 @@ pub async fn run_simulator(
         },
     );
 
-    let state = SimulatorState::new(mock_io, false, log_path);
-    drive_tui(
-        Some(handle),
-        TelemetryFeed::local(&bus),
-        state,
-        Some(injector),
-    )
-    .await
+    let mut state = SimulatorState::new(mock_io, false, log_path);
+    state.power_button_hold_ms = power_button_hold_ms;
+    drive_tui(Some(handle), feed, state, Some(injector)).await
 }
 
 /// Run the read-only hardware monitor TUI to completion.
@@ -197,6 +221,11 @@ pub async fn run_monitor(
         crate::build_pi_adapters(&config, &bus, runtime_mode)?
     };
 
+    // Subscribe before the runtime starts: the bus has no replay for late
+    // receivers, so the boot and ready status-LED records would be missed and
+    // an idle booth would show `off` until the next transition.
+    let feed = TelemetryFeed::local(&bus);
+
     let handle = spawn_runtime(
         config,
         adapters,
@@ -210,7 +239,7 @@ pub async fn run_monitor(
     );
 
     let state = SimulatorState::new(mock, true, log_path);
-    drive_tui(Some(handle), TelemetryFeed::local(&bus), state, None).await
+    drive_tui(Some(handle), feed, state, None).await
 }
 
 /// Attach the read-only TUI to a running booth's debug surface instead of
@@ -538,7 +567,14 @@ async fn attach_telemetry_loop(config: AttachConfig, tx: mpsc::Sender<TelemetryM
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<TelemetryRecord>(&text) {
                                 Ok(record) => {
-                                    replay_from = Some(record.id);
+                                    // The server leads a connection (and lag
+                                    // recovery) with the retained status-LED
+                                    // record, whose id can be older than the
+                                    // cursor. Take the max so reconnecting
+                                    // never replays history already seen.
+                                    replay_from = Some(
+                                        replay_from.map_or(record.id, |seen| seen.max(record.id)),
+                                    );
                                     if tx.send(TelemetryMessage::Record(record)).await.is_err() {
                                         return;
                                     }
@@ -556,7 +592,14 @@ async fn attach_telemetry_loop(config: AttachConfig, tx: mpsc::Sender<TelemetryM
                         Some(Ok(Message::Binary(bytes))) => {
                             match serde_json::from_slice::<TelemetryRecord>(&bytes) {
                                 Ok(record) => {
-                                    replay_from = Some(record.id);
+                                    // The server leads a connection (and lag
+                                    // recovery) with the retained status-LED
+                                    // record, whose id can be older than the
+                                    // cursor. Take the max so reconnecting
+                                    // never replays history already seen.
+                                    replay_from = Some(
+                                        replay_from.map_or(record.id, |seen| seen.max(record.id)),
+                                    );
                                     if tx.send(TelemetryMessage::Record(record)).await.is_err() {
                                         return;
                                     }
@@ -805,6 +848,11 @@ struct SimulatorState {
     hook_known: bool,
     current_state: String,
     booth_status: String,
+    /// Human-readable current status LED colour + pattern (from telemetry).
+    led: String,
+    /// Configured power-button hold threshold (ms) used to time the injected
+    /// long-press keybinding so it crosses the runtime's threshold.
+    power_button_hold_ms: u64,
     audio_in: LevelView,
     audio_out: LevelView,
     history: VecDeque<HistoryEntry>,
@@ -841,6 +889,8 @@ impl SimulatorState {
             hook_known: !read_only,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
+            led: "off".to_string(),
+            power_button_hold_ms: 3000,
             audio_in: LevelView::default(),
             audio_out: LevelView::default(),
             history: VecDeque::with_capacity(EVENT_HISTORY),
@@ -861,6 +911,8 @@ impl SimulatorState {
             hook_known: false,
             current_state: "idle".to_string(),
             booth_status: "idle".to_string(),
+            led: "off".to_string(),
+            power_button_hold_ms: 3000,
             audio_in: LevelView::default(),
             audio_out: LevelView::default(),
             history: VecDeque::with_capacity(EVENT_HISTORY),
@@ -900,6 +952,20 @@ impl SimulatorState {
                     self.note_read_only();
                 }
             }
+            KeyCode::Char('p') => {
+                if let Some(injector) = injector {
+                    self.short_power_press(injector).await;
+                } else {
+                    self.note_read_only();
+                }
+            }
+            KeyCode::Char('P') => {
+                if let Some(injector) = injector {
+                    self.long_power_press(injector).await;
+                } else {
+                    self.note_read_only();
+                }
+            }
             _ => {}
         }
         Action::Continue
@@ -913,6 +979,70 @@ impl SimulatorState {
                 "Live hardware monitor — use the real phone (input is read-only)."
             },
             Style::default().fg(Color::Yellow),
+        );
+    }
+
+    async fn short_power_press(&mut self, injector: &booth_mock::GpioInjector) {
+        // Press then release immediately: shorter than the hold threshold, so
+        // the runtime synthesizes PowerButtonPressed -> Effect::Reboot.
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: true,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: false,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        self.set_status(
+            "Power button: short press (reboot)".to_string(),
+            Style::default().fg(Color::Cyan),
+        );
+        self.push_history(
+            "inject: power button short press (reboot)".to_string(),
+            Style::default().fg(Color::Cyan),
+        );
+    }
+
+    async fn long_power_press(&mut self, injector: &booth_mock::GpioInjector) {
+        // Press now, then release after the hold threshold elapses (in a
+        // detached task so the TUI stays responsive). The runtime's timer fires
+        // first and synthesizes PowerButtonHeld -> Effect::PowerOff.
+        injector
+            .push(GpioEdge {
+                role: PinRole::PowerButton,
+                level: true,
+                at_monotonic_ns: self.monotonic_ns(),
+            })
+            .await;
+        let release = injector.clone();
+        let delay = Duration::from_millis(self.power_button_hold_ms.saturating_add(300));
+        // Capture the epoch, not a timestamp: the release edge happens *after*
+        // the sleep, so its monotonic stamp has to be read inside the task.
+        let started_at = self.started_at;
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let elapsed = started_at.elapsed().as_nanos();
+            release
+                .push(GpioEdge {
+                    role: PinRole::PowerButton,
+                    level: false,
+                    at_monotonic_ns: u64::try_from(elapsed).unwrap_or(u64::MAX),
+                })
+                .await;
+        });
+        self.set_status(
+            "Power button: holding (power off)".to_string(),
+            Style::default().fg(Color::Red),
+        );
+        self.push_history(
+            "inject: power button hold (power off)".to_string(),
+            Style::default().fg(Color::Red),
         );
     }
 
@@ -1049,6 +1179,16 @@ impl SimulatorState {
                     ts,
                     text: format!("{level} [{target}] {message}"),
                     style: Style::default().fg(color),
+                });
+            }
+            TelemetryEvent::StatusLed {
+                colour, pattern, ..
+            } => {
+                self.led = format!("{colour} / {pattern}");
+                self.history.push_front(HistoryEntry {
+                    ts,
+                    text: format!("status LED -> {colour} / {pattern}"),
+                    style: Style::default().fg(Color::Yellow),
                 });
             }
             TelemetryEvent::GpioEdge(edge) => {
@@ -1223,6 +1363,8 @@ impl SimulatorState {
             ),
             Span::raw("   status="),
             Span::styled(self.booth_status.clone(), Style::default().fg(Color::Green)),
+            Span::raw("   led="),
+            Span::styled(self.led.clone(), Style::default().fg(Color::Magenta)),
             Span::raw("   hook="),
             Span::styled(
                 hook,
@@ -1284,7 +1426,7 @@ impl SimulatorState {
         } else if self.read_only {
             "Controls: [q]/Esc/Ctrl+C quit   (live hardware — dial the real phone)"
         } else {
-            "Controls: [h]/space toggle hook   [0-9] dial digit   [q]/Esc/Ctrl+C quit"
+            "Controls: [h]/space toggle hook   [0-9] dial digit   [p] power reboot   [P] power off   [q]/Esc/Ctrl+C quit"
         };
         let log_line = self.log_path.as_ref().map_or_else(
             || "Log: <stdout>".to_string(),
