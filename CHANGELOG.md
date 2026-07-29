@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/djensenius/Telephone-Booth/compare/v0.8.4...v0.9.0) (2026-07-29)
+
+
+### Features
+
+* add power button and RGB status LED support ([#136](https://github.com/djensenius/Telephone-Booth/issues/136)) ([c7307f7](https://github.com/djensenius/Telephone-Booth/commit/c7307f71b39df4ac9cdf13ace42d1f6a6aa01d81))
+
 ## [0.8.4](https://github.com/djensenius/Telephone-Booth/compare/v0.8.3...v0.8.4) (2026-07-29)
 
 
