@@ -929,15 +929,16 @@ async fn gpio_task(
     power_button_tx: Option<mpsc::Sender<PowerButtonSignal>>,
     bus: TelemetryBus,
 ) {
-    // Hook and rotary events are handed to a forwarder task through an
-    // unbounded queue so this loop never blocks on `event_tx`. A stalled core
+    // Hook and rotary events are handed to a forwarder task through a second
+    // bounded queue so this loop never blocks on `event_tx`. A stalled core
     // (e.g. an effect dispatcher busy playing a long clip) would otherwise
     // freeze edge intake, and a power-button release stuck behind that stall
     // past `hold_ms` would turn a short press into an unintended power-off.
-    // The queue is bounded in practice by the physical edge rate (the Pi
-    // poller samples every 2 ms), and end-to-end backpressure is preserved:
-    // the forwarder still awaits `event_tx`.
-    let (queued_tx, mut queued_rx) = mpsc::unbounded_channel::<Event>();
+    // The forwarder still awaits `event_tx`, so end-to-end backpressure is
+    // preserved; when even the handoff queue is full the event is dropped and
+    // counted, matching the Pi poller's policy, rather than growing without
+    // bound while the core is wedged.
+    let (queued_tx, mut queued_rx) = mpsc::channel::<Event>(EVENT_CHANNEL);
     let forward_task = tokio::spawn(async move {
         while let Some(event) = queued_rx.recv().await {
             if event_tx.send(event).await.is_err() {
@@ -1011,7 +1012,7 @@ async fn gpio_task(
                         break;
                     }
                 } else if let Some(event) = event_from_gpio(edge)
-                    && event_tx.send(event).is_err()
+                    && !queue_event(&event_tx, event, edge.role)
                 {
                     break;
                 }
@@ -1052,7 +1053,7 @@ async fn gpio_task(
 /// (the runtime is shutting down) so the caller can stop.
 async fn reconcile_hook(
     gpio: &dyn GpioPort,
-    event_tx: &mpsc::UnboundedSender<Event>,
+    event_tx: &mpsc::Sender<Event>,
     bus: &TelemetryBus,
 ) -> bool {
     match gpio.snapshot(PinRole::Hook).await {
@@ -1064,7 +1065,7 @@ async fn reconcile_hook(
             };
             bus.publish(TelemetryEvent::GpioEdge(edge));
             if let Some(event) = event_from_gpio(edge) {
-                return event_tx.send(event).is_ok();
+                return queue_event(event_tx, event, PinRole::Hook);
             }
             true
         }
@@ -1104,6 +1105,32 @@ async fn reconcile_power_button(
             warn!(%err, "failed to reconcile power button state after gpio rebuild");
             true
         }
+    }
+}
+
+/// Hand `event` to the forwarder without blocking. Returns `false` only when
+/// the forwarder is gone (the runtime is shutting down); a full queue means the
+/// core is wedged, so the event is dropped and counted rather than stalling
+/// edge intake.
+fn queue_event(tx: &mpsc::Sender<Event>, event: Event, role: PinRole) -> bool {
+    match tx.try_send(event) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(dropped)) => {
+            booth_metrics::record_dropped_gpio_event(role_metric_label(role));
+            warn!(?dropped, "core event queue full; dropping gpio event");
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
+}
+
+/// Static metric label for a pin role (labels must not allocate per event).
+const fn role_metric_label(role: PinRole) -> &'static str {
+    match role {
+        PinRole::Hook => "hook",
+        PinRole::RotaryPulse => "rotary_pulse",
+        PinRole::RotaryRead => "rotary_read",
+        PinRole::PowerButton => "power_button",
     }
 }
 

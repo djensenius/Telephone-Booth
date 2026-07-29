@@ -270,17 +270,25 @@ mod imp {
                         if now.duration_since(since) >= debounce {
                             confirmed[idx] = raw;
                             pending[idx] = None;
-                            if role == PinRole::PowerButton && pending_power.is_some() {
+                            if role == PinRole::PowerButton
+                                && let Some(waiting) = pending_power
+                            {
                                 // An older button level is still waiting. Sending
                                 // this one now would deliver it *before* the
                                 // retry, so the consumer would see a stale press
                                 // after a release and start timing a phantom
-                                // hold. Coalesce into the slot instead.
-                                pending_power = Some(GpioEdge {
-                                    role,
-                                    level: raw,
-                                    at_monotonic_ns: monotonic_ns(started_at.elapsed()),
-                                });
+                                // hold. Coalesce into the slot instead — except
+                                // that a waiting release always wins: dropping a
+                                // later press means "no action", while dropping
+                                // the release would merge two short presses into
+                                // one long hold and power the booth off.
+                                if waiting.level || !raw {
+                                    pending_power = Some(GpioEdge {
+                                        role,
+                                        level: raw,
+                                        at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+                                    });
+                                }
                                 continue;
                             }
                             if let Some(undelivered) = forward_edge(&tx, role, raw, started_at) {

@@ -221,6 +221,11 @@ pub async fn run_monitor(
         crate::build_pi_adapters(&config, &bus, runtime_mode)?
     };
 
+    // Subscribe before the runtime starts: the bus has no replay for late
+    // receivers, so the boot and ready status-LED records would be missed and
+    // an idle booth would show `off` until the next transition.
+    let feed = TelemetryFeed::local(&bus);
+
     let handle = spawn_runtime(
         config,
         adapters,
@@ -234,7 +239,7 @@ pub async fn run_monitor(
     );
 
     let state = SimulatorState::new(mock, true, log_path);
-    drive_tui(Some(handle), TelemetryFeed::local(&bus), state, None).await
+    drive_tui(Some(handle), feed, state, None).await
 }
 
 /// Attach the read-only TUI to a running booth's debug surface instead of

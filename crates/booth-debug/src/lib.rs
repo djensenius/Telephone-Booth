@@ -985,6 +985,15 @@ async fn ws_telemetry(
 async fn telemetry_socket(mut socket: WebSocket, state: AppState) {
     let mut receiver = state.bus.subscribe();
     let replay_from = read_replay_request(&mut socket).await;
+    // The status LED is level-triggered, so its record can be older than the
+    // replay window (or older than `replay_from` on a reconnect). Lead with the
+    // retained one so a client never has to infer the current indication from a
+    // history that no longer contains it.
+    if let Some(record) = state.bus.latest_status_led()
+        && send_record(&mut socket, &record).await.is_err()
+    {
+        return;
+    }
     for record in state.bus.snapshot_since(replay_from) {
         if send_record(&mut socket, &record).await.is_err() {
             return;
@@ -998,7 +1007,16 @@ async fn telemetry_socket(mut socket: WebSocket, state: AppState) {
                     return;
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(_skipped)) => {}
+            Err(broadcast::error::RecvError::Lagged(_skipped)) => {
+                // Skipped records may have included the LED change, and this
+                // connection stays open, so nothing else would resynchronize
+                // the client. Re-send the retained indication.
+                if let Some(record) = state.bus.latest_status_led()
+                    && send_record(&mut socket, &record).await.is_err()
+                {
+                    return;
+                }
+            }
             Err(broadcast::error::RecvError::Closed) => return,
         }
     }
