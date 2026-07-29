@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.4](https://github.com/djensenius/Telephone-Booth/compare/v0.8.3...v0.8.4) (2026-07-29)
+
+
+### Bug Fixes
+
+* **pi:** report silence when an audio stream stops ([#134](https://github.com/djensenius/Telephone-Booth/issues/134)) ([c3e186e](https://github.com/djensenius/Telephone-Booth/commit/c3e186e25c140ce13cd191cc4b77b15f4446f100)), closes [#133](https://github.com/djensenius/Telephone-Booth/issues/133)
+
+
+### Documentation
+
+* **pi:** add preferred-tools install guide + Pi mise config ([#129](https://github.com/djensenius/Telephone-Booth/issues/129)) ([c20f0c0](https://github.com/djensenius/Telephone-Booth/commit/c20f0c012691b8f72f7961eba146aae2e7e42f52)), closes [#128](https://github.com/djensenius/Telephone-Booth/issues/128)
+
 ## [0.8.3](https://github.com/djensenius/Telephone-Booth/compare/v0.8.2...v0.8.3) (2026-07-28)
 
 
