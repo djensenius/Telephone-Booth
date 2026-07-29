@@ -19,13 +19,14 @@ Embedded debug HTTP + WebSocket surface for the Telephone Booth Rust client.
 | `POST` | `/v1/simulate/event` | Inject a serialized `booth_core::Event`. Gated — see *Simulation controls* below. |
 | `POST` | `/v1/simulate/pulse` | Inject N rotary pulses followed by `Tick`. Gated — see *Simulation controls* below. |
 | `WS` | `/v1/ws/telemetry` | Live `TelemetryRecord` JSON frames; optional first message `{\"replay_from\": seq}`. |
-
-Every connection is led by the retained `status_led` record (and it is re-sent
-after a lagging subscriber skips frames), because the LED is level-triggered
-and its record can be older than the replay window. That frame is the only one
-whose `id` may be lower than a previously seen one, so clients tracking a
-reconnect cursor must keep the **maximum** id seen rather than the last.
 | `GET` | `/metrics` | **Loopback only.** Prometheus text exposition. Skips bearer auth — Tailscale ACLs gate the loopback front door. |
+
+Every WebSocket connection is led by the retained `status_led` record (and it
+is re-sent after a lagging subscriber skips frames), because the LED is
+level-triggered and its record can be older than the replay window. That frame
+is the only one whose `id` may be lower than a previously seen one, so clients
+tracking a reconnect cursor must keep the **maximum** id seen rather than the
+last.
 
 All HTTP and WebSocket requests require `Authorization: Bearer <debug-token>` when `DebugConfig::token` is set, **except** `/metrics`, which is intentionally unauthenticated and mounted only on the loopback listener so vmagent can scrape it. WebSocket clients may also pass `Sec-WebSocket-Protocol: bearer.<token>`.
 

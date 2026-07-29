@@ -836,8 +836,11 @@ async fn run_runtime(
     }
     audio_task.abort();
     // Stop the effect dispatcher *before* the terminal indication so a queued
-    // `Effect::SetStatusLed` cannot overwrite the fade after it starts.
+    // `Effect::SetStatusLed` cannot overwrite the fade after it starts. `abort`
+    // only requests cancellation, so wait for the task to actually stop —
+    // otherwise an in-flight `apply_status_led` could still land afterwards.
     effect_task.abort();
+    let _ = effect_task.await;
     // Drive the "shutting down" indication (red fade to off) directly, since the
     // effect task is no longer processing `Effect::SetStatusLed`.
     apply_status_led(

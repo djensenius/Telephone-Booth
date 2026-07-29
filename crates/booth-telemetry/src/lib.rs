@@ -112,10 +112,16 @@ impl TelemetryBus {
         // latest one separately and synchronously, so a debug client that
         // connects (or lags) long after the change still sees the truth.
         if matches!(record.event, TelemetryEvent::StatusLed { .. }) {
-            *self
+            let mut latest = self
                 .latest_status_led
                 .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.clone());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Ids are handed out before this lock, so a concurrent publisher
+            // can arrive here out of order. Keep the newest record or the slot
+            // could be permanently pinned to a superseded indication.
+            if latest.as_ref().is_none_or(|held| record.id > held.id) {
+                *latest = Some(record.clone());
+            }
         }
         self.write_ring().push(record.clone());
         if self.sender.send(record).is_err() {
