@@ -62,7 +62,9 @@ Add a status-LED and power-button port, keeping the core pure.
   fine for hook/pulse but not here: losing a release would make a short press
   indistinguishable from a hold and trigger an unintended power-off. The Pi
   poller retries an undeliverable button edge on the next 2 ms tick, keeping
-  only the newest level.
+  only the newest level. For the same reason the runtime's `gpio_task` hands
+  hook / rotary events to a forwarder task through an unbounded queue, so a
+  stalled core cannot block edge intake and delay a release past `hold_ms`.
 
 ## Consequences
 

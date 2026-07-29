@@ -918,6 +918,24 @@ async fn gpio_task(
     power_button_tx: Option<mpsc::Sender<bool>>,
     bus: TelemetryBus,
 ) {
+    // Hook and rotary events are handed to a forwarder task through an
+    // unbounded queue so this loop never blocks on `event_tx`. A stalled core
+    // (e.g. an effect dispatcher busy playing a long clip) would otherwise
+    // freeze edge intake, and a power-button release stuck behind that stall
+    // past `hold_ms` would turn a short press into an unintended power-off.
+    // The queue is bounded in practice by the physical edge rate (the Pi
+    // poller samples every 2 ms), and end-to-end backpressure is preserved:
+    // the forwarder still awaits `event_tx`.
+    let (queued_tx, mut queued_rx) = mpsc::unbounded_channel::<Event>();
+    let forward_task = tokio::spawn(async move {
+        while let Some(event) = queued_rx.recv().await {
+            if event_tx.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+    let event_tx = queued_tx;
+
     let mut current: Option<Box<dyn GpioPort>> = Some(initial);
     let mut backoff = GPIO_REBUILD_BACKOFF_BASE;
 
@@ -982,7 +1000,7 @@ async fn gpio_task(
                         break;
                     }
                 } else if let Some(event) = event_from_gpio(edge)
-                    && event_tx.send(event).await.is_err()
+                    && event_tx.send(event).is_err()
                 {
                     break;
                 }
@@ -1000,6 +1018,10 @@ async fn gpio_task(
             }
         }
     }
+
+    // Let already-queued events reach the core before this task ends.
+    drop(event_tx);
+    let _ = forward_task.await;
 }
 
 /// Re-emit the current hook level after the GPIO adapter is rebuilt so the core
@@ -1010,7 +1032,7 @@ async fn gpio_task(
 /// (the runtime is shutting down) so the caller can stop.
 async fn reconcile_hook(
     gpio: &dyn GpioPort,
-    event_tx: &mpsc::Sender<Event>,
+    event_tx: &mpsc::UnboundedSender<Event>,
     bus: &TelemetryBus,
 ) -> bool {
     match gpio.snapshot(PinRole::Hook).await {
@@ -1022,7 +1044,7 @@ async fn reconcile_hook(
             };
             bus.publish(TelemetryEvent::GpioEdge(edge));
             if let Some(event) = event_from_gpio(edge) {
-                return event_tx.send(event).await.is_ok();
+                return event_tx.send(event).is_ok();
             }
             true
         }
@@ -2920,6 +2942,62 @@ mod tests {
             1,
             "the adapter should be rebuilt exactly once"
         );
+    }
+
+    /// A stalled core must not delay power-button edges.
+    ///
+    /// Hook and rotary events are queued for a forwarder task, so `gpio_task`
+    /// keeps reading the edge stream even when nothing drains `event_tx`. If it
+    /// blocked instead, a release stuck behind the stall past `hold_ms` would
+    /// turn a short press into an unintended power-off.
+    #[tokio::test]
+    async fn power_button_edges_bypass_a_stalled_event_consumer() {
+        use crate::gpio_task;
+        use booth_hal::{GpioEdge, GpioPort, PinRole};
+        use std::time::Duration;
+
+        let bus = TelemetryBus::new(64);
+        let (gpio, injector) = booth_mock::MockGpioPort::new();
+        // Capacity 1 with no consumer: the second hook event cannot be sent.
+        let (event_tx, _event_rx) = mpsc::channel::<booth_core::Event>(1);
+        let (button_tx, mut button_rx) = mpsc::channel::<bool>(16);
+        let task = tokio::spawn(gpio_task(
+            Box::new(gpio) as Box<dyn GpioPort>,
+            None,
+            event_tx,
+            Some(button_tx),
+            bus.clone(),
+        ));
+
+        for _ in 0..4 {
+            injector
+                .push(GpioEdge {
+                    role: PinRole::Hook,
+                    level: false,
+                    at_monotonic_ns: 0,
+                })
+                .await;
+            injector
+                .push(GpioEdge {
+                    role: PinRole::Hook,
+                    level: true,
+                    at_monotonic_ns: 0,
+                })
+                .await;
+        }
+        injector.push_power_button(true).await;
+        injector.push_power_button(false).await;
+
+        let press = tokio::time::timeout(Duration::from_secs(2), button_rx.recv())
+            .await
+            .expect("press must not wait behind the stalled event consumer");
+        let release = tokio::time::timeout(Duration::from_secs(2), button_rx.recv())
+            .await
+            .expect("release must not wait behind the stalled event consumer");
+        assert_eq!(press, Some(true));
+        assert_eq!(release, Some(false));
+
+        task.abort();
     }
 
     #[test]
