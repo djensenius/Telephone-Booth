@@ -661,7 +661,7 @@ async fn run_runtime(
     // dedicated task that times the hold against tokio timers and synthesizes
     // `PowerButtonPressed` (short press) or `PowerButtonHeld` (long hold).
     let (power_button_tx, power_button_task) = if config.power_button.enabled {
-        let (tx, rx) = mpsc::channel::<bool>(16);
+        let (tx, rx) = mpsc::channel::<PowerButtonSignal>(16);
         let hold = Duration::from_millis(config.power_button.hold_ms);
         let task = tokio::spawn(power_button_task(rx, event_tx.clone(), hold));
         (Some(tx), Some(task))
@@ -926,7 +926,7 @@ async fn gpio_task(
     initial: Box<dyn GpioPort>,
     mut rebuild: Option<GpioRebuild>,
     event_tx: mpsc::Sender<Event>,
-    power_button_tx: Option<mpsc::Sender<bool>>,
+    power_button_tx: Option<mpsc::Sender<PowerButtonSignal>>,
     bus: TelemetryBus,
 ) {
     // Hook and rotary events are handed to a forwarder task through an
@@ -1006,7 +1006,7 @@ async fn gpio_task(
                     // `power_button_task`; forward the raw logical level (true =
                     // pressed) there instead of translating it into a core event.
                     if let Some(tx) = power_button_tx.as_ref()
-                        && tx.send(edge.level).await.is_err()
+                        && tx.send(PowerButtonSignal::Level(edge.level)).await.is_err()
                     {
                         break;
                     }
@@ -1026,6 +1026,15 @@ async fn gpio_task(
                     message: err.to_string(),
                 });
                 warn!(%err, "gpio stream lost");
+                // A press being timed can no longer be released through this
+                // stream, and a rebuild can take tens of seconds. Fail safe by
+                // abandoning it: a still-pressed button starts a fresh window
+                // from the reconciled level after the rebuild.
+                if let Some(tx) = power_button_tx.as_ref()
+                    && tx.send(PowerButtonSignal::Interrupted).await.is_err()
+                {
+                    break;
+                }
             }
         }
     }
@@ -1076,7 +1085,7 @@ async fn reconcile_hook(
 /// `false` only when the receiver is gone (runtime shutting down).
 async fn reconcile_power_button(
     gpio: &dyn GpioPort,
-    power_button_tx: Option<&mpsc::Sender<bool>>,
+    power_button_tx: Option<&mpsc::Sender<PowerButtonSignal>>,
     bus: &TelemetryBus,
 ) -> bool {
     let Some(tx) = power_button_tx else {
@@ -1089,13 +1098,27 @@ async fn reconcile_power_button(
                 level,
                 at_monotonic_ns: monotonic_ns(),
             }));
-            tx.send(level).await.is_ok()
+            tx.send(PowerButtonSignal::Level(level)).await.is_ok()
         }
         Err(err) => {
             warn!(%err, "failed to reconcile power button state after gpio rebuild");
             true
         }
     }
+}
+
+/// What [`gpio_task`] tells [`power_button_task`] about the button.
+///
+/// Levels are the debounced logical state (`true` = pressed). `Interrupted`
+/// reports that the edge stream was lost, so an in-flight press can no longer
+/// be timed: the release may already have happened and rebuilds back off up to
+/// `GPIO_REBUILD_BACKOFF_MAX`, far longer than any hold threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerButtonSignal {
+    /// Debounced button level.
+    Level(bool),
+    /// The edge stream was lost; abandon any press being timed.
+    Interrupted,
 }
 
 fn event_from_gpio(edge: GpioEdge) -> Option<Event> {
@@ -1123,16 +1146,16 @@ fn event_from_gpio(edge: GpioEdge) -> Option<Event> {
 /// The core turns these into `Effect::PowerOff` / `Effect::Reboot`
 /// respectively. Runs until the level channel closes (runtime shutdown).
 async fn power_button_task(
-    mut rx: mpsc::Receiver<bool>,
+    mut rx: mpsc::Receiver<PowerButtonSignal>,
     event_tx: mpsc::Sender<Event>,
     hold_threshold: Duration,
 ) {
-    // `true` = pressed. We only start timing on a press edge.
-    while let Some(level) = rx.recv().await {
-        if !level {
-            // A stray release with no in-flight press; ignore.
+    // We only start timing on a press edge.
+    while let Some(signal) = rx.recv().await {
+        let PowerButtonSignal::Level(true) = signal else {
+            // A stray release, or a stream loss with nothing in flight.
             continue;
-        }
+        };
         let sleep = tokio::time::sleep(hold_threshold);
         tokio::pin!(sleep);
         let mut held = false;
@@ -1167,14 +1190,18 @@ async fn power_button_task(
                 next = rx.recv() => {
                     match next {
                         // Released.
-                        Some(false) => {
+                        Some(PowerButtonSignal::Level(false)) => {
                             if !held && event_tx.send(Event::PowerButtonPressed).await.is_err() {
                                 return;
                             }
                             break;
                         }
                         // Redundant press edge; keep waiting.
-                        Some(true) => {}
+                        Some(PowerButtonSignal::Level(true)) => {}
+                        // The edge stream died mid-press: the release can no
+                        // longer arrive through it, so emit nothing and wait
+                        // for the reconciled level to start a fresh window.
+                        Some(PowerButtonSignal::Interrupted) => break,
                         // Channel closed: runtime is shutting down.
                         None => return,
                     }
@@ -1189,14 +1216,18 @@ async fn power_button_task(
 ///
 /// Returns `None` while the button is still pressed (nothing queued, or only
 /// redundant press levels), `Some(true)` when a release is already waiting, and
-/// `Some(false)` when the channel closed. Used at the hold deadline so a
+/// `Some(false)` when the press ended without one (lost edge stream, or the
+/// channel closed). Used at the hold deadline so a
 /// release that landed before the threshold — but was not yet polled — cannot
 /// be misread as a continued hold and power the host off.
-fn drain_release(rx: &mut mpsc::Receiver<bool>) -> Option<bool> {
+fn drain_release(rx: &mut mpsc::Receiver<PowerButtonSignal>) -> Option<bool> {
     loop {
         match rx.try_recv() {
-            Ok(true) => {}
-            Ok(false) => return Some(true),
+            Ok(PowerButtonSignal::Level(true)) => {}
+            Ok(PowerButtonSignal::Level(false)) => return Some(true),
+            // A lost edge stream ends the press without an action, same as the
+            // `Interrupted` arm in the select loop.
+            Ok(PowerButtonSignal::Interrupted) => return Some(false),
             Err(mpsc::error::TryRecvError::Empty) => return None,
             Err(mpsc::error::TryRecvError::Disconnected) => return Some(false),
         }
@@ -2996,10 +3027,10 @@ mod tests {
     /// the host off.
     #[tokio::test(start_paused = true)]
     async fn queued_release_at_the_hold_deadline_is_a_short_press() {
-        use crate::power_button_task;
+        use crate::{PowerButtonSignal, power_button_task};
         use std::time::Duration;
 
-        let (level_tx, level_rx) = mpsc::channel::<bool>(16);
+        let (level_tx, level_rx) = mpsc::channel::<PowerButtonSignal>(16);
         let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(8);
         let task = tokio::spawn(power_button_task(
             level_rx,
@@ -3007,18 +3038,75 @@ mod tests {
             Duration::from_secs(3),
         ));
 
-        level_tx.send(true).await.expect("press");
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("press");
         // Let the task observe the press and park on the hold timer.
         tokio::task::yield_now().await;
         // Cross the threshold while the task is not being polled, then release:
         // both select branches are now ready simultaneously.
         tokio::time::advance(Duration::from_millis(3100)).await;
-        level_tx.send(false).await.expect("release");
+        level_tx
+            .send(PowerButtonSignal::Level(false))
+            .await
+            .expect("release");
 
         assert_eq!(
             event_rx.recv().await,
             Some(booth_core::Event::PowerButtonPressed),
             "an already-queued release must not be reported as a hold"
+        );
+
+        task.abort();
+    }
+
+    /// Losing the edge stream mid-press must abandon the press, not power off.
+    ///
+    /// The release can no longer arrive through a dead stream and a rebuild
+    /// backs off for up to `GPIO_REBUILD_BACKOFF_MAX`, far longer than any hold
+    /// threshold, so letting the timer run would power the host off after a
+    /// press the user already released. A reconciled pressed level after the
+    /// rebuild starts a fresh window instead.
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_edge_stream_abandons_the_press_in_flight() {
+        use crate::{PowerButtonSignal, power_button_task};
+        use std::time::Duration;
+
+        let (level_tx, level_rx) = mpsc::channel::<PowerButtonSignal>(16);
+        let (event_tx, mut event_rx) = mpsc::channel::<booth_core::Event>(8);
+        let task = tokio::spawn(power_button_task(
+            level_rx,
+            event_tx,
+            Duration::from_secs(3),
+        ));
+
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("press");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        level_tx
+            .send(PowerButtonSignal::Interrupted)
+            .await
+            .expect("stream loss");
+        // Well past the threshold, and past the rebuild backoff ceiling.
+        tokio::time::advance(Duration::from_mins(1)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            event_rx.try_recv().is_err(),
+            "an interrupted press must not power the host off"
+        );
+
+        // The reconciled level after the rebuild starts a fresh window.
+        level_tx
+            .send(PowerButtonSignal::Level(true))
+            .await
+            .expect("reconciled press");
+        tokio::time::advance(Duration::from_secs(4)).await;
+        assert_eq!(
+            event_rx.recv().await,
+            Some(booth_core::Event::PowerButtonHeld),
         );
 
         task.abort();
@@ -3032,7 +3120,7 @@ mod tests {
     /// turn a short press into an unintended power-off.
     #[tokio::test]
     async fn power_button_edges_bypass_a_stalled_event_consumer() {
-        use crate::gpio_task;
+        use crate::{PowerButtonSignal, gpio_task};
         use booth_hal::{GpioEdge, GpioPort, PinRole};
         use std::time::Duration;
 
@@ -3040,7 +3128,7 @@ mod tests {
         let (gpio, injector) = booth_mock::MockGpioPort::new();
         // Capacity 1 with no consumer: the second hook event cannot be sent.
         let (event_tx, _event_rx) = mpsc::channel::<booth_core::Event>(1);
-        let (button_tx, mut button_rx) = mpsc::channel::<bool>(16);
+        let (button_tx, mut button_rx) = mpsc::channel::<PowerButtonSignal>(16);
         let task = tokio::spawn(gpio_task(
             Box::new(gpio) as Box<dyn GpioPort>,
             None,
@@ -3074,8 +3162,8 @@ mod tests {
         let release = tokio::time::timeout(Duration::from_secs(2), button_rx.recv())
             .await
             .expect("release must not wait behind the stalled event consumer");
-        assert_eq!(press, Some(true));
-        assert_eq!(release, Some(false));
+        assert_eq!(press, Some(PowerButtonSignal::Level(true)));
+        assert_eq!(release, Some(PowerButtonSignal::Level(false)));
 
         task.abort();
     }

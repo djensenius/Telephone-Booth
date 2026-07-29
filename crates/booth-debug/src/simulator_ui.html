@@ -291,16 +291,27 @@ function updateState(state) {
 // `/v1/status-led` mirrors the physical RGB ring. `updatedAt === null` means
 // the runtime has not driven the LED yet, so render "unknown" rather than
 // claiming the ring is dark.
+// Highest telemetry record id already rendered on the LED chip. The snapshot
+// fetch races live WebSocket records (it is started without awaiting, and again
+// on every reconnect), so a slow HTTP response could otherwise overwrite a
+// newer record and leave the chip stale until the next state change.
+let ledEventId = -1;
+
 async function fetchStatusLed() {
   try {
     const res = await fetch(baseUrl() + "/v1/status-led", { headers: headers() });
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (!data || data.updatedAt === null || data.updatedAt === undefined) {
-      updateStatusLed(null, null);
+      // Nothing has driven the LED yet, so there is no newer record to lose.
+      if (ledEventId < 0) updateStatusLed(null, null);
       return;
     }
-    updateStatusLed(data.colour, data.patternLabel || describePattern(data.pattern));
+    updateStatusLed(
+      data.colour,
+      data.patternLabel || describePattern(data.pattern),
+      data.lastEventId,
+    );
   } catch (e) {
     showError("Failed to fetch status LED: " + e.message);
   }
@@ -317,7 +328,11 @@ function describePattern(pattern) {
   }
 }
 
-function updateStatusLed(colour, patternLabel) {
+function updateStatusLed(colour, patternLabel, eventId) {
+  if (typeof eventId === "number") {
+    if (eventId < ledEventId) return;
+    ledEventId = eventId;
+  }
   const dot = document.getElementById("led-dot");
   const label = document.getElementById("led-label");
   if (!dot || !label) return;
@@ -427,7 +442,7 @@ function handleRecord(record) {
     updateState(record.to);
   }
   if (record.kind === "status_led") {
-    updateStatusLed(record.colour, describePattern(record.pattern));
+    updateStatusLed(record.colour, describePattern(record.pattern), record.id);
   }
   addEvent(summarizeRecord(record));
 }
