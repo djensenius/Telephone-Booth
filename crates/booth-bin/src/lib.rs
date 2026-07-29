@@ -301,8 +301,19 @@ pub async fn check_runtime(config: &RuntimeConfig) -> Result<()> {
         .await
         .map_err(|err| anyhow!("audio device check failed: {err}"))?;
 
-    let _gpio = booth_pi::gpio::PiGpioPort::new(config.gpio.clone())
+    // Mirror `build_pi_adapters`: the button pin is only reserved when the
+    // feature is on, so preflight has to derive the same flag or it would miss
+    // an invalid / already-claimed button pin and let the service fail during
+    // `ExecStart` instead (systemd restart loop).
+    let mut gpio_config = config.gpio.clone();
+    gpio_config.power_button_enabled = config.power_button.enabled;
+    let _gpio = booth_pi::gpio::PiGpioPort::new(gpio_config)
         .map_err(|err| anyhow!("gpio reservation check failed: {err}"))?;
+
+    if config.status_led.enabled {
+        let _led = booth_pi::PiStatusLed::new(&config.status_led)
+            .map_err(|err| anyhow!("status LED reservation check failed: {err}"))?;
+    }
 
     Ok(())
 }

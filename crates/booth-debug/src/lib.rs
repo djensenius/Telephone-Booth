@@ -1220,16 +1220,33 @@ async fn track_status_led(
         match rx.recv().await {
             Ok(record) => {
                 if let Some(snapshot) = status_led_from_record(&record) {
-                    *cache.lock() = Some(snapshot);
+                    store_status_led(&cache, snapshot);
                 }
             }
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 if let Some(snapshot) = snapshot_status_led(&bus) {
-                    *cache.lock() = Some(snapshot);
+                    store_status_led(&cache, snapshot);
                 }
             }
             Err(broadcast::error::RecvError::Closed) => break,
         }
+    }
+}
+
+/// Apply `snapshot` unless the cache already holds a newer record.
+///
+/// After a `Lagged` the cache is re-seeded from the ring's newest LED record,
+/// but the broadcast receiver resumes at the oldest record it still retains, so
+/// the next few `Ok(record)`s are older than what was just cached. Telemetry
+/// ids are monotonic, so comparing them keeps recovery from moving the cache
+/// backward.
+fn store_status_led(cache: &Mutex<Option<StatusLedSnapshot>>, snapshot: StatusLedSnapshot) {
+    let mut current = cache.lock();
+    if current
+        .as_ref()
+        .is_none_or(|held| snapshot.last_event_id >= held.last_event_id)
+    {
+        *current = Some(snapshot);
     }
 }
 

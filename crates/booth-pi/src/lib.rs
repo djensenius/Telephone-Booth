@@ -89,8 +89,14 @@ pub struct GpioConfig {
     pub power_button: u8,
     /// Whether to poll the [`power_button`](Self::power_button) pin. Defaults
     /// to `false` so existing booths that have not wired a button are
-    /// unaffected. Set by the runtime from `[power_button].enabled`.
-    #[serde(default)]
+    /// unaffected.
+    ///
+    /// Derived by the runtime from `[power_button].enabled`, so it is
+    /// deliberately **not** part of the serialized config: accepting it in
+    /// `[gpio]` would offer a second, silently-overwritten source of truth, and
+    /// emitting it would make `print-config` show `false` for an enabled
+    /// button.
+    #[serde(skip)]
     pub power_button_enabled: bool,
     /// Internal pull resistor applied to all configured inputs.
     #[serde(default)]

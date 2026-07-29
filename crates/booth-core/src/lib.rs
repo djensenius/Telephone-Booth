@@ -398,9 +398,15 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
     // Emit a status-LED update on every transition whose indication changes.
     // The core is the single source of truth for the state → LED mapping; the
     // runtime just executes the resulting effect against the HAL port.
+    //
+    // Queued *first* because the runtime dispatches effects in order and some
+    // of them block for a long time (`StopRecording` awaits finalization, audio
+    // playback awaits the clip). Appending would leave the ring showing the old
+    // state's indication for that whole window, which is exactly when feedback
+    // matters most.
     if led_after != led_before {
         let (colour, pattern) = led_after;
-        effects.push(Effect::SetStatusLed { colour, pattern });
+        effects.insert(0, Effect::SetStatusLed { colour, pattern });
     }
     (next, effects)
 }
@@ -800,8 +806,9 @@ mod tests {
     fn pickup_starts_dialtone() {
         let (next, effects) = handle(State::Idle, Event::HookOff);
         assert_eq!(next, State::DialTone);
+        // The status-LED update leads the batch (see `handle`), so skip it.
         assert_eq!(
-            effects[0],
+            effects_after_led(&effects)[0],
             Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))
         );
     }
@@ -1154,14 +1161,25 @@ mod tests {
             (s, _) = handle(s, Event::RotaryPulse);
         }
         let (_, effects) = handle(s, Event::Tick);
-        // The digit log is prepended so it lands before the resulting effects.
+        // The digit log is prepended so it lands before the resulting effects
+        // (behind only the status-LED update, which always leads the batch).
         assert!(
             matches!(
-                &effects[0],
+                &effects_after_led(&effects)[0],
                 Effect::Log { message } if message.contains("dialed digit 3")
             ),
-            "expected the first effect to be a Log naming the dialed digit, got {effects:?}"
+            "expected a Log naming the dialed digit to lead the batch, got {effects:?}"
         );
+    }
+
+    /// The effects of a transition minus the leading status-LED update, which
+    /// `handle` always queues first so the ring updates before any long-running
+    /// effect runs.
+    fn effects_after_led(effects: &[Effect]) -> &[Effect] {
+        match effects.first() {
+            Some(Effect::SetStatusLed { .. }) => &effects[1..],
+            _ => effects,
+        }
     }
 
     /// Every state the machine can be in, for exhaustive LED-mapping tests.
