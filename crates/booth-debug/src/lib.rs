@@ -1180,11 +1180,16 @@ fn snapshot_gpio(bus: &TelemetryBus) -> GpioSnapshot {
     GpioSnapshot { pins, updated_at }
 }
 
+/// Current LED indication straight from the bus's durable slot.
+///
+/// Deliberately not reconstructed from the replay ring: the ring is bounded and
+/// the LED is level-triggered, so an indication that has been steady for a while
+/// is evicted long before it changes. Reading the retained record instead means
+/// recovery after subscriber lag can never fall back to a stale value.
 fn snapshot_status_led(bus: &TelemetryBus) -> Option<StatusLedSnapshot> {
-    bus.snapshot_since(None)
-        .into_iter()
-        .rev()
-        .find_map(|record| status_led_from_record(&record))
+    bus.latest_status_led()
+        .as_ref()
+        .and_then(status_led_from_record)
 }
 
 fn status_led_from_record(record: &TelemetryRecord) -> Option<StatusLedSnapshot> {

@@ -270,6 +270,19 @@ mod imp {
                         if now.duration_since(since) >= debounce {
                             confirmed[idx] = raw;
                             pending[idx] = None;
+                            if role == PinRole::PowerButton && pending_power.is_some() {
+                                // An older button level is still waiting. Sending
+                                // this one now would deliver it *before* the
+                                // retry, so the consumer would see a stale press
+                                // after a release and start timing a phantom
+                                // hold. Coalesce into the slot instead.
+                                pending_power = Some(GpioEdge {
+                                    role,
+                                    level: raw,
+                                    at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+                                });
+                                continue;
+                            }
                             if let Some(undelivered) = forward_edge(&tx, role, raw, started_at) {
                                 if undelivered.role == PinRole::PowerButton {
                                     // Newest level wins; retried next tick.
