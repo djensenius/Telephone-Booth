@@ -10,6 +10,7 @@ Embedded debug HTTP + WebSocket surface for the Telephone Booth Rust client.
 | `GET` | `/v1/state` | Current operator-compatible booth status snapshot. |
 | `GET` | `/v1/events?since=<seq>` | Retained telemetry records with ids greater than `since`. |
 | `GET` | `/v1/gpio` | Latest GPIO pin levels and edge timestamps from telemetry. |
+| `GET` | `/v1/status-led` | Current status-LED colour + pattern. `updatedAt` is `null` until the runtime drives the LED. |
 | `GET` | `/v1/audio` | Latest input/output audio meter values and device info. |
 | `GET` | `/v1/system` | Latest [`SystemSnapshot`](../../docs/observability.md#systemsnapshot-fields) (CPU/temp/mem/disk/net/uptime). |
 | `GET` | `/v1/logs?level=info&limit=200` | Recent tracing log lines from the in-process ring buffer. |

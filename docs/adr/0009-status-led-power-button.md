@@ -49,6 +49,14 @@ Add a status-LED and power-button port, keeping the core pure.
 - **Both features are opt-in and default-off**, wired through config
   (`[power_button]`, `[status_led]`) and env overrides, so existing deployed
   booths are unaffected on upgrade.
+- **The runtime is the single publisher of `TelemetryEvent::StatusLed`.**
+  Adapters only drive hardware; the runtime publishes once per accepted change
+  so every backend (Pi, mock, no-op) reports identically and the transient
+  boot / ready / shutdown indications — which are not core states — are visible
+  to the debug surface too.
+- **The `phonebooth` service user is authorized for exactly two logind
+  actions** (`reboot`, `power-off`) via a packaged polkit rule, rather than
+  granting the service broader privileges or running it as root.
 
 ## Consequences
 
@@ -77,3 +85,7 @@ Add a status-LED and power-button port, keeping the core pure.
   this is documented in `hardware.md`.
 - Software PWM on three GPIOs adds a small, bounded CPU cost on the Pi; within
   budget for the booth's workload.
+- The reboot / power-off path depends on polkit being installed and on the
+  packaged rule being present. Running the binary outside the `.deb` (or as a
+  different user) requires installing that rule by hand; this is documented in
+  `hardware.md`.

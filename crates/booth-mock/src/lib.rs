@@ -574,26 +574,20 @@ impl OperatorClient for MockOperatorClient {
 
 /// In-memory [`StatusLed`] that records every `(colour, pattern)` it is asked
 /// to show, for test assertions and the simulator's read-only view.
+///
+/// Deliberately does **not** publish telemetry: `TelemetryEvent::StatusLed` is
+/// published by the runtime once per accepted change, so an adapter that also
+/// published would double-report every indication.
 #[derive(Default, Clone)]
 pub struct MockStatusLed {
     inner: Arc<Mutex<Vec<(LedColour, LedPattern)>>>,
-    telemetry: Option<TelemetryBus>,
 }
 
 impl MockStatusLed {
-    /// Create a mock status LED without telemetry publishing.
+    /// Create a mock status LED.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Create a mock status LED that publishes each change to `bus`.
-    #[must_use]
-    pub fn with_telemetry(bus: &TelemetryBus) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Vec::new())),
-            telemetry: Some(bus.clone()),
-        }
     }
 
     /// Full history of shown indications, oldest first.
@@ -611,13 +605,6 @@ impl MockStatusLed {
 impl StatusLed for MockStatusLed {
     async fn set(&self, colour: LedColour, pattern: LedPattern) -> Result<(), LedError> {
         self.inner.lock().await.push((colour, pattern));
-        if let Some(bus) = &self.telemetry {
-            bus.publish(TelemetryEvent::StatusLed {
-                colour,
-                pattern,
-                at_monotonic_ns: 0,
-            });
-        }
         Ok(())
     }
 }

@@ -404,7 +404,7 @@ pub fn build_mock_adapters(bus: &TelemetryBus) -> (RuntimeAdapters, MockRuntimeH
     let audio_sink = booth_mock::MockAudioSink::with_telemetry(bus);
     let audio_source = booth_mock::MockAudioSource::with_telemetry(bus);
     let operator = booth_mock::MockOperatorClient::with_telemetry(bus);
-    let status_led = booth_mock::MockStatusLed::with_telemetry(bus);
+    let status_led = booth_mock::MockStatusLed::new();
     let power = booth_mock::MockPowerController::new();
 
     let adapters = RuntimeAdapters::new(
@@ -491,7 +491,7 @@ pub fn build_simulator_adapters(
             // The simulator always uses mock power/LED adapters so a dev machine
             // never actually reboots or powers off, and the TUI can render the
             // LED state from the telemetry bus.
-            Arc::new(booth_mock::MockStatusLed::with_telemetry(bus)),
+            Arc::new(booth_mock::MockStatusLed::new()),
             Arc::new(booth_mock::MockPowerController::new()),
         ),
         gpio_injector,
@@ -631,19 +631,20 @@ async fn run_runtime(
     }
 
     // Drive the "booting" indication (blue slow pulse) as soon as the LED port
-    // is available; the state machine will overwrite it with the idle colour
-    // once the first transition emits `Effect::SetStatusLed`.
-    if let Err(err) = status_led
-        .set(
-            LedColour::Blue,
-            LedPattern::Pulse {
-                period_ms: booth_core::LED_SLOW_PULSE_MS,
-            },
-        )
-        .await
-    {
-        warn!(%err, "failed to set booting status LED");
-    }
+    // is available. It is replaced with the idle indication once startup
+    // finishes (see the `status_led_for(&State::default())` call below), since
+    // the core only emits `Effect::SetStatusLed` when the indication *changes*
+    // and an on-hook booth may not transition for hours.
+    apply_status_led(
+        &status_led,
+        LedColour::Blue,
+        LedPattern::Pulse {
+            period_ms: booth_core::LED_SLOW_PULSE_MS,
+        },
+        &bus,
+        "booting",
+    )
+    .await;
 
     // The power button is opt-in. When enabled, route its edges through a
     // dedicated task that times the hold against tokio timers and synthesizes
@@ -766,6 +767,15 @@ async fn run_runtime(
     let mut watchdog = arm_watchdog(options.notify_systemd);
 
     let mut state = State::default();
+
+    // Startup is done: replace the boot indication with the one the core maps
+    // to the initial state. Without this an on-hook booth would stay on the
+    // blue boot pulse until its first state transition, which may be hours.
+    {
+        let (colour, pattern) = booth_core::status_led_for(&state);
+        apply_status_led(&status_led, colour, pattern, &bus, "ready").await;
+    }
+
     let mut shutdown = shutdown_signal(options.listen_signals);
 
     loop {
@@ -811,17 +821,16 @@ async fn run_runtime(
     let _ = audio_tx.send(AudioCommand::Shutdown).await;
     // Drive the "shutting down" indication (red fade to off) directly, since the
     // effect task is about to stop processing `Effect::SetStatusLed`.
-    if let Err(err) = status_led
-        .set(
-            LedColour::Red,
-            LedPattern::Fade {
-                duration_ms: booth_core::LED_FADE_MS,
-            },
-        )
-        .await
-    {
-        warn!(%err, "failed to set shutdown status LED");
-    }
+    apply_status_led(
+        &status_led,
+        LedColour::Red,
+        LedPattern::Fade {
+            duration_ms: booth_core::LED_FADE_MS,
+        },
+        &bus,
+        "shutdown",
+    )
+    .await;
     gpio_task.abort();
     if let Some(task) = power_button_task {
         task.abort();
@@ -1522,9 +1531,7 @@ async fn effect_task(
                 }
             }
             Effect::SetStatusLed { colour, pattern } => {
-                if let Err(err) = status_led.set(colour, pattern).await {
-                    warn!(%err, ?colour, ?pattern, "failed to drive status LED");
-                }
+                apply_status_led(&status_led, colour, pattern, &bus, "transition").await;
             }
             Effect::Reboot => {
                 info!("power button: rebooting host");
@@ -2293,6 +2300,30 @@ fn redact_secret(secret: &str) -> String {
     let mut last_four = secret.chars().rev().take(4).collect::<Vec<_>>();
     last_four.reverse();
     format!("<redacted:{}>", last_four.into_iter().collect::<String>())
+}
+
+/// Drive the status LED and publish the resulting indication as telemetry.
+///
+/// Publication lives here rather than in the adapters so every backend (Pi,
+/// mock, no-op) surfaces exactly one `TelemetryEvent::StatusLed` per accepted
+/// change, and so runtime-driven indications (boot, ready, shutdown) are
+/// observable alongside the ones the core emits as `Effect::SetStatusLed`.
+async fn apply_status_led(
+    status_led: &Arc<dyn StatusLed>,
+    colour: LedColour,
+    pattern: LedPattern,
+    bus: &TelemetryBus,
+    reason: &'static str,
+) {
+    if let Err(err) = status_led.set(colour, pattern).await {
+        warn!(%err, ?colour, ?pattern, reason, "failed to drive status LED");
+        return;
+    }
+    bus.publish(TelemetryEvent::StatusLed {
+        colour,
+        pattern,
+        at_monotonic_ns: monotonic_ns(),
+    });
 }
 
 fn monotonic_ns() -> u64 {

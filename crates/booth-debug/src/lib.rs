@@ -35,8 +35,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use booth_core::Event;
 use booth_hal::{
-    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, PinRole, SystemSnapshot,
-    TelemetryEvent,
+    AudioChannel, AudioLevel, BoothStatus as HalBoothStatus, GpioEdge, LedColour, LedPattern,
+    PinRole, SystemSnapshot, TelemetryEvent,
 };
 use futures_util::FutureExt;
 use parking_lot::Mutex;
@@ -329,6 +329,28 @@ pub struct GpioSnapshot {
     pub updated_at: Option<String>,
 }
 
+/// Snapshot returned by `GET /v1/status-led`.
+///
+/// `updatedAt` is `None` when no `StatusLed` telemetry has been seen yet; the
+/// `colour` / `pattern` fields then carry their defaults (off / steady 0) and
+/// should be rendered as "unknown" rather than "the LED is off".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusLedSnapshot {
+    /// Colour currently shown (single channel; never mixed).
+    pub colour: LedColour,
+    /// Animation applied to the colour.
+    pub pattern: LedPattern,
+    /// Human-readable rendering of `pattern`, e.g. `pulse(2000ms)`.
+    pub pattern_label: String,
+    /// Runtime monotonic timestamp for the change, in nanoseconds.
+    pub at_monotonic_ns: u64,
+    /// RFC3339 timestamp for the change, when one has been observed.
+    pub updated_at: Option<String>,
+    /// Telemetry record id that carried the change.
+    pub last_event_id: u64,
+}
+
 /// Per-pin GPIO snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -602,6 +624,7 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/state", get(state_snapshot))
         .route("/v1/events", get(events_since))
         .route("/v1/gpio", get(gpio_snapshot))
+        .route("/v1/status-led", get(status_led_snapshot))
         .route("/v1/audio", get(audio_snapshot))
         .route("/v1/system", get(system_snapshot))
         .route("/v1/logs", get(logs))
@@ -713,6 +736,10 @@ async fn events_since(
 
 async fn gpio_snapshot(State(state): State<AppState>) -> Json<GpioSnapshot> {
     Json(snapshot_gpio(&state.bus))
+}
+
+async fn status_led_snapshot(State(state): State<AppState>) -> Json<StatusLedSnapshot> {
+    Json(snapshot_status_led(&state.bus))
 }
 
 async fn audio_snapshot(State(state): State<AppState>) -> Json<AudioMeterSnapshot> {
@@ -1123,6 +1150,31 @@ fn snapshot_gpio(bus: &TelemetryBus) -> GpioSnapshot {
         PinRole::PowerButton => 3,
     });
     GpioSnapshot { pins, updated_at }
+}
+
+fn snapshot_status_led(bus: &TelemetryBus) -> StatusLedSnapshot {
+    let mut snapshot = StatusLedSnapshot {
+        pattern_label: LedPattern::default().to_string(),
+        ..StatusLedSnapshot::default()
+    };
+    for record in bus.snapshot_since(None) {
+        if let TelemetryEvent::StatusLed {
+            colour,
+            pattern,
+            at_monotonic_ns,
+        } = record.event
+        {
+            snapshot = StatusLedSnapshot {
+                colour,
+                pattern,
+                pattern_label: pattern.to_string(),
+                at_monotonic_ns,
+                updated_at: Some(system_time_to_rfc3339(record.ts)),
+                last_event_id: record.id,
+            };
+        }
+    }
+    snapshot
 }
 
 fn snapshot_audio(bus: &TelemetryBus) -> AudioMeterSnapshot {

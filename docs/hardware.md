@@ -569,6 +569,26 @@ via `booth_core::status_led_for`.
 - **Press and hold** past the threshold (default **3000 ms**,
   `power_button.hold_ms`) → **power off** (`systemctl poweroff`).
 
+### Authorization for reboot / power off
+
+`telephone-booth.service` runs as the unprivileged `phonebooth` user with an
+empty `CapabilityBoundingSet` and `NoNewPrivileges=true`, so `systemctl reboot`
+and `systemctl poweroff` are routed through logind and would otherwise fail the
+default polkit check with *"Interactive authentication required"*.
+
+The `.deb` therefore installs a narrowly scoped polkit rule at
+`/usr/share/polkit-1/rules.d/50-telephone-booth-power.rules` granting **only**
+the `phonebooth` user, and **only** the `org.freedesktop.login1.reboot` /
+`power-off` actions (plus their `-multiple-sessions` variants). The
+`*-ignore-inhibit` actions are deliberately **not** granted, so a running
+inhibitor — an in-progress unattended upgrade, for example — still blocks the
+shutdown. The package depends on `polkitd | policykit-1` so the rule is
+actually evaluated.
+
+If you run the binary outside the package, install that rule yourself (or run
+the service as `root`), otherwise both button actions log
+`poweroff failed: systemctl … exited with …` and nothing happens.
+
 ### Pi 4 wake caveat
 
 On the Raspberry Pi 4, waking a **halted** Pi with a GPIO requires **BCM 3**

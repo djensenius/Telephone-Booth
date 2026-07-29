@@ -988,14 +988,17 @@ impl SimulatorState {
             .await;
         let release = injector.clone();
         let delay = Duration::from_millis(self.power_button_hold_ms.saturating_add(300));
-        let ns = self.monotonic_ns();
+        // Capture the epoch, not a timestamp: the release edge happens *after*
+        // the sleep, so its monotonic stamp has to be read inside the task.
+        let started_at = self.started_at;
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
+            let elapsed = started_at.elapsed().as_nanos();
             release
                 .push(GpioEdge {
                     role: PinRole::PowerButton,
                     level: false,
-                    at_monotonic_ns: ns,
+                    at_monotonic_ns: u64::try_from(elapsed).unwrap_or(u64::MAX),
                 })
                 .await;
         });
