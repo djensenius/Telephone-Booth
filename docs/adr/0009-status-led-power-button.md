@@ -57,6 +57,12 @@ Add a status-LED and power-button port, keeping the core pure.
 - **The `phonebooth` service user is authorized for exactly two logind
   actions** (`reboot`, `power-off`) via a packaged polkit rule, rather than
   granting the service broader privileges or running it as root.
+- **Power-button edges are delivered losslessly (coalesced to the newest
+  level).** The shared GPIO edge queue drops edges under backpressure, which is
+  fine for hook/pulse but not here: losing a release would make a short press
+  indistinguishable from a hold and trigger an unintended power-off. The Pi
+  poller retries an undeliverable button edge on the next 2 ms tick, keeping
+  only the newest level.
 
 ## Consequences
 

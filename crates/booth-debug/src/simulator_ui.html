@@ -396,6 +396,9 @@ function connectWs() {
     document.getElementById("ws-status").textContent = "🟢 connected";
     document.getElementById("ws-status").className = "ws-status ws-connected";
     fetchState();
+    // WebSocket replay is bounded, so an LED change during a long disconnect
+    // may already be evicted; re-seed the chip from the durable snapshot.
+    fetchStatusLed();
   };
 
   ws.onclose = () => {

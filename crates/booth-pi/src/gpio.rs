@@ -228,6 +228,12 @@ mod imp {
             logical_level(&pins, &config, PinRole::PowerButton),
         ];
         let mut pending: [Option<(bool, Instant)>; 4] = [None, None, None, None];
+        // Power-button levels must not be dropped: losing a release turns a
+        // short press into an unintended power-off, because `power_button_task`
+        // cannot distinguish "still held" from "release never arrived". Retry
+        // an undeliverable button edge on the next tick, coalescing to the
+        // newest level (which is all the level-based consumer needs).
+        let mut pending_power: Option<GpioEdge> = None;
 
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -235,6 +241,11 @@ mod imp {
         loop {
             ticker.tick().await;
             let now = Instant::now();
+
+            // Retry first so button edges stay in order relative to new ones.
+            if let Some(edge) = pending_power.take() {
+                pending_power = try_send_edge(&tx, edge);
+            }
 
             for role in ROLES {
                 // Skip unwired optional inputs (the power button when disabled).
@@ -259,7 +270,20 @@ mod imp {
                         if now.duration_since(since) >= debounce {
                             confirmed[idx] = raw;
                             pending[idx] = None;
-                            forward_edge(&tx, role, raw, started_at);
+                            if let Some(undelivered) = forward_edge(&tx, role, raw, started_at) {
+                                if undelivered.role == PinRole::PowerButton {
+                                    // Newest level wins; retried next tick.
+                                    warn!("power button edge queue full; retrying next tick");
+                                    pending_power = Some(undelivered);
+                                } else {
+                                    metrics::counter!(
+                                        "booth_gpio_edges_dropped_total",
+                                        "role" => role_label(undelivered.role)
+                                    )
+                                    .increment(1);
+                                    warn!(role = ?undelivered.role, "gpio edge queue full; dropping edge");
+                                }
+                            }
                         }
                     }
                     _ => pending[idx] = Some((raw, now)),
@@ -279,24 +303,41 @@ mod imp {
     ///
     /// Awaiting a bounded `send` would pause sampling of *all* pins whenever the
     /// queue is full (its capacity can be as low as 1), silently losing later
-    /// transitions. A non-blocking `try_send` keeps sampling alive; a full queue
-    /// drops the edge and bumps `booth_gpio_edges_dropped_total` instead.
-    fn forward_edge(tx: &mpsc::Sender<GpioEdge>, role: PinRole, level: bool, started_at: Instant) {
-        let edge = GpioEdge {
-            role,
-            level,
-            at_monotonic_ns: monotonic_ns(started_at.elapsed()),
-        };
+    /// transitions. A non-blocking `try_send` keeps sampling alive instead.
+    ///
+    /// Returns the edge back when the queue was full so the caller can decide
+    /// between dropping it (and bumping `booth_gpio_edges_dropped_total`) and
+    /// retrying it, as the power button requires.
+    fn forward_edge(
+        tx: &mpsc::Sender<GpioEdge>,
+        role: PinRole,
+        level: bool,
+        started_at: Instant,
+    ) -> Option<GpioEdge> {
+        try_send_edge(
+            tx,
+            GpioEdge {
+                role,
+                level,
+                at_monotonic_ns: monotonic_ns(started_at.elapsed()),
+            },
+        )
+    }
 
+    /// Non-blocking delivery of an already-built edge. Returns `Some(edge)`
+    /// only when the queue was full, so it can be retried or accounted for.
+    fn try_send_edge(tx: &mpsc::Sender<GpioEdge>, edge: GpioEdge) -> Option<GpioEdge> {
+        let role = edge.role;
+        let level = edge.level;
         match tx.try_send(edge) {
-            Ok(()) => debug!(?role, level, "forwarded debounced gpio edge"),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                metrics::counter!("booth_gpio_edges_dropped_total", "role" => role_label(role))
-                    .increment(1);
-                warn!(?role, "gpio edge queue full; dropping edge");
+            Ok(()) => {
+                debug!(?role, level, "forwarded debounced gpio edge");
+                None
             }
+            Err(mpsc::error::TrySendError::Full(edge)) => Some(edge),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 debug!(?role, "gpio edge receiver dropped");
+                None
             }
         }
     }

@@ -175,16 +175,28 @@ mod imp {
         pub fn new(config: &StatusLedConfig) -> Result<Self, LedError> {
             let gpio =
                 Gpio::new().map_err(|err| LedError::Setup(format!("open gpio: {err}").into()))?;
+            // `into_output` leaves the pin's existing latch untouched, so a
+            // latch left low by a previous run would light the cathode the
+            // instant it is opened — briefly driving several channels at once
+            // and flashing the wrong colour before `all_off()` lands. Open each
+            // pin directly at its inactive level instead.
+            let active_low = config.active_low;
             let open = |bcm: u8, name: &str| -> Result<OutputPin, LedError> {
                 gpio.get(bcm)
-                    .map(rppal::gpio::Pin::into_output)
+                    .map(|pin| {
+                        if active_low {
+                            pin.into_output_high()
+                        } else {
+                            pin.into_output_low()
+                        }
+                    })
                     .map_err(|err| LedError::Setup(format!("open {name} BCM {bcm}: {err}").into()))
             };
             let mut channels = Channels {
                 red: open(config.red, "led red")?,
                 green: open(config.green, "led green")?,
                 blue: open(config.blue, "led blue")?,
-                active_low: config.active_low,
+                active_low,
             };
             channels.all_off();
             info!(

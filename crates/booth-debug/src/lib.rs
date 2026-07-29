@@ -490,14 +490,12 @@ pub async fn serve_with_handles(
 
     let tls = generate_tls_config()?;
     let fingerprint = tls.fingerprint.clone();
-    // Seed from whatever is still in the ring, then keep the cache current from
-    // the live subscription so eviction cannot lose the indication.
+    // Seed from whatever is still in the ring; the tracker that keeps the cache
+    // current is spawned only once all fallible setup below has succeeded, so an
+    // early error return cannot leave a detached task draining telemetry
+    // forever. Subscribe now so records published during setup are not missed.
     let status_led = Arc::new(Mutex::new(snapshot_status_led(&bus)));
-    let led_task = tokio::spawn(track_status_led(
-        bus.clone(),
-        bus.subscribe(),
-        Arc::clone(&status_led),
-    ));
+    let led_rx = bus.subscribe();
     let state = AppState {
         config: Arc::new(config.clone()),
         bus,
@@ -538,6 +536,13 @@ pub async fn serve_with_handles(
     }
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    // Past every `?` above: safe to spawn the long-lived tracker now.
+    let led_task = tokio::spawn(track_status_led(
+        state.bus.clone(),
+        led_rx,
+        Arc::clone(&state.status_led),
+    ));
 
     let handle = tokio::spawn(async move {
         // Convert the oneshot into a shared future so both listeners can

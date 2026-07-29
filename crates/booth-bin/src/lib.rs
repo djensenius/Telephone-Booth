@@ -819,8 +819,16 @@ async fn run_runtime(
     }
 
     let _ = audio_tx.send(AudioCommand::Shutdown).await;
+    gpio_task.abort();
+    if let Some(task) = power_button_task {
+        task.abort();
+    }
+    audio_task.abort();
+    // Stop the effect dispatcher *before* the terminal indication so a queued
+    // `Effect::SetStatusLed` cannot overwrite the fade after it starts.
+    effect_task.abort();
     // Drive the "shutting down" indication (red fade to off) directly, since the
-    // effect task is about to stop processing `Effect::SetStatusLed`.
+    // effect task is no longer processing `Effect::SetStatusLed`.
     apply_status_led(
         &status_led,
         LedColour::Red,
@@ -831,12 +839,6 @@ async fn run_runtime(
         "shutdown",
     )
     .await;
-    gpio_task.abort();
-    if let Some(task) = power_button_task {
-        task.abort();
-    }
-    audio_task.abort();
-    effect_task.abort();
     // Give the event forwarder a chance to flush + durably spill buffered
     // telemetry (e.g. a pending CallEnded) before we abort the rest.
     let _ = obs_shutdown_tx.send(true);
@@ -861,6 +863,15 @@ async fn run_runtime(
             tracing::warn!("debug server did not shut down within timeout, aborting");
         }
     }
+
+    // The fade is animated by a task the adapter owns and aborts on drop, so
+    // hold the adapter alive until it has run to completion — otherwise a quiet
+    // shutdown collapses the fade into an immediate off. Only worth the delay
+    // when a real LED is attached.
+    if config.status_led.enabled {
+        tokio::time::sleep(Duration::from_millis(u64::from(booth_core::LED_FADE_MS))).await;
+    }
+    drop(status_led);
 
     Ok(state)
 }
