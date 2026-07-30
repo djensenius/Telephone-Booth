@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/djensenius/Telephone-Booth/compare/v0.9.0...v0.9.1) (2026-07-30)
+
+
+### Documentation
+
+* describe how booth writes appear in the operator audit trail ([#137](https://github.com/djensenius/Telephone-Booth/issues/137)) ([930afce](https://github.com/djensenius/Telephone-Booth/commit/930afce6d85fde2db84399dbc4845a558ba11c58))
+
 ## [0.9.0](https://github.com/djensenius/Telephone-Booth/compare/v0.8.4...v0.9.0) (2026-07-29)
 
 
