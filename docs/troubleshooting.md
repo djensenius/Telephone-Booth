@@ -8,7 +8,7 @@ ongoing operational issues, see the [runbook](runbook.md).
 
 - **Hook-switch wired backwards.** Set `gpio.invert.hook = true` and
   restart, or swap the wires.
-- **Wrong audio device.** Run `telephone-booth --print-config` and check
+- **Wrong audio device.** Run `telephone-booth print-config` and check
   the `[audio]` block. If `device_substring` doesn't match anything,
   the binary falls back to the system default — confirm the Focusrite
   shows up in `aplay -L` / `pactl list short sinks`.
@@ -51,6 +51,39 @@ sudo systemctl restart telephone-booth
 Newer binaries also **fail loudly** in this situation (the `check`
 pre-start step reports `cannot access config file …`) instead of silently
 starting on defaults.
+
+## The power-button status LED is dark
+
+The status LED is opt-in and defaults to disabled. Check the effective
+configuration:
+
+```sh
+sudo -u phonebooth /usr/bin/telephone-booth print-config
+```
+
+The `[status_led]` block must have `enabled = true`. For the reference
+Adafruit 3350 wiring, it should also use `red = 5`, `green = 6`, `blue = 13`,
+`active_low = true`, and a non-zero `brightness`. After changing
+`/etc/phone-booth/config.toml`, restart the service:
+
+```sh
+sudo systemctl restart telephone-booth
+```
+
+If it is enabled but remains dark:
+
+- Check for environment overrides with
+  `sudo grep '^BOOTH_STATUS_LED_' /etc/phone-booth/env`.
+- Confirm `systemctl show telephone-booth -p SupplementaryGroups` includes
+  `gpio`. Current packages add it automatically.
+- Search the current boot's logs with
+  `journalctl -u telephone-booth -b --no-pager | grep -Ei 'status led|gpio|permission|failed'`.
+- Verify the common anode is on 3V3 and the red, green, and blue cathodes are
+  on BCM 5, 6, and 13. See
+  [Power button and status LED](hardware.md#power-button-and-status-led).
+
+The reference ring has one shared current limit and cannot mix colours. The
+runtime intentionally lights only red, green, or blue individually.
 
 ## Rotary dial seems to skip or stick
 

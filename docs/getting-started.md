@@ -12,7 +12,6 @@ We use [`mise`](https://mise.jdx.dev) to pin every tool the repo needs.
 brew install mise            # or: curl https://mise.run | sh
 git clone https://github.com/djensenius/Telephone-Booth.git
 cd Telephone-Booth
-git switch rust-client
 mise install                 # installs Rust 1.95.0, just, cargo-deb, cross, …
 ```
 
@@ -32,14 +31,15 @@ needs no hardware.
 ## 3. Run with the mock HAL
 
 ```sh
-cargo run -p booth-bin -- --print-config
+cargo run -p booth-bin -- print-config
 ```
 
-`--print-config` echoes the effective configuration with secrets redacted.
-Drop the flag to start the runtime; the debug HTTP server comes up on
-`127.0.0.1:8080` (Tailscale-serve target) and `127.0.0.1:8443` (LAN
-fallback, disabled by default). The debug token is generated on first run
-and printed once to stdout.
+`print-config` echoes the effective configuration with secrets redacted.
+Run `cargo run -p booth-bin -- run --mock` to start the runtime with mock
+adapters; the debug HTTP server comes up on `127.0.0.1:8080`
+(Tailscale-serve target) and `127.0.0.1:8443` (LAN fallback, disabled by
+default). The debug token is generated on first run and printed once to
+stdout.
 
 ## 4. Next steps
 
