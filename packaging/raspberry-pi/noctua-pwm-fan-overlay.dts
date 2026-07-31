@@ -48,53 +48,47 @@
 		target = <&cpu_thermal>;
 		__overlay__ {
 			polling-delay = <2000>;
-		};
-	};
 
-	fragment@4 {
-		target = <&thermal_trips>;
-		__overlay__ {
-			noctua_trip0: noctua_trip0 {
-				temperature = <50000>;
-				hysteresis = <5000>;
-				type = "active";
+			trips {
+				noctua_trip0: noctua_trip0 {
+					temperature = <50000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+				noctua_trip1: noctua_trip1 {
+					temperature = <60000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+				noctua_trip2: noctua_trip2 {
+					temperature = <67500>;
+					hysteresis = <5000>;
+					type = "active";
+				};
+				noctua_trip3: noctua_trip3 {
+					temperature = <75000>;
+					hysteresis = <5000>;
+					type = "active";
+				};
 			};
-			noctua_trip1: noctua_trip1 {
-				temperature = <60000>;
-				hysteresis = <5000>;
-				type = "active";
-			};
-			noctua_trip2: noctua_trip2 {
-				temperature = <67500>;
-				hysteresis = <5000>;
-				type = "active";
-			};
-			noctua_trip3: noctua_trip3 {
-				temperature = <75000>;
-				hysteresis = <5000>;
-				type = "active";
-			};
-		};
-	};
 
-	fragment@5 {
-		target = <&cooling_maps>;
-		__overlay__ {
-			noctua_map0 {
-				trip = <&noctua_trip0>;
-				cooling-device = <&noctua_fan 0 1>;
-			};
-			noctua_map1 {
-				trip = <&noctua_trip1>;
-				cooling-device = <&noctua_fan 1 2>;
-			};
-			noctua_map2 {
-				trip = <&noctua_trip2>;
-				cooling-device = <&noctua_fan 2 3>;
-			};
-			noctua_map3 {
-				trip = <&noctua_trip3>;
-				cooling-device = <&noctua_fan 3 4>;
+			cooling-maps {
+				noctua_map0 {
+					trip = <&noctua_trip0>;
+					cooling-device = <&noctua_fan 0 1>;
+				};
+				noctua_map1 {
+					trip = <&noctua_trip1>;
+					cooling-device = <&noctua_fan 1 2>;
+				};
+				noctua_map2 {
+					trip = <&noctua_trip2>;
+					cooling-device = <&noctua_fan 2 3>;
+				};
+				noctua_map3 {
+					trip = <&noctua_trip3>;
+					cooling-device = <&noctua_fan 3 4>;
+				};
 			};
 		};
 	};
