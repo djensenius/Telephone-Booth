@@ -1,0 +1,101 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Noctua NF-A4x20 5V PWM on Raspberry Pi 4:
+ *   PWM0 on GPIO18 (physical pin 12), 25 kHz, four thermal cooling levels.
+ *
+ * PWM0 conflicts with the Pi's onboard analog headphone audio. Use the
+ * booth's USB audio interface and set dtparam=audio=off in config.txt.
+ */
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			noctua_pwm_pins: noctua_pwm_pins {
+				brcm,pins = <18>;
+				brcm,function = <2>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&pwm>;
+		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&noctua_pwm_pins>;
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			noctua_fan: noctua-pwm-fan {
+				compatible = "pwm-fan";
+				#cooling-cells = <2>;
+				/* 40,000 ns = 25 kHz. */
+				pwms = <&pwm 0 40000 0>;
+				/* Off, 25%, 40%, 65%, and 100%. */
+				cooling-levels = <0 64 102 166 255>;
+			};
+		};
+	};
+
+	fragment@3 {
+		target = <&cpu_thermal>;
+		__overlay__ {
+			polling-delay = <2000>;
+		};
+	};
+
+	fragment@4 {
+		target = <&thermal_trips>;
+		__overlay__ {
+			noctua_trip0: noctua_trip0 {
+				temperature = <50000>;
+				hysteresis = <5000>;
+				type = "active";
+			};
+			noctua_trip1: noctua_trip1 {
+				temperature = <60000>;
+				hysteresis = <5000>;
+				type = "active";
+			};
+			noctua_trip2: noctua_trip2 {
+				temperature = <67500>;
+				hysteresis = <5000>;
+				type = "active";
+			};
+			noctua_trip3: noctua_trip3 {
+				temperature = <75000>;
+				hysteresis = <5000>;
+				type = "active";
+			};
+		};
+	};
+
+	fragment@5 {
+		target = <&cooling_maps>;
+		__overlay__ {
+			noctua_map0 {
+				trip = <&noctua_trip0>;
+				cooling-device = <&noctua_fan 0 1>;
+			};
+			noctua_map1 {
+				trip = <&noctua_trip1>;
+				cooling-device = <&noctua_fan 1 2>;
+			};
+			noctua_map2 {
+				trip = <&noctua_trip2>;
+				cooling-device = <&noctua_fan 2 3>;
+			};
+			noctua_map3 {
+				trip = <&noctua_trip3>;
+				cooling-device = <&noctua_fan 3 4>;
+			};
+		};
+	};
+};

@@ -765,12 +765,40 @@ pub struct SystemSnapshot {
     /// Pi throttling / undervoltage flags (`vcgencmd get_throttled`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub throttling: Option<ThrottlingFlags>,
+    /// PWM cooling-fan command and optional tachometer feedback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fan: Option<FanStats>,
     /// How the booth process is wired up at runtime. `None` when the
     /// snapshot is taken in a context that does not know the mode (older
     /// booths predating this field, or unit tests that build snapshots
     /// directly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_mode: Option<RuntimeMode>,
+}
+
+/// Linux PWM cooling-fan state reported through sysfs.
+///
+/// `commanded_on` and `pwm_ratio` describe what the kernel requested; they do
+/// not prove that the rotor is moving. `rpm` is present only when tachometer
+/// feedback is wired and exported by the fan driver.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FanStats {
+    /// Whether the current PWM command asks the fan to run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commanded_on: Option<bool>,
+    /// Requested PWM duty ratio in `[0.0, 1.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pwm_ratio: Option<f32>,
+    /// Measured fan speed in revolutions per minute, when tachometer feedback exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<u32>,
+    /// Active thermal cooling state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooling_state: Option<u32>,
+    /// Highest thermal cooling state supported by the driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cooling_state: Option<u32>,
 }
 
 /// CPU utilization plus load averages.

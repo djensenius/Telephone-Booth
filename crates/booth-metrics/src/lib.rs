@@ -3,7 +3,7 @@
 //!
 //! This crate produces a [`booth_hal::SystemSnapshot`] at a configurable
 //! cadence by reading from [`sysinfo`] (cross-platform CPU / memory / disk
-//! / network / uptime) and, on Linux, the Pi's `thermal_zone0` sysfs node.
+//! / network / uptime) and, on Linux, the Pi's thermal and PWM-fan sysfs nodes.
 //! It also owns the in-process [`metrics`] registry: each sample updates a
 //! handful of gauges (`booth_cpu_temperature_celsius`, …) and each
 //! observed [`TelemetryEvent`] updates the appropriate counter or
@@ -33,8 +33,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use booth_hal::{
-    AudioChannel, AudioDeviceStats, CallOutcome, CpuStats, DiskStats, MemoryStats, NetworkStats,
-    ProcessStats, RuntimeMode, SystemSnapshot, TelemetryEvent,
+    AudioChannel, AudioDeviceStats, CallOutcome, CpuStats, DiskStats, FanStats, MemoryStats,
+    NetworkStats, ProcessStats, RuntimeMode, SystemSnapshot, TelemetryEvent,
 };
 use booth_telemetry::TelemetryBus;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -273,6 +273,7 @@ impl SystemSampler {
         let mut snapshot = SystemSnapshot {
             audio: Some(self.inner.audio.lock().clone()),
             temperature_celsius: read_cpu_temp_celsius(),
+            fan: read_fan_stats(),
             runtime_mode: *self.inner.runtime_mode.lock(),
             ..SystemSnapshot::default()
         };
@@ -317,6 +318,23 @@ impl Default for SystemSampler {
 pub fn record_snapshot_gauges(snapshot: &SystemSnapshot) {
     if let Some(temp) = snapshot.temperature_celsius {
         metrics::gauge!("booth_cpu_temperature_celsius").set(f64::from(temp));
+    }
+    if let Some(fan) = snapshot.fan {
+        if let Some(commanded_on) = fan.commanded_on {
+            metrics::gauge!("booth_fan_commanded_on").set(if commanded_on { 1.0 } else { 0.0 });
+        }
+        if let Some(pwm_ratio) = fan.pwm_ratio {
+            metrics::gauge!("booth_fan_pwm_ratio").set(f64::from(pwm_ratio));
+        }
+        if let Some(rpm) = fan.rpm {
+            metrics::gauge!("booth_fan_speed_rpm").set(f64::from(rpm));
+        }
+        if let Some(cooling_state) = fan.cooling_state {
+            metrics::gauge!("booth_fan_cooling_state").set(f64::from(cooling_state));
+        }
+        if let Some(max_cooling_state) = fan.max_cooling_state {
+            metrics::gauge!("booth_fan_max_cooling_state").set(f64::from(max_cooling_state));
+        }
     }
     if let Some(cpu) = &snapshot.cpu {
         metrics::gauge!("booth_cpu_usage_ratio").set(f64::from(cpu.usage_ratio));
@@ -614,6 +632,54 @@ fn read_cpu_temp_celsius() -> Option<f32> {
     None
 }
 
+fn read_fan_stats() -> Option<FanStats> {
+    let hwmon = find_sysfs_device("/sys/class/hwmon", "name", "pwmfan");
+    let cooling = find_sysfs_device("/sys/class/thermal", "type", "pwm-fan");
+    if hwmon.is_none() && cooling.is_none() {
+        return None;
+    }
+
+    let pwm_level = hwmon
+        .as_deref()
+        .and_then(|path| read_sysfs_u32(&path.join("pwm1")));
+    let pwm_ratio = pwm_level.map(|level| {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "PWM levels are bounded to the kernel's 0..=255 range"
+        )]
+        let ratio = level.min(255) as f32 / 255.0;
+        ratio
+    });
+
+    Some(FanStats {
+        commanded_on: pwm_level.map(|level| level > 0),
+        pwm_ratio,
+        rpm: hwmon
+            .as_deref()
+            .and_then(|path| read_sysfs_u32(&path.join("fan1_input"))),
+        cooling_state: cooling
+            .as_deref()
+            .and_then(|path| read_sysfs_u32(&path.join("cur_state"))),
+        max_cooling_state: cooling
+            .as_deref()
+            .and_then(|path| read_sysfs_u32(&path.join("max_state"))),
+    })
+}
+
+fn find_sysfs_device(root: &str, marker: &str, expected: &str) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            std::fs::read_to_string(path.join(marker)).is_ok_and(|value| value.trim() == expected)
+        })
+}
+
+fn read_sysfs_u32(path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
 // ---------------------------------------------------------------------------
 // Sysinfo → SystemSnapshot conversions
 // ---------------------------------------------------------------------------
@@ -756,6 +822,21 @@ mod tests {
     }
 
     #[test]
+    fn sysfs_device_discovery_matches_trimmed_marker() {
+        let root = std::env::temp_dir().join(format!("booth-metrics-sysfs-{}", std::process::id()));
+        let device = root.join("hwmon7");
+        std::fs::create_dir_all(&device).expect("create fake sysfs device");
+        std::fs::write(device.join("name"), "pwmfan\n").expect("write fake sysfs marker");
+
+        assert_eq!(
+            find_sysfs_device(root.to_str().expect("temp path is UTF-8"), "name", "pwmfan"),
+            Some(device)
+        );
+
+        std::fs::remove_dir_all(root).expect("remove fake sysfs tree");
+    }
+
+    #[test]
     fn audio_device_changes_propagate_into_snapshot() {
         let sampler = SystemSampler::new();
         sampler.record_audio_device(AudioChannel::Input, "Built-in Microphone".into());
@@ -876,6 +957,16 @@ mod tests {
             pulses: 1,
             at_monotonic_ns: 0,
         });
+        record_snapshot_gauges(&SystemSnapshot {
+            fan: Some(FanStats {
+                commanded_on: Some(true),
+                pwm_ratio: Some(0.4),
+                rpm: Some(2_000),
+                cooling_state: Some(2),
+                max_cooling_state: Some(4),
+            }),
+            ..SystemSnapshot::default()
+        });
         let text = handle.render();
         assert!(
             text.contains("booth_calls_total"),
@@ -884,6 +975,18 @@ mod tests {
         assert!(
             text.contains("booth_digits_dialed_total"),
             "missing booth_digits_dialed_total in:\n{text}"
+        );
+        assert!(
+            text.contains("booth_fan_commanded_on"),
+            "missing booth_fan_commanded_on in:\n{text}"
+        );
+        assert!(
+            text.contains("booth_fan_pwm_ratio"),
+            "missing booth_fan_pwm_ratio in:\n{text}"
+        );
+        assert!(
+            text.contains("booth_fan_speed_rpm"),
+            "missing booth_fan_speed_rpm in:\n{text}"
         );
         // Global label is applied to every series.
         assert!(

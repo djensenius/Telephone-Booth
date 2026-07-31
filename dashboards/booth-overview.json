@@ -206,6 +206,50 @@
       ],
       "title": "Disk usage per mountpoint",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Kernel fan command. This is not measured rotor speed without tachometer feedback.",
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "percentunit" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "booth_fan_commanded_on{booth_id=~\"$booth\"}",
+          "legendFormat": "commanded on {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_fan_pwm_ratio{booth_id=~\"$booth\"}",
+          "legendFormat": "PWM duty {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Fan command and PWM duty",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Thermal cooling state selected by the kernel fan curve.",
+      "fieldConfig": { "defaults": { "min": 0, "unit": "short" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        {
+          "expr": "booth_fan_cooling_state{booth_id=~\"$booth\"}",
+          "legendFormat": "state {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_fan_max_cooling_state{booth_id=~\"$booth\"}",
+          "legendFormat": "maximum {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Fan cooling state",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

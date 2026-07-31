@@ -338,6 +338,7 @@ fields:
 | `network[]`               | Per-interface receive / transmit byte counters.                |
 | `process`                 | Booth process rss / virt / cpu.                                |
 | `audio`                   | Latest input/output device names.                              |
+| `fan`                     | PWM command, thermal cooling state, and optional measured RPM. |
 | `uptime_seconds`          | Host uptime.                                                   |
 | `throttling`              | Pi `vcgencmd get_throttled` flags. **Not populated in v1.**    |
 | `tailscale`               | Connected state. **Not populated in v1.**                      |
@@ -379,6 +380,11 @@ error messages) ever become labels.
 | `booth_disk_used_bytes`             | `mountpoint`                        |
 | `booth_disk_total_bytes`            | `mountpoint`                        |
 | `booth_uptime_seconds`              | (none)                              |
+| `booth_fan_commanded_on`             | (none) — 1 when the kernel requests non-zero PWM, otherwise 0. |
+| `booth_fan_pwm_ratio`                | (none) — requested duty ratio in `[0.0, 1.0]`. |
+| `booth_fan_speed_rpm`                | (none) — emitted only when tachometer feedback is available. |
+| `booth_fan_cooling_state`            | (none) — active kernel thermal cooling state. |
+| `booth_fan_max_cooling_state`        | (none) — highest cooling state supported by the driver. |
 | `booth_audio_peak_amplitude`        | `channel` (`input`, `output`) — linear peak amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_audio_rms_amplitude`         | `channel` (`input`, `output`) — linear RMS amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_info`                        | `mode` (`real`, `mock`, `simulator`) — always 1.0; lets Grafana / VictoriaMetrics filter dashboards by runtime mode (e.g. `booth_calls_total * on(booth_id) group_left() booth_info{mode="real"}` to exclude mock / simulator booths). Cardinality is bounded to 3. |
@@ -393,6 +399,38 @@ without it a consumer cannot tell "silent" from "no longer reporting" and
 would hold the last non-zero level indefinitely. Absence of events still
 means "no audio path is open", so clients should also treat a stale feed as
 unknown rather than as a level.
+
+## Fan monitoring
+
+On Linux, `booth-metrics` discovers the kernel `pwmfan` hwmon device and the
+`pwm-fan` thermal cooling device. Every system sample adds a `fan` object when
+either interface exists:
+
+| Field               | Meaning |
+| ------------------- | ------- |
+| `commandedOn`       | Whether the kernel requested a PWM value above zero. |
+| `pwmRatio`          | Requested PWM duty as a ratio from 0.0 to 1.0. |
+| `coolingState`      | Active thermal state selected from the overlay's curve. |
+| `maxCoolingState`   | Maximum state supported by that curve. |
+| `rpm`               | Measured rotor speed, only when the kernel driver exposes tachometer feedback. |
+
+The reference Noctua wiring intentionally leaves the green tachometer wire
+disconnected, so `rpm` is absent and `booth_fan_speed_rpm` is not emitted.
+`commandedOn` and `pwmRatio` describe the electrical command; they cannot
+confirm that the rotor is physically moving. The overview dashboard therefore
+labels PWM speed as a command rather than measured RPM.
+
+Inspect the live JSON directly:
+
+```sh
+curl -s http://127.0.0.1:8080/v1/system | jq .fan
+```
+
+Or inspect the Prometheus series:
+
+```sh
+curl -s http://127.0.0.1:8080/metrics | grep '^booth_fan_'
+```
 
 ### Histograms
 
