@@ -798,6 +798,8 @@ mod tests {
     use booth_hal::{AudioLevel, GpioEdge, PinRole};
     use std::time::Instant;
 
+    static METRICS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     fn ensure_registry() -> MetricsHandle {
         install_registry("test-booth").expect("install registry")
     }
@@ -946,6 +948,7 @@ mod tests {
 
     #[test]
     fn render_includes_known_series_after_events() {
+        let _guard = METRICS_TEST_LOCK.lock();
         let handle = ensure_registry();
         record_telemetry_event(&TelemetryEvent::CallEnded {
             session_id: "s1".into(),
@@ -1005,6 +1008,7 @@ mod tests {
 
     #[test]
     fn unavailable_fan_data_replaces_previous_gauges() {
+        let _guard = METRICS_TEST_LOCK.lock();
         let handle = ensure_registry();
         record_snapshot_gauges(&SystemSnapshot {
             fan: Some(FanStats {
