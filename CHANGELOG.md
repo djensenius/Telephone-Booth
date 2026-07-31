@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/djensenius/Telephone-Booth/compare/v0.9.1...v0.10.0) (2026-07-31)
+
+
+### Features
+
+* **metrics:** monitor PWM cooling fan ([#141](https://github.com/djensenius/Telephone-Booth/issues/141)) ([6c7446a](https://github.com/djensenius/Telephone-Booth/commit/6c7446ac30b89604114c69b004298722b8c1ab20))
+
+
+### Documentation
+
+* clarify status LED setup ([#140](https://github.com/djensenius/Telephone-Booth/issues/140)) ([d50767a](https://github.com/djensenius/Telephone-Booth/commit/d50767a8405d14d43f0f9f58bc4387cbe92c2bfa))
+
 ## [0.9.1](https://github.com/djensenius/Telephone-Booth/compare/v0.9.0...v0.9.1) (2026-07-30)
 
 
