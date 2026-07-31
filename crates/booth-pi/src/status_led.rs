@@ -5,8 +5,8 @@
 //! can ever be lit — see `docs/adr/0009-status-led-power-button.md`. This
 //! adapter therefore drives **at most one** channel at a time and holds the
 //! other two at their inactive level. Brightness, pulsing, blinking and fading
-//! are rendered with per-channel software PWM (the Pi's hardware PWM channels
-//! collide with the I2S audio HAT).
+//! are rendered with per-channel software PWM so the adapter does not consume
+//! the Pi's limited hardware PWM channels.
 //!
 //! Real GPIO is gated behind `#[cfg(all(feature = "pi", target_os = "linux"))]`;
 //! every other target uses a stub that keeps the crate type-checking on macOS.

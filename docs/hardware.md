@@ -636,9 +636,8 @@ pulls the switch pin low; each LED cathode is driven low to light that colour.
 ### Wiring (reference booth)
 
 The reference booth (Raspberry Pi 4 Model B, Debian 13 trixie) lands the button
-on pins chosen to avoid the AudioInjector Flatmax HAT (I2S `18/19/20/21`, I2C
-`2/3`), the HAT EEPROM pins (`0/1`), and the existing phone harness
-(`17/22/27`):
+on pins chosen not to overlap the cooling fan (`18`) or the existing phone
+harness (`17/22/27`):
 
 | Button tab (Adafruit 3350) | Wire   | Terminal | BCM | Physical pin |
 | -------------------------- | ------ | -------- | --- | ------------ |
@@ -724,11 +723,11 @@ the service as `root`), otherwise both button actions log
 ### Pi 4 wake caveat
 
 On the Raspberry Pi 4, waking a **halted** Pi with a GPIO requires **BCM 3**
-(I2C1 SCL) — which is already shared with the audio codec on the AudioInjector
-HAT and so is unavailable here. This button can therefore **reboot** and
-**power off** the booth, but it **cannot power a halted booth back on**. If you
-need a physical "turn it back on" control, fit an **inline switch on the PSU**
-upstream of the Pi instead.
+(I2C1 SCL). The reference button harness uses BCM 26 so the runtime can
+distinguish short presses from holds, which means this button can **reboot**
+and **power off** the booth but cannot power a halted booth back on. If
+physical power-on is required, add a separate momentary switch on BCM 3 or fit
+an inline switch on the PSU upstream of the Pi.
 
 See [`configuration.md`](configuration.md) for every config key and environment
 override.
