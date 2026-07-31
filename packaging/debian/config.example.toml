@@ -2,11 +2,30 @@
 hook_bcm = 17
 rotary_pulse_bcm = 27
 rotary_gate_bcm = 22
+power_button_bcm = 26
 pull = "up"
 debounce_ms = 25
 invert.hook = false
 invert.rotary_pulse = true
 invert.rotary_gate = false
+invert.power_button = true
+
+# Optional Adafruit 3350 power button. Short press reboots; holding for
+# hold_ms powers off. Leave disabled until the button is wired.
+[power_button]
+enabled = false
+hold_ms = 3000
+
+# Optional Adafruit 3350 RGB status ring. The common anode connects to 3V3;
+# these BCM pins sink the red, green, and blue cathodes. The ring cannot mix
+# colours because it has one shared current limit.
+[status_led]
+enabled = false
+red = 5
+green = 6
+blue = 13
+active_low = true
+brightness = 1.0
 
 [audio]
 device_substring = "Focusrite"
