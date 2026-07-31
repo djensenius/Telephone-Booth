@@ -1315,6 +1315,171 @@
           }
         }
       }
+    },
+    "panel-19": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "booth_fan_commanded_on{booth_id=~\"$booth\"}",
+                      "instant": false,
+                      "range": true,
+                      "legendFormat": "commanded on {{booth_id}}"
+                    }
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "booth_fan_pwm_ratio{booth_id=~\"$booth\"}",
+                      "instant": false,
+                      "range": true,
+                      "legendFormat": "PWM duty {{booth_id}}"
+                    }
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Kernel fan command. This is not measured rotor speed without tachometer feedback.",
+        "id": 19,
+        "links": [],
+        "title": "Fan command and PWM duty",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "max": 1,
+                "min": 0,
+                "unit": "percentunit"
+              },
+              "overrides": []
+            },
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "right"
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-20": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "booth_fan_cooling_state{booth_id=~\"$booth\"}",
+                      "instant": false,
+                      "range": true,
+                      "legendFormat": "state {{booth_id}}"
+                    }
+                  },
+                  "refId": "A"
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "booth_fan_max_cooling_state{booth_id=~\"$booth\"}",
+                      "instant": false,
+                      "range": true,
+                      "legendFormat": "maximum {{booth_id}}"
+                    }
+                  },
+                  "refId": "B"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Thermal cooling state selected by the kernel fan curve.",
+        "id": 20,
+        "links": [],
+        "title": "Fan cooling state",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "min": 0,
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "legend": {
+                "displayMode": "table",
+                "placement": "right"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -1429,6 +1594,32 @@
                       },
                       "x": 12,
                       "y": 14,
+                      "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-19"
+                      },
+                      "x": 0,
+                      "y": 22,
+                      "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-20"
+                      },
+                      "x": 12,
+                      "y": 22,
                       "width": 12,
                       "height": 8
                     }

@@ -4,6 +4,135 @@ The Rust client targets a Raspberry Pi (any model with the 40-pin header) with
 a **USB-Audio-Class 2.0** audio interface plugged in — a Focusrite Scarlett
 Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
+## Noctua PWM cooling fan
+
+The reference Pi 4 cooling setup uses the **Noctua NF-A4x20 5V PWM**. These
+instructions apply to that 5 V model, not the visually similar 12 V version.
+The fan draws at most 0.12 A; use a Pi power supply with enough headroom for
+the fan, USB audio interface, and other attached hardware.
+
+### Fan wiring
+
+Shut the Pi down and disconnect power before touching the header:
+
+| Fan lead | Fan connector pin | Pi physical pin | Pi function |
+| -------- | ----------------- | --------------- | ----------- |
+| black    | 1                 | 6               | ground      |
+| yellow   | 2                 | 4               | 5 V         |
+| green    | 3                 | not connected   | tachometer   |
+| blue     | 4                 | 12              | GPIO18 / PWM0 |
+
+The standard fan connector order is ground, power, tachometer, PWM. Do not
+identify the ends solely from a phrase such as "keyed tab facing you": the
+result changes depending on whether the mating face or wire-entry face is in
+view. Confirm the wire colours and connector pin numbers against the fan
+datasheet.
+
+The green tachometer lead must be insulated individually so it cannot touch
+the header or enclosure. No resistor is needed while that wire is disconnected.
+The Noctua PWM input has its own pull-up and supports direct CMOS GPIO drive,
+so the blue lead connects directly to GPIO18 without an external pull-up,
+series resistor, level shifter, or transistor. Never connect the yellow 5 V
+lead to a GPIO.
+
+Use separate female-to-female jumpers or a keyed breakout rather than forcing
+the fan's four-pin shroud onto the Pi header. Secure the jumpers against
+vibration, but keep each connection removable and insulated. The NA-RC7
+Low-Noise Adaptor is optional; PWM control already reduces speed dynamically,
+and the adaptor only caps the maximum.
+
+Before applying power, check the three physical pin numbers again. Physical
+pin 4 is 5 V; physical pin 8 is a GPIO and will be damaged by this connection.
+On power-up the fan runs at full speed until Linux claims GPIO18. That
+fail-safe behaviour is expected.
+
+### Install the 25 kHz thermal overlay
+
+Noctua specifies a 25 kHz PWM target (21–28 kHz accepted). Raspberry Pi OS's
+stock `pwm-gpio-fan` overlay uses 50 Hz, so do not use it for this four-wire
+fan. The repository ships a hardware-PWM overlay at
+`packaging/raspberry-pi/noctua-pwm-fan-overlay.dts`.
+
+On the Pi, from a checkout of this repository:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y device-tree-compiler
+sudo install -D -m 0644 packaging/raspberry-pi/noctua-pwm-fan-overlay.dts \
+  /usr/local/share/telephone-booth/noctua-pwm-fan-overlay.dts
+sudo dtc -@ -I dts -O dtb \
+  -o /tmp/noctua-pwm-fan.dtbo \
+  /usr/local/share/telephone-booth/noctua-pwm-fan-overlay.dts
+sudo install -m 0644 /tmp/noctua-pwm-fan.dtbo \
+  /boot/firmware/overlays/noctua-pwm-fan.dtbo
+sudo cp -p /boot/firmware/config.txt \
+  /boot/firmware/config.txt.pre-noctua-fan
+sudo editor /boot/firmware/config.txt
+```
+
+The Debian package also installs the source as
+`/usr/share/telephone-booth/noctua-pwm-fan-overlay.dts`; use that path instead
+when no repository checkout is present.
+
+GPIO18/PWM0 conflicts with the Pi's onboard analog headphone output. The booth
+uses USB audio, so disable only the onboard device and load the custom overlay:
+
+```ini
+[all]
+dtparam=audio=off
+dtoverlay=noctua-pwm-fan
+```
+
+Keep any existing settings in `config.txt`, then reboot:
+
+```sh
+sudo reboot
+```
+
+The overlay installs this temperature curve:
+
+| CPU temperature while heating | PWM command | Cooling state |
+| ----------------------------- | ----------- | ------------- |
+| below 50°C                    | off         | 0             |
+| 50–59.9°C                     | 25%         | 1             |
+| 60–67.4°C                     | 40%         | 2             |
+| 67.5–74.9°C                   | 65%         | 3             |
+| 75°C and above                | 100%        | 4             |
+
+Each threshold has 5°C hysteresis. For example, the fan starts at 50°C but
+does not stop again until the Pi cools below 45°C. It is therefore normal for
+the fan to be completely stopped at idle.
+
+### Verify fan control
+
+After reboot, GPIO18 must be assigned to PWM0 and a `pwm-fan` cooling device
+must exist:
+
+```sh
+pinctrl get 18
+grep -H . /sys/class/thermal/cooling_device*/type
+grep -H . /sys/class/thermal/cooling_device*/cur_state
+grep -H . /sys/class/hwmon/hwmon*/name
+grep -H . /sys/class/hwmon/hwmon*/pwm1 2>/dev/null
+cat /sys/class/thermal/thermal_zone0/temp
+```
+
+`pinctrl` should report `PWM0_0`. The `pwmfan` hardware-monitor device reports
+the current command from 0 to 255. CPU temperature is in millidegrees Celsius.
+With the green tachometer wire disconnected, software can report the requested
+PWM duty but cannot prove that the rotor is moving or measure RPM.
+
+The booth publishes the same values through `GET /v1/system` and Prometheus;
+see [`observability.md`](observability.md#fan-monitoring).
+
+To roll back, restore the saved configuration and reboot:
+
+```sh
+sudo cp /boot/firmware/config.txt.pre-noctua-fan \
+  /boot/firmware/config.txt
+sudo reboot
+```
+
 ## Cable and connector conventions
 
 **This project terminates every 8P8C / RJ45 connector to `T568B`.** That applies
@@ -507,9 +636,8 @@ pulls the switch pin low; each LED cathode is driven low to light that colour.
 ### Wiring (reference booth)
 
 The reference booth (Raspberry Pi 4 Model B, Debian 13 trixie) lands the button
-on pins chosen to avoid the AudioInjector Flatmax HAT (I2S `18/19/20/21`, I2C
-`2/3`), the HAT EEPROM pins (`0/1`), and the existing phone harness
-(`17/22/27`):
+on pins chosen not to overlap the cooling fan (`18`) or the existing phone
+harness (`17/22/27`):
 
 | Button tab (Adafruit 3350) | Wire   | Terminal | BCM | Physical pin |
 | -------------------------- | ------ | -------- | --- | ------------ |
@@ -595,11 +723,11 @@ the service as `root`), otherwise both button actions log
 ### Pi 4 wake caveat
 
 On the Raspberry Pi 4, waking a **halted** Pi with a GPIO requires **BCM 3**
-(I2C1 SCL) — which is already shared with the audio codec on the AudioInjector
-HAT and so is unavailable here. This button can therefore **reboot** and
-**power off** the booth, but it **cannot power a halted booth back on**. If you
-need a physical "turn it back on" control, fit an **inline switch on the PSU**
-upstream of the Pi instead.
+(I2C1 SCL). The reference button harness uses BCM 26 so the runtime can
+distinguish short presses from holds, which means this button can **reboot**
+and **power off** the booth but cannot power a halted booth back on. If
+physical power-on is required, add a separate momentary switch on BCM 3 or fit
+an inline switch on the PSU upstream of the Pi.
 
 See [`configuration.md`](configuration.md) for every config key and environment
 override.

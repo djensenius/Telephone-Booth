@@ -17,10 +17,9 @@ Two hardware facts, bench-verified on the reference Pi 4, constrain the design:
   green, green beats blue). Colour mixing is therefore physically impossible.
   Time-multiplexing the channels to fake mixed colours was tested and rejected
   as visibly unstable.
-- **Waking a halted Pi 4 requires BCM 3 (I2C1 SCL)**, which is already used by
-  the AudioInjector Flatmax HAT's audio codec. That pin is unavailable, so the
-  button can reboot and power off the booth but cannot power a halted booth
-  back on.
+- **Waking a halted Pi 4 requires BCM 3 (I2C1 SCL)**. The selected runtime
+  button pin is BCM 26, so the reference button can reboot and power off the
+  booth but cannot power a halted booth back on.
 
 The architecture is hexagonal (ADR 0001) with a pure core (ADR 0002): the core
 must not perform I/O, read a clock, or depend on hardware. Any new capability
@@ -39,8 +38,9 @@ Add a status-LED and power-button port, keeping the core pure.
   unrepresentable in the type system. `LedPattern` carries the timing
   (`Steady`, `Pulse`, `Blink`, `Fade`).
 - **The Pi adapter drives at most one cathode low at a time** and holds the
-  other two high (never floating), via software PWM (hardware PWM channels
-  collide with I2S). This enforces the shared-current-limit constraint in code.
+  other two high (never floating), via software PWM so it does not consume the
+  Pi's limited hardware PWM channels. This enforces the shared-current-limit
+  constraint in code.
 - **The core** emits `Effect::SetStatusLed { colour, pattern }` on every state
   transition (mapping in `booth_core::status_led_for`), plus `Effect::Reboot`
   and `Effect::PowerOff` for the button. `Event::PowerButtonPressed` maps to
@@ -98,9 +98,10 @@ Add a status-LED and power-button port, keeping the core pure.
 - Button hold timing runs against the runtime's async timers rather than a
   separately injected `Clock`, mirroring the existing pulse-timeout handling;
   the core remains clock-free.
-- The button cannot power a halted Pi 4 back on (BCM 3 is taken by the audio
-  codec). Operators who need a physical power-on must fit an inline PSU switch;
-  this is documented in `hardware.md`.
+- The reference button cannot power a halted Pi 4 back on because it is wired
+  to BCM 26 rather than the required BCM 3 wake pin. Operators who need a
+  physical power-on must add a dedicated BCM 3 wake switch or fit an inline PSU
+  switch; this is documented in `hardware.md`.
 - Software PWM on three GPIOs adds a small, bounded CPU cost on the Pi; within
   budget for the booth's workload.
 - The reboot / power-off path depends on polkit being installed and on the

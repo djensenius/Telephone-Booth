@@ -107,6 +107,7 @@ assets = [
     ["../../packaging/debian/50-telephone-booth-power.rules", "/usr/share/polkit-1/rules.d/50-telephone-booth-power.rules", "644"],
     ["../../scripts/setup-tailscale-serve.sh", "/usr/share/telephone-booth/setup-tailscale-serve.sh", "755"],
     ["../../scripts/telephone-booth-simulator-tmux.sh", "/usr/share/telephone-booth/telephone-booth-simulator-tmux.sh", "755"],
+    ["../../packaging/raspberry-pi/noctua-pwm-fan-overlay.dts", "/usr/share/telephone-booth/noctua-pwm-fan-overlay.dts", "644"],
     ["../../scripts/telephone-booth-mode.sh", "/usr/sbin/telephone-booth-mode", "755"],
     ["../../packaging/debian/telephone-booth-simulator.service", "/lib/systemd/system/telephone-booth-simulator.service", "644"],
 ]

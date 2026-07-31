@@ -271,7 +271,24 @@ For full wiring details and a loopback smoke-test, see
 </details>
 
 <details>
-<summary>8. Set up Tailscale Serve (debug surface)</summary>
+<summary>8. Optional — install the PWM cooling fan</summary>
+
+The reference cooling setup uses a Noctua NF-A4x20 **5V PWM** fan on physical
+pins 4 (5 V), 6 (ground), and 12 (GPIO18/PWM0). Its green tachometer lead is
+left disconnected and individually insulated.
+
+The fan requires a custom 25 kHz thermal overlay; the stock Raspberry Pi
+`pwm-gpio-fan` overlay runs at 50 Hz and is unsuitable. Installing the custom
+overlay also requires `dtparam=audio=off` because PWM0 conflicts with onboard
+analog audio. The booth's USB audio interface remains available.
+
+Follow the complete wiring, overlay installation, verification, and rollback
+procedure in [`hardware.md`](hardware.md#noctua-pwm-cooling-fan).
+
+</details>
+
+<details>
+<summary>9. Set up Tailscale Serve (debug surface)</summary>
 
 The `.deb` ships a helper script that configures `tailscale serve` to proxy
 the booth's loopback debug listener (`127.0.0.1:8080`) over your tailnet with
@@ -295,7 +312,7 @@ for more detail.
 </details>
 
 <details>
-<summary>9. Verify everything works</summary>
+<summary>10. Verify everything works</summary>
 
 ## Service status
 
@@ -329,7 +346,7 @@ token. You should see the live pin matrix, state history, and audio meters.
 </details>
 
 <details>
-<summary>10. Optional — observability with vmagent</summary>
+<summary>11. Optional — observability with vmagent</summary>
 
 The booth exposes a Prometheus-compatible `/metrics` endpoint on loopback. To
 ship metrics to VictoriaMetrics:
@@ -348,7 +365,7 @@ dashboard setup.
 </details>
 
 <details>
-<summary>11. Troubleshooting</summary>
+<summary>12. Troubleshooting</summary>
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
