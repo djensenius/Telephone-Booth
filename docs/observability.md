@@ -380,9 +380,11 @@ error messages) ever become labels.
 | `booth_disk_used_bytes`             | `mountpoint`                        |
 | `booth_disk_total_bytes`            | `mountpoint`                        |
 | `booth_uptime_seconds`              | (none)                              |
+| `booth_fan_available`                | (none) — 1 when a kernel fan interface exists, otherwise 0. |
+| `booth_fan_tachometer_available`     | (none) — 1 when the current sample contains measured RPM. |
 | `booth_fan_commanded_on`             | (none) — 1 when the kernel requests non-zero PWM, otherwise 0. |
 | `booth_fan_pwm_ratio`                | (none) — requested duty ratio in `[0.0, 1.0]`. |
-| `booth_fan_speed_rpm`                | (none) — emitted only when tachometer feedback is available. |
+| `booth_fan_speed_rpm`                | (none) — measured RPM, or `NaN` without tachometer feedback. |
 | `booth_fan_cooling_state`            | (none) — active kernel thermal cooling state. |
 | `booth_fan_max_cooling_state`        | (none) — highest cooling state supported by the driver. |
 | `booth_audio_peak_amplitude`        | `channel` (`input`, `output`) — linear peak amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
@@ -415,10 +417,15 @@ either interface exists:
 | `rpm`               | Measured rotor speed, only when the kernel driver exposes tachometer feedback. |
 
 The reference Noctua wiring intentionally leaves the green tachometer wire
-disconnected, so `rpm` is absent and `booth_fan_speed_rpm` is not emitted.
+disconnected, so `rpm` is absent and `booth_fan_speed_rpm` reports `NaN`.
 `commandedOn` and `pwmRatio` describe the electrical command; they cannot
 confirm that the rotor is physically moving. The overview dashboard therefore
 labels PWM speed as a command rather than measured RPM.
+
+Prometheus gauges cannot be deleted from the in-process registry. Every sample
+therefore updates the availability gauges and writes `NaN` to unavailable
+optional values. This prevents a previous PWM command or RPM reading from
+remaining visible after a transient sysfs failure or device removal.
 
 Inspect the live JSON directly:
 

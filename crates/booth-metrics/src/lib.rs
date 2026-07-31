@@ -319,23 +319,23 @@ pub fn record_snapshot_gauges(snapshot: &SystemSnapshot) {
     if let Some(temp) = snapshot.temperature_celsius {
         metrics::gauge!("booth_cpu_temperature_celsius").set(f64::from(temp));
     }
-    if let Some(fan) = snapshot.fan {
-        if let Some(commanded_on) = fan.commanded_on {
-            metrics::gauge!("booth_fan_commanded_on").set(if commanded_on { 1.0 } else { 0.0 });
-        }
-        if let Some(pwm_ratio) = fan.pwm_ratio {
-            metrics::gauge!("booth_fan_pwm_ratio").set(f64::from(pwm_ratio));
-        }
-        if let Some(rpm) = fan.rpm {
-            metrics::gauge!("booth_fan_speed_rpm").set(f64::from(rpm));
-        }
-        if let Some(cooling_state) = fan.cooling_state {
-            metrics::gauge!("booth_fan_cooling_state").set(f64::from(cooling_state));
-        }
-        if let Some(max_cooling_state) = fan.max_cooling_state {
-            metrics::gauge!("booth_fan_max_cooling_state").set(f64::from(max_cooling_state));
-        }
-    }
+    let fan_available = snapshot.fan.is_some();
+    let fan = snapshot.fan.unwrap_or_default();
+    metrics::gauge!("booth_fan_available").set(if fan_available { 1.0 } else { 0.0 });
+    metrics::gauge!("booth_fan_tachometer_available").set(if fan.rpm.is_some() {
+        1.0
+    } else {
+        0.0
+    });
+    metrics::gauge!("booth_fan_commanded_on").set(fan.commanded_on.map_or(
+        f64::NAN,
+        |commanded_on| if commanded_on { 1.0 } else { 0.0 },
+    ));
+    metrics::gauge!("booth_fan_pwm_ratio").set(fan.pwm_ratio.map_or(f64::NAN, f64::from));
+    metrics::gauge!("booth_fan_speed_rpm").set(fan.rpm.map_or(f64::NAN, f64::from));
+    metrics::gauge!("booth_fan_cooling_state").set(fan.cooling_state.map_or(f64::NAN, f64::from));
+    metrics::gauge!("booth_fan_max_cooling_state")
+        .set(fan.max_cooling_state.map_or(f64::NAN, f64::from));
     if let Some(cpu) = &snapshot.cpu {
         metrics::gauge!("booth_cpu_usage_ratio").set(f64::from(cpu.usage_ratio));
         if let Some(la) = cpu.load_avg_1m {
@@ -988,10 +988,58 @@ mod tests {
             text.contains("booth_fan_speed_rpm"),
             "missing booth_fan_speed_rpm in:\n{text}"
         );
+        assert!(
+            text.contains("booth_fan_available"),
+            "missing booth_fan_available in:\n{text}"
+        );
+        assert!(
+            text.contains("booth_fan_tachometer_available"),
+            "missing booth_fan_tachometer_available in:\n{text}"
+        );
         // Global label is applied to every series.
         assert!(
             text.contains("booth_id=\"test-booth\""),
             "missing booth_id global label in:\n{text}"
+        );
+    }
+
+    #[test]
+    fn unavailable_fan_data_replaces_previous_gauges() {
+        let handle = ensure_registry();
+        record_snapshot_gauges(&SystemSnapshot {
+            fan: Some(FanStats {
+                commanded_on: Some(true),
+                pwm_ratio: Some(0.4),
+                rpm: Some(2_000),
+                cooling_state: Some(2),
+                max_cooling_state: Some(4),
+            }),
+            ..SystemSnapshot::default()
+        });
+        record_snapshot_gauges(&SystemSnapshot::default());
+
+        let text = handle.render();
+        let rpm = text
+            .lines()
+            .find(|line| line.starts_with("booth_fan_speed_rpm{"))
+            .expect("RPM gauge should exist");
+        let commanded = text
+            .lines()
+            .find(|line| line.starts_with("booth_fan_commanded_on{"))
+            .expect("commanded-on gauge should exist");
+        let available = text
+            .lines()
+            .find(|line| line.starts_with("booth_fan_available{"))
+            .expect("availability gauge should exist");
+
+        assert!(rpm.ends_with(" NaN"), "stale RPM should be cleared: {rpm}");
+        assert!(
+            commanded.ends_with(" NaN"),
+            "stale command should be cleared: {commanded}"
+        );
+        assert!(
+            available.ends_with(" 0"),
+            "fan should be unavailable: {available}"
         );
     }
 

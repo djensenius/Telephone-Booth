@@ -78,9 +78,8 @@ GPIO18/PWM0 conflicts with the Pi's onboard analog headphone output. The booth
 uses USB audio, so disable only the onboard device and load the custom overlay:
 
 ```ini
-dtparam=audio=off
-
 [all]
+dtparam=audio=off
 dtoverlay=noctua-pwm-fan
 ```
 
