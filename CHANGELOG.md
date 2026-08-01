@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/djensenius/Telephone-Booth/compare/v0.10.0...v0.10.1) (2026-08-01)
+
+
+### Documentation
+
+* fix architecture diagram rendering ([#143](https://github.com/djensenius/Telephone-Booth/issues/143)) ([3f3e43a](https://github.com/djensenius/Telephone-Booth/commit/3f3e43ac9c071203ce9a8c33f3945c9bd525bf77))
+
 ## [0.10.0](https://github.com/djensenius/Telephone-Booth/compare/v0.9.1...v0.10.0) (2026-07-31)
 
 
