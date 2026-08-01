@@ -21,7 +21,7 @@ flowchart LR
   subgraph Adapters
     PI[booth-pi\nrppal / cpal / reqwest]
     MK[booth-mock\nin-memory]
-    F32[(future)\nbooth-esp32]
+    F32["(future)\nbooth-esp32"]
   end
   subgraph Edge
     OP[Operator HTTPS]
