@@ -20,7 +20,7 @@ config as TOML with secrets redacted to the last 4 characters.
 hook_bcm         = 17        # physical pin 11
 rotary_pulse_bcm = 27        # physical pin 13
 rotary_gate_bcm  = 22        # physical pin 15
-power_button_bcm = 26        # physical pin 37 (only polled when [power_button].enabled)
+power_button_bcm = 3         # SCL, physical pin 5; supports wake after power-off
 pull             = "up"      # "up" | "down"
 debounce_ms      = 25
 invert.hook      = false
@@ -176,6 +176,12 @@ A short press reboots (`systemctl reboot`); a hold past `hold_ms` powers off
 shares a single current limit, so colours cannot be mixed. When either feature
 is enabled, its pins must not collide with the phone-harness pins or each other,
 or `validate_config` fails at startup.
+
+The software default remains BCM 26, but the reference booth overrides it to
+BCM 3 (`SCL`, physical pin 5). On a Raspberry Pi 4, BCM 3 can wake the Pi after
+a safe power-off; the short-press reboot and long-hold power-off behavior is
+unchanged. A screw-terminal HAT may be used if it exposes `SCL` directly. Do
+not confuse `SCL` with SPI `SCLK`, and do not share BCM 3 with an I2C device.
 
 ### Observability
 
