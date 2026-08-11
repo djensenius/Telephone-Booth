@@ -24,7 +24,8 @@
       "release-type": "simple",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Cargo.toml"
+        "Cargo.toml",
+        "Cargo.lock"
       ]
     }
   }
