@@ -234,11 +234,12 @@ when its config and the Release PR title disagree. Past regressions
   symptom that someone added one back. If you genuinely need to
   customise the grouped title, use `group-pull-request-title-pattern`
   (default: `chore: release ${branch}`).
-- **Keep the `# x-release-please-version` marker on the workspace
-  `version = "..."` line in the root `Cargo.toml`.** Without
-  `package-name` set, release-please updates `extra-files` via that
-  generic marker. Removing the marker silently stops version bumps in
-  `Cargo.toml`.
+- **Keep the `# x-release-please-version` markers on the workspace
+  `version = "..."` line in the root `Cargo.toml` and on every internal
+  `booth-*` package version in `Cargo.lock`.** Both files must remain in
+  `extra-files`. Without `package-name` set, release-please updates them via
+  those generic markers. Removing a marker silently leaves that file or
+  package entry at the previous version.
 - **`release-type` stays `simple` per ADR 0008.** Switching to `rust`
   is a separate, deliberate change with its own ADR — do not bundle it
   with an unrelated fix.

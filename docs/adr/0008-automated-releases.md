@@ -38,6 +38,9 @@ configured for a single-component Rust workspace.
   Commits: `feat` → minor, `fix`/`perf` → patch, `feat!` or `BREAKING
   CHANGE:` → major. `bump-minor-pre-major` is true so `feat:` lands as
   `0.x` minors until we cut `1.0.0`.
+- Extra files: release-please's generic updater keeps the workspace version
+  in `Cargo.toml` and every internal `booth-*` package version in `Cargo.lock`
+  synchronized through their `# x-release-please-version` markers.
 - **Do not** set `component`, `package-name`, or a
   `pull-request-title-pattern` containing `${component}` / `${version}`
   on the root package. With `separate-pull-requests: false`,
