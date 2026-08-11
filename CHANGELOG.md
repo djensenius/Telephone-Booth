@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.1](https://github.com/djensenius/Telephone-Booth/compare/v0.10.0...v0.10.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* keep Cargo.lock version synchronized ([#146](https://github.com/djensenius/Telephone-Booth/issues/146)) ([9e5e5f7](https://github.com/djensenius/Telephone-Booth/commit/9e5e5f7b846c5ff6fe304857b8a5a6feca6d8845))
+
+
+### Documentation
+
+* document power button and information card ([#145](https://github.com/djensenius/Telephone-Booth/issues/145)) ([37a8327](https://github.com/djensenius/Telephone-Booth/commit/37a8327161608fdb51e5774f872824f8648ed95b))
+* fix architecture diagram rendering ([#143](https://github.com/djensenius/Telephone-Booth/issues/143)) ([3f3e43a](https://github.com/djensenius/Telephone-Booth/commit/3f3e43ac9c071203ce9a8c33f3945c9bd525bf77))
+
 ## [0.10.0](https://github.com/djensenius/Telephone-Booth/compare/v0.9.1...v0.10.0) (2026-07-31)
 
 
