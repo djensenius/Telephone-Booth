@@ -2,7 +2,8 @@
 hook_bcm = 17
 rotary_pulse_bcm = 27
 rotary_gate_bcm = 22
-power_button_bcm = 26
+# BCM 3 is labelled SCL (not SCLK) on GPIO HATs and can wake a halted Pi 4.
+power_button_bcm = 3
 pull = "up"
 debounce_ms = 25
 invert.hook = false

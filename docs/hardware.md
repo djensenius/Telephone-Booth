@@ -4,6 +4,13 @@ The Rust client targets a Raspberry Pi (any model with the 40-pin header) with
 a **USB-Audio-Class 2.0** audio interface plugged in — a Focusrite Scarlett
 Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
+## Information card
+
+The information card measures **100 mm wide × 87 mm high**. The repository
+includes an editable [`SVG`](reference/information-card.svg) and a print-ready
+[`PDF`](reference/information-card.pdf) using Univers Bold and Univers
+Condensed.
+
 ## Noctua PWM cooling fan
 
 The reference Pi 4 cooling setup uses the **Noctua NF-A4x20 5V PWM**. These
@@ -635,9 +642,9 @@ pulls the switch pin low; each LED cathode is driven low to light that colour.
 
 ### Wiring (reference booth)
 
-The reference booth (Raspberry Pi 4 Model B, Debian 13 trixie) lands the button
-on pins chosen not to overlap the cooling fan (`18`) or the existing phone
-harness (`17/22/27`):
+The reference booth (Raspberry Pi 4 Model B, Debian 13 trixie) lands the switch
+on BCM 3 so the same button can wake the Pi after a safe power-off. The other
+pins avoid the cooling fan (`18`) and existing phone harness (`17/22/27`):
 
 | Button tab (Adafruit 3350) | Wire   | Terminal | BCM | Physical pin |
 | -------------------------- | ------ | -------- | --- | ------------ |
@@ -645,7 +652,7 @@ harness (`17/22/27`):
 | R  (top-right)             | yellow | IO5      | 5   | 29           |
 | G  (bottom-right)          | green  | IO6      | 6   | 31           |
 | B  (bottom-left)           | blue   | IO13     | 13  | 33           |
-| switch (mid-right, large)  | white  | IO26     | 26  | 37           |
+| switch (mid-right, large)  | white  | SCL      | 3   | 5            |
 | switch (mid-left, large)   | black  | GND      | —   | 39           |
 
 The LED ring shares a **common anode** on the 3V3 rail (button tab `C+`); the
@@ -656,10 +663,17 @@ three cathodes (`R`/`G`/`B`) are each driven low to light that colour.
 > [As-built dial + hook wiring](#as-built-dial--hook-wiring-reference-booth)).
 > On this button harness they are, per the table above: **red = LED anode
 > (3V3)**, **yellow = red cathode**, **green = green cathode**, **blue = blue
-> cathode**, **white = switch to BCM 26**, **black = switch to GND**. Note in
+> cathode**, **white = switch to BCM 3 (`SCL`)**, **black = switch to GND**.
+> Note in
 > particular that white is a *switch* lead here and red is *3V3* — wiring
 > either by dial-harness habit shorts the LED supply. **Label both bundles** so
 > they are never confused during install.
+
+On the reference screw-terminal GPIO HAT, use the terminal labelled **`SCL`**.
+Do not use **`SCLK`**: `SCL` is BCM 3 (I2C clock and the Pi 4 wake pin), while
+`SCLK` is BCM 11 (SPI clock) and cannot wake a halted Pi. Connecting through a
+HAT is equivalent to connecting directly to physical pin 5, provided the HAT
+passes BCM 3 through and no I2C peripheral is using it.
 
 ### Only one colour at a time (shared current limit)
 
@@ -699,6 +713,8 @@ via `booth_core::status_led_for`.
   (`systemctl reboot`).
 - **Press and hold** past the threshold (default **3000 ms**,
   `power_button.hold_ms`) → **power off** (`systemctl poweroff`).
+- **Press while halted** → **wake** the Pi. This is a Pi hardware function of
+  BCM 3; the booth service is not running while the Pi is halted.
 
 ### Authorization for reboot / power off
 
@@ -720,14 +736,17 @@ If you run the binary outside the package, install that rule yourself (or run
 the service as `root`), otherwise both button actions log
 `poweroff failed: systemctl … exited with …` and nothing happens.
 
-### Pi 4 wake caveat
+### Pi 4 wake behavior
 
 On the Raspberry Pi 4, waking a **halted** Pi with a GPIO requires **BCM 3**
-(I2C1 SCL). The reference button harness uses BCM 26 so the runtime can
-distinguish short presses from holds, which means this button can **reboot**
-and **power off** the booth but cannot power a halted booth back on. If
-physical power-on is required, add a separate momentary switch on BCM 3 or fit
-an inline switch on the PSU upstream of the Pi.
+(I2C1 SCL). Wiring the booth button to BCM 3 does not change its runtime
+behavior: the software can still distinguish a short press from a hold. It
+adds wake-after-halt to the existing short-press reboot and long-hold
+power-off actions.
+
+BCM 3 is also the I2C1 clock line. Do not use this wiring if the booth needs
+that I2C bus; keep the button on the default BCM 26 and use a separate wake
+switch or an inline PSU controller instead.
 
 See [`configuration.md`](configuration.md) for every config key and environment
 override.

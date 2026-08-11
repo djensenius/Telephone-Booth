@@ -2,6 +2,11 @@
 
 **Status:** accepted.
 
+**Deployment note (2026-08):** The software default remains BCM 26, preserving
+the decision below. The reference booth now overrides the button pin to BCM 3
+so the same button can also wake a halted Pi 4. Short-press reboot and
+long-hold power-off behavior is unchanged; see `hardware.md`.
+
 ## Context
 
 Issue #135 asks for a physical power/reset control and an at-a-glance status
