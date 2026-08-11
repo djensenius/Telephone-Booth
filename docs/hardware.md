@@ -4,6 +4,13 @@ The Rust client targets a Raspberry Pi (any model with the 40-pin header) with
 a **USB-Audio-Class 2.0** audio interface plugged in — a Focusrite Scarlett
 Solo / 2i2 is the reference device, but any UAC2 interface should work.
 
+## Information card
+
+The information card measures **100 mm wide × 87 mm high**. The repository
+includes an editable [`SVG`](reference/information-card.svg) and a print-ready
+[`PDF`](reference/information-card.pdf) using Univers Bold and Univers
+Condensed.
+
 ## Noctua PWM cooling fan
 
 The reference Pi 4 cooling setup uses the **Noctua NF-A4x20 5V PWM**. These
