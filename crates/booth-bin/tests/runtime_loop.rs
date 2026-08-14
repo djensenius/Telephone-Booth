@@ -182,20 +182,25 @@ async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>
     inject(&runtime.commands, Event::RotaryPulse).await?;
     inject(&runtime.commands, Event::Tick).await?;
 
-    // Wait for QuestionReady to be produced by the fast fetch.
+    // Wait for QuestionReady to start ringback, then answer into the question.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         let state = snapshot(&runtime.commands).await?;
-        if matches!(state, State::PlayingQuestion { .. }) {
+        if matches!(state, State::RingingQuestion { .. }) {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("never reached PlayingQuestion state".into());
+            return Err("never reached RingingQuestion state".into());
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
 
     // PlaybackEnded → Beep, PlaybackEnded → Recording.
+    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
+        matches!(state, State::PlayingQuestion { .. })
+    })
+    .await?;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
@@ -294,7 +299,7 @@ async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Err
         },
     );
 
-    // Drive to Recording: dial 1 → question → beep → record.
+    // Drive to Recording: dial 1 → ringback → question → beep → record.
     inject(&runtime.commands, Event::HookOff).await?;
     inject(&runtime.commands, Event::RotaryPulse).await?;
     inject(&runtime.commands, Event::Tick).await?;
@@ -303,15 +308,20 @@ async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Err
     loop {
         if matches!(
             snapshot(&runtime.commands).await?,
-            State::PlayingQuestion { .. }
+            State::RingingQuestion { .. }
         ) {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("never reached PlayingQuestion".into());
+            return Err("never reached RingingQuestion".into());
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
+        matches!(state, State::PlayingQuestion { .. })
+    })
+    .await?;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
@@ -403,15 +413,20 @@ async fn hangup_with_no_recording_in_flight_resets_to_idle() -> Result<(), Box<d
     loop {
         if matches!(
             snapshot(&runtime.commands).await?,
-            State::PlayingQuestion { .. }
+            State::RingingQuestion { .. }
         ) {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("never reached PlayingQuestion".into());
+            return Err("never reached RingingQuestion".into());
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    inject(&runtime.commands, Event::PlaybackEnded).await?;
+    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
+        matches!(state, State::PlayingQuestion { .. })
+    })
+    .await?;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     inject(&runtime.commands, Event::PlaybackEnded).await?;
@@ -594,6 +609,11 @@ async fn drive_to_recording(
     inject(commands, Event::HookOff).await?;
     inject(commands, Event::RotaryPulse).await?;
     inject(commands, Event::Tick).await?;
+    wait_for_state(commands, "RingingQuestion", |state| {
+        matches!(state, State::RingingQuestion { .. })
+    })
+    .await?;
+    inject(commands, Event::PlaybackEnded).await?;
     wait_for_state(commands, "PlayingQuestion", |state| {
         matches!(state, State::PlayingQuestion { .. })
     })

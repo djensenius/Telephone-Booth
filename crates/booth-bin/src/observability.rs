@@ -546,7 +546,9 @@ fn state_name_to_booth_status(name: &str) -> booth_hal::BoothStatus {
     match name {
         "idle" | "Idle" => BoothStatus::Idle,
         "dial_tone" | "dialing" | "DialTone" => BoothStatus::DialTone,
-        "playing_question" | "beep" | "PlayingQuestion" => BoothStatus::PlayingQuestion,
+        "ringing_question" | "playing_question" | "beep" | "PlayingQuestion" => {
+            BoothStatus::PlayingQuestion
+        }
         "recording" | "Recording" => BoothStatus::Recording,
         "uploading" | "Uploading" => BoothStatus::Uploading,
         "playing_message" | "PlayingMessage" => BoothStatus::PlayingMessage,

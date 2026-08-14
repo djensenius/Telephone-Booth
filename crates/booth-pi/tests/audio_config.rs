@@ -29,6 +29,7 @@ fn device_matching_is_case_insensitive_and_ignores_empty_needles() {
 fn embedded_tones_are_flac_streams() {
     for tone in [
         BuiltinTone::DialTone,
+        BuiltinTone::Ringback,
         BuiltinTone::Beep,
         BuiltinTone::LineBusy,
         BuiltinTone::CallUnavailable,

@@ -86,7 +86,8 @@ pub fn status_led_for(state: &State) -> (LedColour, LedPattern) {
             },
         ),
         // Any prompt playback: steady blue.
-        State::PlayingQuestion { .. }
+        State::RingingQuestion { .. }
+        | State::PlayingQuestion { .. }
         | State::PlayingMessage
         | State::PlayingInstructions
         | State::CallUnavailable => (
@@ -138,6 +139,11 @@ pub enum State {
     Dialing {
         /// Number of pulses received in this group so far.
         pulses: u8,
+    },
+    /// Playing ringback before the fetched question is answered.
+    RingingQuestion {
+        /// Operator's id for the question waiting to be played.
+        question_id: QuestionId,
     },
     /// Playing the question audio (dial 1).
     PlayingQuestion {
@@ -202,7 +208,9 @@ impl State {
         match self {
             State::Idle => BoothStatus::Idle,
             State::DialTone | State::Dialing { .. } => BoothStatus::DialTone,
-            State::PlayingQuestion { .. } | State::Beep { .. } => BoothStatus::PlayingQuestion,
+            State::RingingQuestion { .. } | State::PlayingQuestion { .. } | State::Beep { .. } => {
+                BoothStatus::PlayingQuestion
+            }
             State::Recording { .. } => BoothStatus::Recording,
             State::FinishingRecording { .. } | State::Uploading { .. } => BoothStatus::Uploading,
             State::PlayingMessage => BoothStatus::PlayingMessage,
@@ -219,6 +227,7 @@ impl State {
             State::Idle => "idle",
             State::DialTone => "dial_tone",
             State::Dialing { .. } => "dialing",
+            State::RingingQuestion { .. } => "ringing_question",
             State::PlayingQuestion { .. } => "playing_question",
             State::Beep { .. } => "beep",
             State::Recording { .. } => "recording",
@@ -507,7 +516,16 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
         }
         (S::Dialing { .. }, E::DigitDialed { digit }) => decode_digit(digit),
 
-        // ---- PlayingQuestion -> Beep -> Recording ----
+        // ---- RingingQuestion -> PlayingQuestion -> Beep -> Recording ----
+        (S::RingingQuestion { question_id }, E::PlaybackEnded) => (
+            S::PlayingQuestion {
+                question_id: question_id.clone(),
+            },
+            vec![
+                Effect::Play(AudioRef::RemoteUrl(String::new(), None)),
+                Effect::PutStatus(BoothStatus::PlayingQuestion),
+            ],
+        ),
         (S::PlayingQuestion { question_id }, E::PlaybackEnded) => (
             S::Beep {
                 question_id: question_id.clone(),
@@ -652,11 +670,11 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
 
         // ---- Operator question / message lookups ----
         (S::DialTone, E::QuestionReady { question_id }) => (
-            S::PlayingQuestion {
+            S::RingingQuestion {
                 question_id: question_id.clone(),
             },
             vec![
-                Effect::Play(AudioRef::RemoteUrl(String::new(), None)), // runtime fills in URL
+                Effect::Play(AudioRef::Builtin(BuiltinTone::Ringback)),
                 Effect::PutStatus(BoothStatus::PlayingQuestion),
                 Effect::Log {
                     message: alloc::format!("question ready: {question_id}"),
@@ -832,6 +850,9 @@ mod tests {
         for state in [
             State::DialTone,
             State::Dialing { pulses: 3 },
+            State::RingingQuestion {
+                question_id: "q1".into(),
+            },
             State::PlayingQuestion {
                 question_id: "q1".into(),
             },
@@ -1155,6 +1176,54 @@ mod tests {
     }
 
     #[test]
+    fn question_rings_before_playback_and_beeps_before_recording() {
+        let (state, effects) = handle(
+            State::DialTone,
+            Event::QuestionReady {
+                question_id: "q1".into(),
+            },
+        );
+        assert_eq!(
+            state,
+            State::RingingQuestion {
+                question_id: "q1".into(),
+            }
+        );
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::Ringback))));
+
+        let (state, effects) = handle(state, Event::PlaybackEnded);
+        assert_eq!(
+            state,
+            State::PlayingQuestion {
+                question_id: "q1".into(),
+            }
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Play(AudioRef::RemoteUrl(_, _))))
+        );
+
+        let (state, effects) = handle(state, Event::PlaybackEnded);
+        assert_eq!(
+            state,
+            State::Beep {
+                question_id: "q1".into(),
+            }
+        );
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::Beep))));
+
+        let (state, effects) = handle(state, Event::PlaybackEnded);
+        assert_eq!(
+            state,
+            State::Recording {
+                question_id: "q1".into(),
+            }
+        );
+        assert!(effects.contains(&Effect::StartRecording));
+    }
+
+    #[test]
     fn dialing_a_digit_logs_the_digit() {
         let mut s = State::DialTone;
         for _ in 0..3 {
@@ -1189,6 +1258,9 @@ mod tests {
             State::DialTone,
             State::Dialing { pulses: 0 },
             State::Dialing { pulses: 5 },
+            State::RingingQuestion {
+                question_id: "q1".into(),
+            },
             State::PlayingQuestion {
                 question_id: "q1".into(),
             },

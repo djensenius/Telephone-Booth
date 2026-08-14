@@ -1467,7 +1467,7 @@ fn derive_booth_status(state: &str) -> &'static str {
     match state {
         "idle" | "error" => "idle",
         "dial_tone" | "dialing" => "dial_tone",
-        "playing_question" | "beep" => "playing_question",
+        "ringing_question" | "playing_question" | "beep" => "playing_question",
         "recording" => "recording",
         "uploading" => "uploading",
         "playing_message" => "playing_message",
