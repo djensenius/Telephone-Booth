@@ -1883,8 +1883,8 @@ async fn fetch_instructions(
     recordings_dir: &Path,
     token: &FetchToken,
 ) {
-    match retry_operator("GET /v1/instructions/current", bus, || {
-        operator.instructions()
+    match retry_operator("GET /v1/instructions/random", bus, || {
+        operator.random_instruction()
     })
     .await
     {
@@ -1901,7 +1901,7 @@ async fn fetch_instructions(
             let _ = event_tx.send(Event::InstructionsReady).await;
         }
         Err(err) => {
-            publish_operator_error(bus, "instructions", &err);
+            publish_operator_error(bus, "random_instruction", &err);
             if !token.is_current() {
                 return;
             }
@@ -2867,7 +2867,7 @@ mod tests {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
 
-        async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
+        async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
 

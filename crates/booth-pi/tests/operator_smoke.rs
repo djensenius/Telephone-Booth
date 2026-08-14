@@ -182,6 +182,27 @@ async fn get_random_message_deserializes_audio_sha() -> TestResult {
 }
 
 #[tokio::test]
+async fn get_random_instruction_deserializes_200() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("GET"))
+        .and(path("/v1/instructions/random"))
+        .and(header("accept", "application/json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(message_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instruction = client.get_random_instruction().await?;
+    assert_eq!(instruction.id, "22222222-2222-2222-2222-222222222222");
+    assert_eq!(instruction.audio_url, "https://blob.example/message.flac");
+    assert_eq!(
+        instruction.audio_sha256.as_deref(),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_random_question_maps_404() -> TestResult {
     let (server, client) = client_with_server().await?;
     Mock::given(method("GET"))
@@ -192,6 +213,24 @@ async fn get_random_question_maps_404() -> TestResult {
         .await;
 
     let result = client.get_random_question().await;
+    assert!(matches!(
+        result,
+        Err(OperatorError::Server { status: 404, .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_random_instruction_maps_404() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    Mock::given(method("GET"))
+        .and(path("/v1/instructions/random"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("none"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = client.get_random_instruction().await;
     assert!(matches!(
         result,
         Err(OperatorError::Server { status: 404, .. })

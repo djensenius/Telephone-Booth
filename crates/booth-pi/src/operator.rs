@@ -286,14 +286,14 @@ impl PiOperatorClient {
         }
     }
 
-    /// Fetch the current admin-uploaded instructions clip.
-    pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
+    /// Fetch a random active admin-uploaded instructions clip.
+    pub async fn get_random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
         #[cfg(feature = "operator")]
         {
             let message = self
                 .send_json::<ApiMessage>(
                     reqwest::Method::GET,
-                    "/v1/instructions/current",
+                    "/v1/instructions/random",
                     None::<&()>,
                 )
                 .await?;
@@ -478,8 +478,8 @@ impl OperatorClient for PiOperatorClient {
         self.get_random_message().await
     }
 
-    async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
-        self.get_instructions().await
+    async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
+        self.get_random_instruction().await
     }
 
     async fn init_upload(
