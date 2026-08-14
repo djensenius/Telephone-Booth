@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/djensenius/Telephone-Booth/compare/v0.10.1...v0.10.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **audio:** add ringback before questions ([8cf08d8](https://github.com/djensenius/Telephone-Booth/commit/8cf08d84f31e4c96747658b5cb19543cac2ccc3b))
+
 ## [0.10.1](https://github.com/djensenius/Telephone-Booth/compare/v0.10.0...v0.10.1) (2026-08-11)
 
 
