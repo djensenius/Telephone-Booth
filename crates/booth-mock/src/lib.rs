@@ -149,7 +149,7 @@ impl MockAudioSink {
 
     /// Signal that the currently-playing source finished naturally.
     pub fn finish_playback(&self) {
-        self.inner.end.notify_waiters();
+        self.inner.end.notify_one();
         self.publish_log("playback finished".to_string());
     }
 

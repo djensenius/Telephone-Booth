@@ -39,6 +39,7 @@ use crate::url_policy::AudioFetchPolicy;
 use crate::{AudioConfig, OperatorConfig};
 
 const DIAL_TONE_FLAC: &[u8] = include_bytes!("../assets/dial-tone.flac");
+const RINGBACK_FLAC: &[u8] = include_bytes!("../assets/ringback.flac");
 const BEEP_FLAC: &[u8] = include_bytes!("../assets/beep.flac");
 const LINE_BUSY_FLAC: &[u8] = include_bytes!("../assets/line-busy.flac");
 const CALL_UNAVAILABLE_FLAC: &[u8] = include_bytes!("../assets/call-unavailable.flac");
@@ -82,6 +83,7 @@ pub fn device_name_matches(candidate: &str, configured_substring: Option<&str>) 
 pub fn embedded_tone_bytes(tone: BuiltinTone) -> Result<&'static [u8], AudioError> {
     match tone {
         BuiltinTone::DialTone => Ok(DIAL_TONE_FLAC),
+        BuiltinTone::Ringback => Ok(RINGBACK_FLAC),
         BuiltinTone::Beep => Ok(BEEP_FLAC),
         BuiltinTone::LineBusy => Ok(LINE_BUSY_FLAC),
         BuiltinTone::CallUnavailable => Ok(CALL_UNAVAILABLE_FLAC),

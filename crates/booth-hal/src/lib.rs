@@ -289,6 +289,8 @@ pub enum AudioRef {
 pub enum BuiltinTone {
     /// Continuous North-American 350 + 440 Hz dial tone.
     DialTone,
+    /// One North-American 440 + 480 Hz ringback burst before a call is answered.
+    Ringback,
     /// Short "go ahead" beep before recording starts.
     Beep,
     /// Slow busy / line-busy signal.

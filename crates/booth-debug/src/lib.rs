@@ -1150,7 +1150,9 @@ fn operator_state_name(name: &str) -> String {
         "idle" | "Idle" => "idle",
         "dial_tone" | "DialTone" => "dialTone",
         "dialing" | "Dialing" => "dialing",
-        "playing_question" | "PlayingQuestion" => "playingQuestion",
+        "ringing_question" | "RingingQuestion" | "playing_question" | "PlayingQuestion" => {
+            "playingQuestion"
+        }
         "beep" | "Beep" => "beep",
         "recording" | "Recording" => "recording",
         "uploading" | "Uploading" => "uploading",
@@ -1588,6 +1590,7 @@ mod tests {
     #[test]
     fn maps_operator_state_names() {
         assert_eq!(operator_state_name("dial_tone"), "dialTone");
+        assert_eq!(operator_state_name("ringing_question"), "playingQuestion");
         assert_eq!(operator_state_name("PlayingQuestion"), "playingQuestion");
     }
 
