@@ -51,8 +51,8 @@ flowchart LR
 
 ## State machine
 
-States: `Idle`, `DialTone`, `Dialing { pulses }`, `PlayingQuestion`, `Beep`,
-`Recording`, `FinishingRecording { question_id, on_hook }`,
+States: `Idle`, `DialTone`, `Dialing { pulses }`, `RingingQuestion`,
+`PlayingQuestion`, `Beep`, `Recording`, `FinishingRecording { question_id, on_hook }`,
 `Uploading { recording_id, on_hook }`,
 `PlayingMessage`, `PlayingInstructions`, `CallUnavailable`, `Error { reason }`.
 
@@ -68,9 +68,10 @@ Pulses 1..=9 map to themselves; **10 pulses = digit 0**. More than 10 pulses
 in a single group resets to `DialTone`. A pulse group is closed by `Tick`
 after `PULSE_GROUP_TIMEOUT_MS = 350` ms.
 
-Digit 1 fetches a random question; digit 2 fetches a random message;
-digit 0 plays the operator-recorded `Instructions` audio; digits 3..=9
-play the bundled "call cannot be completed as dialed" prompt.
+Digit 1 fetches a random question, plays ringback, plays the question, then
+plays a beep before recording; digit 2 fetches a random message; digit 0 plays
+the operator-recorded `Instructions` audio; digits 3..=9 play the bundled
+"call cannot be completed as dialed" prompt.
 
 Hanging up is a **full reset of the booth's outputs**: every state stops
 playback (`StopAudio`) and cancels the pulse timeout, so nothing keeps talking

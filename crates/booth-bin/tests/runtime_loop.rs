@@ -5,7 +5,7 @@ use std::error::Error;
 use booth_bin::{RuntimeOptions, build_mock_adapters, spawn_runtime};
 use booth_core::{Event, State};
 use booth_debug::RuntimeCommand;
-use booth_hal::TelemetryEvent;
+use booth_hal::{AudioRef, BuiltinTone, TelemetryEvent};
 use booth_telemetry::TelemetryBus;
 use tokio::sync::oneshot;
 
@@ -177,45 +177,7 @@ async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>
         },
     );
 
-    // Drive to DialTone → dial 1 → FetchRandomQuestion (fast this time).
-    inject(&runtime.commands, Event::HookOff).await?;
-    inject(&runtime.commands, Event::RotaryPulse).await?;
-    inject(&runtime.commands, Event::Tick).await?;
-
-    // Wait for QuestionReady to start ringback, then answer into the question.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        let state = snapshot(&runtime.commands).await?;
-        if matches!(state, State::RingingQuestion { .. }) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached RingingQuestion state".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-
-    // PlaybackEnded → Beep, PlaybackEnded → Recording.
-    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
-        matches!(state, State::PlayingQuestion { .. })
-    })
-    .await?;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        let state = snapshot(&runtime.commands).await?;
-        if matches!(state, State::Recording { .. }) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached Recording state".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
 
     // RecordingFinished → Uploading (triggers UploadRecording effect).
     // Before injecting RecordingFinished, add latency so the upload is slow.
@@ -299,43 +261,7 @@ async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Err
         },
     );
 
-    // Drive to Recording: dial 1 → ringback → question → beep → record.
-    inject(&runtime.commands, Event::HookOff).await?;
-    inject(&runtime.commands, Event::RotaryPulse).await?;
-    inject(&runtime.commands, Event::Tick).await?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if matches!(
-            snapshot(&runtime.commands).await?,
-            State::RingingQuestion { .. }
-        ) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached RingingQuestion".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
-        matches!(state, State::PlayingQuestion { .. })
-    })
-    .await?;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        if matches!(snapshot(&runtime.commands).await?, State::Recording { .. }) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached Recording".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
 
     // Finish the (too-short) recording. The gate should discard it and the
     // booth should return to a dial tone without issuing an upload slot.
@@ -405,42 +331,7 @@ async fn hangup_with_no_recording_in_flight_resets_to_idle() -> Result<(), Box<d
         },
     );
 
-    inject(&runtime.commands, Event::HookOff).await?;
-    inject(&runtime.commands, Event::RotaryPulse).await?;
-    inject(&runtime.commands, Event::Tick).await?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if matches!(
-            snapshot(&runtime.commands).await?,
-            State::RingingQuestion { .. }
-        ) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached RingingQuestion".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-    wait_for_state(&runtime.commands, "PlayingQuestion", |state| {
-        matches!(state, State::PlayingQuestion { .. })
-    })
-    .await?;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    inject(&runtime.commands, Event::PlaybackEnded).await?;
-
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        if matches!(snapshot(&runtime.commands).await?, State::Recording { .. }) {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("never reached Recording".into());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
 
     // Reaching `Recording` only means the transition happened; wait until the
     // `StartRecording` effect has actually reached the adapter before taking
@@ -566,7 +457,7 @@ async fn hangup_stops_playback_while_an_upload_is_still_running() -> Result<(), 
     );
 
     // First call: reach Recording, then start an upload that takes a long time.
-    drive_to_recording(&runtime.commands).await?;
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
     handles.operator.state().lock().await.latency = Some(std::time::Duration::from_secs(3));
     inject(
         &runtime.commands,
@@ -582,7 +473,7 @@ async fn hangup_stops_playback_while_an_upload_is_still_running() -> Result<(), 
     // Recording (which needs the audio source the upload used to hold), then
     // hang up.
     handles.operator.state().lock().await.latency = None;
-    drive_to_recording(&runtime.commands).await?;
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
     inject(&runtime.commands, Event::HookOn).await?;
 
     // The sink must go quiet well before the 3s upload finishes.
@@ -605,6 +496,7 @@ async fn hangup_stops_playback_while_an_upload_is_still_running() -> Result<(), 
 /// Drive a fresh call from on-hook through dialing 1 to `Recording`.
 async fn drive_to_recording(
     commands: &tokio::sync::mpsc::Sender<RuntimeCommand>,
+    audio_sink: &booth_mock::MockAudioSink,
 ) -> Result<(), Box<dyn Error>> {
     inject(commands, Event::HookOff).await?;
     inject(commands, Event::RotaryPulse).await?;
@@ -613,21 +505,66 @@ async fn drive_to_recording(
         matches!(state, State::RingingQuestion { .. })
     })
     .await?;
-    inject(commands, Event::PlaybackEnded).await?;
+    let ringback_index = wait_for_playback(audio_sink, "ringback", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::Ringback))
+    })
+    .await?;
+    audio_sink.finish_playback();
     wait_for_state(commands, "PlayingQuestion", |state| {
         matches!(state, State::PlayingQuestion { .. })
     })
     .await?;
-    inject(commands, Event::PlaybackEnded).await?;
+    wait_for_playback(audio_sink, "remote question", |source| {
+        matches!(source, AudioRef::RemoteUrl(_, _))
+    })
+    .await?;
+    audio_sink.finish_playback();
     wait_for_state(commands, "Beep", |state| {
         matches!(state, State::Beep { .. })
     })
     .await?;
-    inject(commands, Event::PlaybackEnded).await?;
+    wait_for_playback(audio_sink, "recording beep", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::Beep))
+    })
+    .await?;
+    audio_sink.finish_playback();
     wait_for_state(commands, "Recording", |state| {
         matches!(state, State::Recording { .. })
     })
-    .await
+    .await?;
+
+    let history = audio_sink.state().await.history;
+    assert!(
+        matches!(
+            &history[ringback_index..],
+            [
+                AudioRef::Builtin(BuiltinTone::Ringback),
+                AudioRef::RemoteUrl(_, _),
+                AudioRef::Builtin(BuiltinTone::Beep)
+            ]
+        ),
+        "expected ringback → remote question → beep, got {:?}",
+        &history[ringback_index..]
+    );
+    Ok(())
+}
+
+async fn wait_for_playback(
+    audio_sink: &booth_mock::MockAudioSink,
+    label: &str,
+    predicate: impl Fn(&AudioRef) -> bool,
+) -> Result<usize, Box<dyn Error>> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let state = audio_sink.state().await;
+        if state.playing.as_ref().is_some_and(&predicate) {
+            return Ok(state.history.len() - 1);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!("never started {label} playback").into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 async fn wait_for_state(
