@@ -2867,7 +2867,7 @@ mod tests {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
 
-        async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
+        async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
 

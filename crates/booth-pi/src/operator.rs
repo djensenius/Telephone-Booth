@@ -329,6 +329,12 @@ impl PiOperatorClient {
         }
     }
 
+    /// Fetch a random active admin-uploaded instructions clip.
+    #[deprecated(since = "0.10.3", note = "use get_random_instruction")]
+    pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
+        self.get_random_instruction().await
+    }
+
     /// Inner upload implementation: validates file size and retries on
     /// transient failures. Separated from [`Self::upload_recording`] so the
     /// retry logic can be exercised in tests without URL validation blocking
@@ -478,7 +484,7 @@ impl OperatorClient for PiOperatorClient {
         self.get_random_message().await
     }
 
-    async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
         self.get_random_instruction().await
     }
 

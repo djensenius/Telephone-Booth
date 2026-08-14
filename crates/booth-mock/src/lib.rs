@@ -453,7 +453,7 @@ impl OperatorClient for MockOperatorClient {
         result
     }
 
-    async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
+    async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
         let (request_id, started) = self.begin_request("GET /mock/instructions/random");
         self.apply_latency().await;
         let result = {
