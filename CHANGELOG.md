@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/djensenius/Telephone-Booth/compare/v0.10.2...v0.10.3) (2026-08-15)
+
+
+### Bug Fixes
+
+* **operator:** fetch random active instructions ([#149](https://github.com/djensenius/Telephone-Booth/issues/149)) ([24c3ac6](https://github.com/djensenius/Telephone-Booth/commit/24c3ac6ce05f0a1176883007520f51c6d955d9f3))
+
 ## [0.10.2](https://github.com/djensenius/Telephone-Booth/compare/v0.10.1...v0.10.2) (2026-08-14)
 
 
