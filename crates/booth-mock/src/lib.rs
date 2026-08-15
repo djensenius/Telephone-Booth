@@ -318,7 +318,7 @@ pub struct MockOperatorState {
     pub questions: VecDeque<OperatorQuestion>,
     /// Pre-canned messages, popped FIFO.
     pub messages: VecDeque<OperatorMessage>,
-    /// Pre-canned instructions clips, popped FIFO.
+    /// Pre-canned random instructions clips, popped FIFO for deterministic tests.
     pub instructions: VecDeque<OperatorMessage>,
     /// Status writes received from the booth.
     pub statuses: Vec<BoothStatus>,
@@ -454,7 +454,7 @@ impl OperatorClient for MockOperatorClient {
     }
 
     async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
-        let (request_id, started) = self.begin_request("GET /mock/instructions");
+        let (request_id, started) = self.begin_request("GET /mock/instructions/random");
         self.apply_latency().await;
         let result = {
             let mut s = self.inner.lock().await;

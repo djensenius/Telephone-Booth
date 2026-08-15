@@ -355,7 +355,7 @@ pub enum Effect {
     FetchRandomQuestion,
     /// Ask the operator for a random approved message.
     FetchRandomMessage,
-    /// Ask the operator for the current admin-uploaded instructions clip.
+    /// Ask the operator for a random active admin-uploaded instructions clip.
     FetchInstructions,
     /// Push our current coarse status to the operator.
     PutStatus(BoothStatus),
@@ -804,7 +804,7 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
     let action = match digit {
         1 => "fetching a random question",
         2 => "fetching a random message",
-        0 => "fetching the operator instructions clip",
+        0 => "fetching a random operator instructions clip",
         _ => "playing the call-cannot-be-completed prompt",
     };
     effects.insert(

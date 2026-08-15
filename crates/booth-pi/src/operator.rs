@@ -286,14 +286,14 @@ impl PiOperatorClient {
         }
     }
 
-    /// Fetch the current admin-uploaded instructions clip.
-    pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
+    /// Fetch a random active admin-uploaded instructions clip.
+    pub async fn get_random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
         #[cfg(feature = "operator")]
         {
             let message = self
                 .send_json::<ApiMessage>(
                     reqwest::Method::GET,
-                    "/v1/instructions/current",
+                    "/v1/instructions/random",
                     None::<&()>,
                 )
                 .await?;
@@ -327,6 +327,12 @@ impl PiOperatorClient {
                 "booth-pi was compiled without the operator feature".into(),
             ))
         }
+    }
+
+    /// Fetch a random active admin-uploaded instructions clip.
+    #[deprecated(since = "0.10.3", note = "use get_random_instruction")]
+    pub async fn get_instructions(&self) -> Result<OperatorMessage, OperatorError> {
+        self.get_random_instruction().await
     }
 
     /// Inner upload implementation: validates file size and retries on
@@ -479,7 +485,7 @@ impl OperatorClient for PiOperatorClient {
     }
 
     async fn instructions(&self) -> Result<OperatorMessage, OperatorError> {
-        self.get_instructions().await
+        self.get_random_instruction().await
     }
 
     async fn init_upload(

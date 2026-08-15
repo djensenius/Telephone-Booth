@@ -62,7 +62,7 @@ Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
 
 Effects the runtime executes: `Play(AudioRef)`, `Stop`, `StartRecording`,
 `StopRecording`, `Upload`, `FetchRandomQuestion`, `FetchRandomMessage`,
-`PutStatus(BoothStatus)`, `ArmPulseTimeout`.
+`FetchInstructions`, `PutStatus(BoothStatus)`, `ArmPulseTimeout`.
 
 Pulses 1..=9 map to themselves; **10 pulses = digit 0**. More than 10 pulses
 in a single group resets to `DialTone`. A pulse group is closed by `Tick`
@@ -70,7 +70,7 @@ after `PULSE_GROUP_TIMEOUT_MS = 350` ms.
 
 Digit 1 fetches a random question, plays ringback, plays the question, then
 plays a beep before recording; digit 2 fetches a random message; digit 0 plays
-the operator-recorded `Instructions` audio; digits 3..=9 play the bundled
+one random active operator-recorded `Instructions` clip; digits 3..=9 play the bundled
 "call cannot be completed as dialed" prompt.
 
 Hanging up is a **full reset of the booth's outputs**: every state stops

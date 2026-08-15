@@ -540,8 +540,16 @@ pub trait OperatorClient: Send + Sync {
     /// Fetch a random previously-approved message.
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError>;
 
-    /// Fetch the current admin-uploaded instructions clip.
+    /// Fetch a random active admin-uploaded instructions clip.
     async fn instructions(&self) -> Result<OperatorMessage, OperatorError>;
+
+    /// Fetch a random active admin-uploaded instructions clip.
+    ///
+    /// New code should prefer this semantic name. The default preserves
+    /// compatibility with implementations of [`OperatorClient::instructions`].
+    async fn random_instruction(&self) -> Result<OperatorMessage, OperatorError> {
+        self.instructions().await
+    }
 
     /// Reserve an upload slot for a recording answering `question_id`.
     ///
