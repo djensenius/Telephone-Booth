@@ -164,10 +164,46 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Current WMO condition category reported by Open-Meteo.",
+      "description": "Current Open-Meteo WMO weather code mapped to a readable condition.",
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" }
+          "color": { "mode": "palette-classic" },
+          "mappings": [
+            {
+              "options": {
+                "-1": { "color": "gray", "text": "Unavailable" },
+                "0": { "color": "yellow", "text": "Clear sky" },
+                "1": { "color": "yellow", "text": "Mainly clear" },
+                "2": { "color": "blue", "text": "Partly cloudy" },
+                "3": { "color": "gray", "text": "Overcast" },
+                "45": { "color": "gray", "text": "Fog" },
+                "48": { "color": "gray", "text": "Rime fog" },
+                "51": { "color": "blue", "text": "Light drizzle" },
+                "53": { "color": "blue", "text": "Drizzle" },
+                "55": { "color": "blue", "text": "Heavy drizzle" },
+                "56": { "color": "blue", "text": "Light freezing drizzle" },
+                "57": { "color": "blue", "text": "Freezing drizzle" },
+                "61": { "color": "blue", "text": "Light rain" },
+                "63": { "color": "blue", "text": "Rain" },
+                "65": { "color": "blue", "text": "Heavy rain" },
+                "66": { "color": "blue", "text": "Light freezing rain" },
+                "67": { "color": "blue", "text": "Freezing rain" },
+                "71": { "color": "blue", "text": "Light snowfall" },
+                "73": { "color": "blue", "text": "Snowfall" },
+                "75": { "color": "blue", "text": "Heavy snowfall" },
+                "77": { "color": "blue", "text": "Snow grains" },
+                "80": { "color": "blue", "text": "Light rain showers" },
+                "81": { "color": "blue", "text": "Rain showers" },
+                "82": { "color": "blue", "text": "Heavy rain showers" },
+                "85": { "color": "blue", "text": "Light snow showers" },
+                "86": { "color": "blue", "text": "Snow showers" },
+                "95": { "color": "orange", "text": "Thunderstorm" },
+                "96": { "color": "red", "text": "Thunderstorm with light hail" },
+                "99": { "color": "red", "text": "Thunderstorm with hail" }
+              },
+              "type": "value"
+            }
+          ]
         }
       },
       "gridPos": { "h": 5, "w": 4, "x": 0, "y": 6 },
@@ -177,13 +213,13 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "booth_outdoor_weather_condition_info{booth_id=~\"$booth\",source=\"open_meteo\"} == 1",
+          "expr": "booth_outdoor_weather_code{booth_id=~\"$booth\",source=\"open_meteo\"} or on (booth_id) (0 * booth_uptime_seconds{booth_id=~\"$booth\"} - 1)",
           "instant": true,
-          "legendFormat": "{{condition}} · {{booth_id}}",
+          "legendFormat": "{{booth_id}}",
           "range": false,
           "refId": "A"
         }
