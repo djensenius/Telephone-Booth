@@ -1,0 +1,433 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Pi CPU and GL.iNet router battery and thermal-zone temperatures.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current Raspberry Pi CPU temperature. Warning at 70 °C; critical at 80 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_cpu_temperature_celsius{booth_id=~\"$booth\"}",
+          "instant": true,
+          "legendFormat": "Pi CPU · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current Pi CPU temperature",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current GL.iNet router battery temperature. Warning at 45 °C; critical at 55 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 45 },
+              { "color": "red", "value": 55 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "glinet_battery_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}",
+          "instant": true,
+          "legendFormat": "Battery · {{instance}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current router battery temperature",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current hottest exported thermal zone per selected router. Warning at 70 °C; critical at 80 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "topk by (instance) (1, glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"})",
+          "instant": true,
+          "legendFormat": "{{name}} ({{zone}}) · {{instance}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current hottest router zone",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Selected Pi CPU, router battery, and hottest router-zone temperatures on one scale.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "B" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 45 },
+                    { "color": "red", "value": 55 }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_cpu_temperature_celsius{booth_id=~\"$booth\"}",
+          "legendFormat": "Pi CPU · {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "glinet_battery_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}",
+          "legendFormat": "Router battery · {{instance}}",
+          "refId": "B"
+        },
+        {
+          "expr": "max by (instance) (glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"})",
+          "legendFormat": "Hottest router zone · {{instance}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Pi and router temperatures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Raspberry Pi CPU temperature history. Warning at 70 °C; critical at 80 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 15 },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_cpu_temperature_celsius{booth_id=~\"$booth\"}",
+          "legendFormat": "Pi CPU · {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Pi CPU temperature",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "GL.iNet battery temperature history. Warning at 45 °C; critical at 55 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 45 },
+              { "color": "red", "value": 55 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 15 },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "glinet_battery_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}",
+          "legendFormat": "Battery · {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Router battery temperature",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "All exported GL.iNet thermal zones for the selected router instances.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 24 },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}",
+          "legendFormat": "{{name}} ({{zone}}) · {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "All router thermal zones",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "id": 8,
+      "panels": [],
+      "title": "Individual router thermal zones",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "One repeated chart per selected thermal sensor name. Warning at 70 °C; critical at 80 °C.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 36 },
+      "id": 9,
+      "maxPerRow": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "repeat": "thermal_sensor",
+      "repeatDirection": "h",
+      "targets": [
+        {
+          "expr": "glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\",name=~\"$thermal_sensor\"}",
+          "legendFormat": "{{name}} ({{zone}}) · {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Router zone — $thermal_sensor",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["booth", "thermals"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "prometheus",
+          "value": "eet73sk9rhts0f"
+        },
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(booth_uptime_seconds, booth_id)",
+        "includeAll": true,
+        "label": "Booth",
+        "multi": true,
+        "name": "booth",
+        "options": [],
+        "query": "label_values(booth_uptime_seconds, booth_id)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(glinet_thermal_temperature_celsius{job=\"TelephoneRouter\"}, instance)",
+        "includeAll": true,
+        "label": "Router instance",
+        "multi": true,
+        "name": "router",
+        "options": [],
+        "query": "label_values(glinet_thermal_temperature_celsius{job=\"TelephoneRouter\"}, instance)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}, name)",
+        "includeAll": true,
+        "label": "Thermal sensor",
+        "multi": true,
+        "name": "thermal_sensor",
+        "options": [],
+        "query": "label_values(glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"}, name)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Booth — Thermals",
+  "uid": "booth-thermals",
+  "version": 1,
+  "weekStart": ""
+}
