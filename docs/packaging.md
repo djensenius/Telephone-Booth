@@ -38,7 +38,7 @@ booth hardware.
 | --- | --- |
 | `/usr/bin/telephone-booth` | Rust runtime and diagnostics CLI |
 | `/lib/systemd/system/telephone-booth.service` | Main phone client service |
-| `/lib/systemd/system/telephone-booth-tailscale-serve.service` | `tailscale serve` proxy for `127.0.0.1:8080` |
+| `/lib/systemd/system/telephone-booth-tailscale-serve.service` | `tailscale serve` proxies for `127.0.0.1:8080` and `127.0.0.1:9100` |
 | `/lib/systemd/system/telephone-booth-vmagent.service` | vmagent sidecar that scrapes `/metrics` and remote-writes to VictoriaMetrics |
 | `/usr/lib/sysusers.d/telephone-booth.conf` | Creates the `phonebooth` system user |
 | `/usr/lib/tmpfiles.d/telephone-booth.conf` | Creates `/var/lib/phone-booth`, `/var/lib/phone-booth/vmagent`, `/var/log/phone-booth`, `/etc/phone-booth` |
@@ -73,8 +73,10 @@ the watchdog. The keepalive is only compiled into binaries built with the
 
 `telephone-booth-tailscale-serve.service` is a oneshot unit that persists
 Tailscale's serve config. It waits for the `tailscaled` backend to report
-ready before applying the serve config, so it comes up cleanly after a
-reboot without a manual restart:
+ready before publishing both the booth metrics/debug surface on HTTPS port
+443 and the loopback node exporter on HTTPS port 9100. If Tailscale takes
+longer than the initial bounded wait, systemd retries the unit instead of
+leaving both Prometheus targets down until a manual restart:
 
 ```sh
 sudo systemctl status telephone-booth-tailscale-serve.service

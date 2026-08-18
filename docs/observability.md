@@ -219,9 +219,9 @@ ARGS="--web.listen-address=127.0.0.1:9100"
 
 ```bash
 sudo systemctl restart prometheus-node-exporter
-# Publish loopback :9100 on the tailnet as HTTPS :9100 (real Let's
-# Encrypt cert via MagicDNS, same as the booth's port 443 router).
-sudo tailscale serve --bg --https=9100 http://127.0.0.1:9100
+# The packaged Tailscale Serve unit publishes loopback :9100 on the tailnet
+# as HTTPS :9100, alongside the booth's HTTPS :443 metrics/debug surface.
+sudo systemctl restart telephone-booth-tailscale-serve.service
 ```
 
 ### GL.iNet router power and thermal telemetry
@@ -564,7 +564,9 @@ operator).
   compare with `curl -fsS http://127.0.0.1:8080/metrics | head` on the
   booth itself. If the second works and the first does not, re-run
   `sudo /usr/share/telephone-booth/setup-tailscale-serve.sh` on the
-  booth and confirm `sudo tailscale serve status` lists port 443 → 8080.
+  booth and confirm `sudo tailscale serve status` lists port 443 → 8080
+  and port 9100 → 9100. The systemd unit retries automatically when
+  Tailscale is still connecting during boot.
 - **Remote Prometheus scrape returns 403 / TLS errors** — Tailscale
   ACL is blocking the Prometheus host, or the host isn't on the
   tailnet. Confirm the ACL grants the Prometheus host (or its tag)
