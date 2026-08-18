@@ -171,6 +171,7 @@
           "mappings": [
             {
               "options": {
+                "-1": { "color": "gray", "text": "Unavailable" },
                 "0": { "color": "yellow", "text": "Clear sky" },
                 "1": { "color": "yellow", "text": "Mainly clear" },
                 "2": { "color": "blue", "text": "Partly cloudy" },
@@ -201,10 +202,6 @@
                 "99": { "color": "red", "text": "Thunderstorm with hail" }
               },
               "type": "value"
-            },
-            {
-              "options": { "match": "null", "result": { "color": "gray", "text": "Unavailable" } },
-              "type": "special"
             }
           ]
         }
@@ -220,7 +217,7 @@
       },
       "targets": [
         {
-          "expr": "booth_outdoor_weather_code{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "expr": "booth_outdoor_weather_code{booth_id=~\"$booth\",source=\"open_meteo\"} or on (booth_id) (0 * booth_uptime_seconds{booth_id=~\"$booth\"} - 1)",
           "instant": true,
           "legendFormat": "{{booth_id}}",
           "range": false,
