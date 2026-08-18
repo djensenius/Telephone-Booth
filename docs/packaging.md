@@ -38,7 +38,7 @@ booth hardware.
 | --- | --- |
 | `/usr/bin/telephone-booth` | Rust runtime and diagnostics CLI |
 | `/lib/systemd/system/telephone-booth.service` | Main phone client service |
-| `/lib/systemd/system/telephone-booth-tailscale-serve.service` | `tailscale serve` proxy for `127.0.0.1:8080` |
+| `/lib/systemd/system/telephone-booth-tailscale-serve.service` | `tailscale serve` proxies for `127.0.0.1:8080` and `127.0.0.1:9100` |
 | `/lib/systemd/system/telephone-booth-vmagent.service` | vmagent sidecar that scrapes `/metrics` and remote-writes to VictoriaMetrics |
 | `/usr/lib/sysusers.d/telephone-booth.conf` | Creates the `phonebooth` system user |
 | `/usr/lib/tmpfiles.d/telephone-booth.conf` | Creates `/var/lib/phone-booth`, `/var/lib/phone-booth/vmagent`, `/var/log/phone-booth`, `/etc/phone-booth` |
