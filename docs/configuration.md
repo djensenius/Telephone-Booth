@@ -101,6 +101,14 @@ batch_max         = 200       # events per POST /v1/events
 flush_interval_ms = 2000
 buffer_max        = 4096      # hard cap; drop-oldest on overflow
 
+[weather]
+enabled              = false
+# Rounded deployment coordinates; both are required when enabled.
+# latitude           = 43.65
+# longitude          = -79.43
+poll_interval_seconds   = 600
+request_timeout_seconds = 15
+
 [runtime]
 # Autostart mode. Both default to false. CLI flags (--mock, --simulator) can
 # force a mode on at launch but cannot force it off.
@@ -196,6 +204,23 @@ vmagent's job. See [`observability.md`](observability.md#packaging)
 for the vmagent unit and the `BOOTH_VM_REMOTE_WRITE_URL` env var that
 lives in `/etc/phone-booth/vmagent.env`.
 
+### Outdoor weather
+
+`[weather]` enables a booth-owned Open-Meteo poller that publishes modeled
+outdoor context to the same Prometheus registry as the host metrics. It runs
+only when both `weather.enabled` and `observability.enabled` are true.
+
+Both coordinates are required when enabled. Use rounded coordinates when
+street-level precision is unnecessary; coordinates are sent to Open-Meteo but
+never attached to metric labels or logs. `poll_interval_seconds` must be at
+least 60 seconds. `request_timeout_seconds` must be between 1 and 60 seconds. The
+defaults poll every 10 minutes with a 15-second HTTP timeout.
+
+These values come from a regional forecast model, not a sensor inside the
+booth. Treat them as outdoor context for comparing Pi, modem, battery, and fan
+behavior. See [`observability.md`](observability.md#outdoor-weather) for the
+metric list, freshness semantics, and attribution.
+
 ### Upload caps
 
 Before contacting the operator, the phone refuses recordings that exceed the
@@ -289,12 +314,17 @@ settings:
 | `observability.enabled`                         | `BOOTH_OBSERVABILITY_ENABLED`                                                     |
 | `observability.booth_id`                        | `BOOTH_OBSERVABILITY_BOOTH_ID`                                                    |
 | `observability.operator_forward.enabled`        | `BOOTH_OBSERVABILITY_FORWARD_ENABLED`                                             |
+| `weather.enabled`                               | `BOOTH_WEATHER_ENABLED`                                                           |
+| `weather.latitude`                              | `BOOTH_WEATHER_LATITUDE`                                                          |
+| `weather.longitude`                             | `BOOTH_WEATHER_LONGITUDE`                                                         |
+| `weather.poll_interval_seconds`                 | `BOOTH_WEATHER_POLL_INTERVAL_SECONDS`                                             |
+| `weather.request_timeout_seconds`               | `BOOTH_WEATHER_REQUEST_TIMEOUT_SECONDS`                                           |
 | `runtime.mock`                                  | `BOOTH_RUNTIME_MOCK`                                                              |
 | `runtime.simulator`                             | `BOOTH_RUNTIME_SIMULATOR`                                                         |
 
 Other observability settings (`sample_interval_ms`, `batch_max`,
 `flush_interval_ms`, `buffer_max`) are config-file only and have no
-env override.
+env override. Every `[weather]` setting has an env override.
 
 ## Secret precedence
 

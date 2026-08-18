@@ -2,11 +2,24 @@
   "annotations": {
     "list": []
   },
-  "description": "Pi CPU and GL.iNet router battery and thermal-zone temperatures.",
+  "description": "Pi, GL.iNet router, fan, and modeled outdoor-weather correlation.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": true,
+      "title": "Weather data by Open-Meteo.com",
+      "tooltip": "Open-Meteo weather data attribution",
+      "type": "link",
+      "url": "https://open-meteo.com/"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -26,7 +39,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
       "id": 1,
       "options": {
         "colorMode": "value",
@@ -63,7 +76,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
       "id": 2,
       "options": {
         "colorMode": "value",
@@ -85,7 +98,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Current hottest exported thermal zone per selected router. Warning at 70 °C; critical at 80 °C.",
+      "description": "Current hottest modem thermal zone across mdmq6-0 and mdmss-0 through mdmss-2. Warning at 70 °C; critical at 80 °C.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -100,7 +113,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
       "id": 3,
       "options": {
         "colorMode": "value",
@@ -110,19 +123,251 @@
       },
       "targets": [
         {
-          "expr": "topk by (instance) (1, glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"})",
+          "expr": "topk by (instance) (1, glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\",name=~\"mdmq6-0|mdmss-[0-2]\"})",
           "instant": true,
           "legendFormat": "{{name}} ({{zone}}) · {{instance}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Current hottest router zone",
+      "title": "Current modem temperature",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Selected Pi CPU, router battery, and hottest router-zone temperatures on one scale.",
+      "description": "Current modeled outdoor air temperature from Open-Meteo. This is outdoor context, not an enclosure sensor.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_temperature_celsius{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "instant": true,
+          "legendFormat": "Outdoor · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current outdoor temperature",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current WMO condition category reported by Open-Meteo.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 6 },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_condition_info{booth_id=~\"$booth\",source=\"open_meteo\"} == 1",
+          "instant": true,
+          "legendFormat": "{{condition}} · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current condition",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current modeled outdoor relative humidity.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 6 },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_relative_humidity_percent{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "instant": true,
+          "legendFormat": "Humidity · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Outdoor humidity",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current modeled total cloud cover.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 6 },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_cloud_cover_percent{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "instant": true,
+          "legendFormat": "Cloud cover · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Cloud cover",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Seconds since the booth last fetched a valid Open-Meteo observation. Warning after 20 minutes; critical after one hour.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1200 },
+              { "color": "red", "value": 3600 }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 6 },
+      "id": 14,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "time() - booth_outdoor_weather_last_success_timestamp_seconds{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "instant": true,
+          "legendFormat": "Age · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Weather freshness",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Whether the latest Open-Meteo request completed and decoded successfully.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "options": {
+                "0": { "color": "red", "text": "Failed" },
+                "1": { "color": "green", "text": "Healthy" }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 6 },
+      "id": 15,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_fetch_success{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "instant": true,
+          "legendFormat": "Fetch · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Weather fetch",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current kernel fan PWM command. This is requested duty, not measured rotor speed.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 6 },
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_fan_pwm_ratio{booth_id=~\"$booth\"}",
+          "instant": true,
+          "legendFormat": "PWM · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current fan command",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Pi CPU, router battery, hottest modem zone, and modeled outdoor temperatures on one scale for environmental correlation.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -156,7 +401,7 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 11 },
       "id": 4,
       "options": {
         "legend": {
@@ -179,12 +424,22 @@
           "refId": "B"
         },
         {
-          "expr": "max by (instance) (glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\"})",
-          "legendFormat": "Hottest router zone · {{instance}}",
+          "expr": "max by (instance) (glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\",name=~\"mdmq6-0|mdmss-[0-2]\"})",
+          "legendFormat": "Hottest modem zone · {{instance}}",
           "refId": "C"
+        },
+        {
+          "expr": "booth_outdoor_weather_temperature_celsius{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Outdoor · {{booth_id}}",
+          "refId": "D"
+        },
+        {
+          "expr": "booth_outdoor_weather_apparent_temperature_celsius{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Outdoor feels like · {{booth_id}}",
+          "refId": "E"
         }
       ],
-      "title": "Pi and router temperatures",
+      "title": "Pi, router, modem, and outdoor temperatures",
       "type": "timeseries"
     },
     {
@@ -205,7 +460,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 15 },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 21 },
       "id": 5,
       "options": {
         "legend": {
@@ -244,7 +499,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 15 },
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 21 },
       "id": 6,
       "options": {
         "legend": {
@@ -267,6 +522,180 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "The four exported modem thermal zones: mdmq6-0 and mdmss-0 through mdmss-2.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "thresholdsStyle": { "mode": "line" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 80 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 21 },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "glinet_thermal_temperature_celsius{job=\"TelephoneRouter\",instance=~\"$router\",name=~\"mdmq6-0|mdmss-[0-2]\"}",
+          "legendFormat": "{{name}} · {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Modem thermal zones",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Modeled outdoor air and apparent temperature from Open-Meteo. These are regional model values, not enclosure measurements.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 30 },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_temperature_celsius{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Air temperature · {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_outdoor_weather_apparent_temperature_celsius{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Feels like · {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Outdoor temperature",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Modeled outdoor relative humidity and total cloud cover from Open-Meteo.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 30 },
+      "id": 19,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_outdoor_weather_relative_humidity_percent{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Humidity · {{booth_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_outdoor_weather_cloud_cover_percent{booth_id=~\"$booth\",source=\"open_meteo\"}",
+          "legendFormat": "Cloud cover · {{booth_id}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Outdoor humidity and cloud cover",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Kernel-requested fan PWM duty. This is a commanded electrical value and does not prove the rotor is moving.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 39 },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_fan_pwm_ratio{booth_id=~\"$booth\"}",
+          "legendFormat": "PWM duty · {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Fan command",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Measured fan RPM when tachometer feedback is wired. The reference booth currently has no tachometer wire, so this remains unavailable.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "min": 0,
+          "unit": "rotrpm"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 39 },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_fan_speed_rpm{booth_id=~\"$booth\"}",
+          "legendFormat": "Measured RPM · {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Fan speed",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "description": "All exported GL.iNet thermal zones for the selected router instances.",
       "fieldConfig": {
         "defaults": {
@@ -283,7 +712,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 24 },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 48 },
       "id": 7,
       "options": {
         "legend": {
@@ -306,7 +735,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 },
       "id": 8,
       "panels": [],
       "title": "Individual router thermal zones",
@@ -330,7 +759,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 36 },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 60 },
       "id": 9,
       "maxPerRow": 3,
       "options": {
@@ -423,7 +852,7 @@
       }
     ]
   },
-  "time": { "from": "now-6h", "to": "now" },
+  "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "",
   "title": "Booth — Thermals",

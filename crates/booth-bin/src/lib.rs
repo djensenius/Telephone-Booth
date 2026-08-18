@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
+use weather::WeatherConfig;
 
 #[cfg(feature = "simulator")]
 pub mod simulator;
@@ -41,6 +42,7 @@ pub mod event_spool;
 pub mod file_storage;
 pub mod observability;
 pub mod pending_uploads;
+pub mod weather;
 
 /// Production config path used by the systemd service.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/phone-booth/config.toml";
@@ -82,6 +84,8 @@ pub struct RuntimeConfig {
     pub telemetry: TelemetryConfig,
     /// Observability stack (system metrics + operator event forwarding).
     pub observability: ObservabilityConfig,
+    /// Modeled outdoor-weather metrics.
+    pub weather: WeatherConfig,
     /// Runtime startup mode (mock / simulator) for autostart deployments.
     pub runtime: RuntimeStartupConfig,
     /// Debug bearer token loaded from `BOOTH_DEBUG_TOKEN` or `BOOTH_DEBUG_TOKEN_FILE`.
@@ -117,6 +121,7 @@ impl Default for RuntimeConfig {
             debug: DebugConfig::default(),
             telemetry: TelemetryConfig::default(),
             observability: ObservabilityConfig::default(),
+            weather: WeatherConfig::default(),
             runtime: RuntimeStartupConfig::default(),
             debug_token: None,
         }
@@ -612,6 +617,10 @@ async fn run_runtime(
                     sampler_config,
                     identity.start,
                 ));
+                #[cfg(feature = "weather")]
+                if config.weather.enabled {
+                    observability_tasks.push(weather::spawn_weather_collector(config.weather)?);
+                }
                 if config.observability.operator_forward.enabled {
                     event_forwarder = Some(observability::spawn_event_forwarder(
                         bus.clone(),
@@ -2198,6 +2207,47 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
         bail!("observability.operator_forward.system_push_interval_ms must be greater than 0");
     }
 
+    // --- Outdoor weather bounds ---
+    if config.weather.poll_interval_seconds < weather::MIN_POLL_INTERVAL_SECONDS {
+        bail!(
+            "weather.poll_interval_seconds must be at least {}",
+            weather::MIN_POLL_INTERVAL_SECONDS
+        );
+    }
+    if config.weather.request_timeout_seconds == 0
+        || config.weather.request_timeout_seconds > weather::MAX_REQUEST_TIMEOUT_SECONDS
+    {
+        bail!(
+            "weather.request_timeout_seconds must be between 1 and {}",
+            weather::MAX_REQUEST_TIMEOUT_SECONDS
+        );
+    }
+    if let Some(latitude) = config.weather.latitude
+        && (!latitude.is_finite() || !(-90.0..=90.0).contains(&latitude))
+    {
+        bail!("weather.latitude must be between -90 and 90");
+    }
+    if let Some(longitude) = config.weather.longitude
+        && (!longitude.is_finite() || !(-180.0..=180.0).contains(&longitude))
+    {
+        bail!("weather.longitude must be between -180 and 180");
+    }
+    if config.weather.enabled {
+        if !config.observability.enabled {
+            bail!("weather.enabled requires observability.enabled");
+        }
+        if config.weather.latitude.is_none() {
+            bail!("weather.latitude is required when weather is enabled");
+        }
+        if config.weather.longitude.is_none() {
+            bail!("weather.longitude is required when weather is enabled");
+        }
+        #[cfg(not(feature = "weather"))]
+        bail!(
+            "weather.enabled = true but this binary was built without the `weather` Cargo feature"
+        );
+    }
+
     // --- GPIO pin uniqueness ---
     // Always include the phone pins; add the optional power-button and status-
     // LED pins only when their features are enabled so a default-off booth is
@@ -2351,10 +2401,48 @@ fn apply_env_overrides(config: &mut RuntimeConfig) -> Result<()> {
             .context("parse BOOTH_OBSERVABILITY_FORWARD_ENABLED")?;
     }
 
+    apply_weather_env_overrides(&mut config.weather, |key| {
+        env::var_os(key).map(|value| value.to_string_lossy().into_owned())
+    })?;
+
     apply_runtime_env_overrides(&mut config.runtime, |key| {
         env::var_os(key).map(|v| v.to_string_lossy().into_owned())
     })?;
 
+    Ok(())
+}
+
+fn apply_weather_env_overrides(
+    config: &mut WeatherConfig,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<()> {
+    if let Some(value) = get("BOOTH_WEATHER_ENABLED") {
+        config.enabled = parse_bool(&value).context("parse BOOTH_WEATHER_ENABLED")?;
+    }
+    if let Some(value) = get("BOOTH_WEATHER_LATITUDE") {
+        config.latitude = Some(
+            value
+                .parse()
+                .context("parse BOOTH_WEATHER_LATITUDE as f64")?,
+        );
+    }
+    if let Some(value) = get("BOOTH_WEATHER_LONGITUDE") {
+        config.longitude = Some(
+            value
+                .parse()
+                .context("parse BOOTH_WEATHER_LONGITUDE as f64")?,
+        );
+    }
+    if let Some(value) = get("BOOTH_WEATHER_POLL_INTERVAL_SECONDS") {
+        config.poll_interval_seconds = value
+            .parse()
+            .context("parse BOOTH_WEATHER_POLL_INTERVAL_SECONDS as u64")?;
+    }
+    if let Some(value) = get("BOOTH_WEATHER_REQUEST_TIMEOUT_SECONDS") {
+        config.request_timeout_seconds = value
+            .parse()
+            .context("parse BOOTH_WEATHER_REQUEST_TIMEOUT_SECONDS as u64")?;
+    }
     Ok(())
 }
 
@@ -2729,8 +2817,9 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
 )]
 mod tests {
     use super::{
-        AudioRef, RuntimeConfig, RuntimeStartupConfig, apply_runtime_env_overrides,
-        config_path_to_read, is_sha256_hex, operator_audio_ref, upload_recording, validate_config,
+        AudioRef, RuntimeConfig, RuntimeStartupConfig, WeatherConfig, apply_runtime_env_overrides,
+        apply_weather_env_overrides, config_path_to_read, is_sha256_hex, operator_audio_ref,
+        upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3215,6 +3304,8 @@ mod tests {
         assert_eq!(config.status_led.green, 6);
         assert_eq!(config.status_led.blue, 13);
         assert!(config.status_led.active_low);
+        assert!(!config.weather.enabled);
+        assert_eq!(config.weather.poll_interval_seconds, 600);
     }
 
     #[test]
@@ -3395,6 +3486,90 @@ brightness = 0.5
             .system_push_interval_ms = 0;
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("system_push_interval_ms"));
+    }
+
+    #[cfg(feature = "weather")]
+    #[test]
+    fn parses_enabled_weather_toml() {
+        let toml = r"
+[weather]
+enabled = true
+latitude = 43.65
+longitude = -79.43
+poll_interval_seconds = 600
+request_timeout_seconds = 15
+";
+        let config: RuntimeConfig = toml::from_str(toml).expect("parse weather config");
+        assert!(config.weather.enabled);
+        assert_eq!(config.weather.latitude, Some(43.65));
+        assert_eq!(config.weather.longitude, Some(-79.43));
+        validate_config(&config).expect("weather config should be valid");
+    }
+
+    #[test]
+    fn rejects_enabled_weather_without_coordinates() {
+        let mut config = RuntimeConfig::default();
+        config.weather.enabled = true;
+        let error = validate_config(&config).unwrap_err();
+        assert!(error.to_string().contains("weather.latitude"));
+    }
+
+    #[test]
+    fn rejects_weather_when_observability_is_disabled() {
+        let mut config = RuntimeConfig::default();
+        config.observability.enabled = false;
+        config.weather.enabled = true;
+        config.weather.latitude = Some(43.65);
+        config.weather.longitude = Some(-79.43);
+        let error = validate_config(&config).unwrap_err();
+        assert!(error.to_string().contains("observability.enabled"));
+    }
+
+    #[cfg(not(feature = "weather"))]
+    #[test]
+    fn rejects_enabled_weather_without_cargo_feature() {
+        let mut config = RuntimeConfig::default();
+        config.weather.enabled = true;
+        config.weather.latitude = Some(43.65);
+        config.weather.longitude = Some(-79.43);
+        let error = validate_config(&config).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("without the `weather` Cargo feature")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_weather_bounds() {
+        let mut config = RuntimeConfig::default();
+        config.weather.latitude = Some(90.1);
+        let error = validate_config(&config).unwrap_err();
+        assert!(error.to_string().contains("weather.latitude"));
+
+        config.weather.latitude = Some(43.65);
+        config.weather.poll_interval_seconds = 59;
+        let error = validate_config(&config).unwrap_err();
+        assert!(error.to_string().contains("poll_interval_seconds"));
+    }
+
+    #[test]
+    fn applies_weather_environment_overrides() {
+        let mut config = WeatherConfig::default();
+        apply_weather_env_overrides(&mut config, |key| match key {
+            "BOOTH_WEATHER_ENABLED" => Some("true".to_string()),
+            "BOOTH_WEATHER_LATITUDE" => Some("43.65".to_string()),
+            "BOOTH_WEATHER_LONGITUDE" => Some("-79.43".to_string()),
+            "BOOTH_WEATHER_POLL_INTERVAL_SECONDS" => Some("900".to_string()),
+            "BOOTH_WEATHER_REQUEST_TIMEOUT_SECONDS" => Some("20".to_string()),
+            _ => None,
+        })
+        .expect("weather overrides should parse");
+        assert!(config.enabled);
+        assert_eq!(config.latitude, Some(43.65));
+        assert_eq!(config.longitude, Some(-79.43));
+        assert_eq!(config.poll_interval_seconds, 900);
+        assert_eq!(config.request_timeout_seconds, 20);
     }
 
     // --- runtime startup mode tests ---

@@ -170,6 +170,133 @@ impl Default for SamplerConfig {
     }
 }
 
+/// One modeled outdoor-weather observation ready for Prometheus export.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutdoorWeatherSample {
+    /// Stable provider identifier used as the bounded `source` label.
+    pub source: &'static str,
+    /// Provider observation time as Unix seconds.
+    pub observed_at_unix_seconds: u64,
+    /// Booth receipt time as Unix seconds.
+    pub fetched_at_unix_seconds: u64,
+    /// Modeled outdoor air temperature.
+    pub temperature_celsius: f64,
+    /// Modeled apparent temperature.
+    pub apparent_temperature_celsius: f64,
+    /// Relative humidity in percent.
+    pub relative_humidity_percent: f64,
+    /// Total cloud cover in percent.
+    pub cloud_cover_percent: f64,
+    /// Precipitation during the provider's current interval, in millimetres.
+    pub precipitation_millimeters: f64,
+    /// Wind speed at 10 metres, in kilometres per hour.
+    pub wind_speed_kilometers_per_hour: f64,
+    /// Downward shortwave radiation in watts per square metre.
+    pub shortwave_radiation_watts_per_square_meter: f64,
+    /// WMO weather interpretation code.
+    pub weather_code: u16,
+    /// Stable, human-readable condition label derived from `weather_code`.
+    pub condition: &'static str,
+}
+
+const OUTDOOR_WEATHER_CONDITIONS: &[&str] = &[
+    "clear_sky",
+    "mainly_clear",
+    "partly_cloudy",
+    "overcast",
+    "fog",
+    "rime_fog",
+    "drizzle",
+    "freezing_drizzle",
+    "rain",
+    "freezing_rain",
+    "snowfall",
+    "snow_grains",
+    "rain_showers",
+    "snow_showers",
+    "thunderstorm",
+    "thunderstorm_with_hail",
+    "unknown",
+];
+
+/// Publish gauges for a successful outdoor-weather observation.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "Unix seconds remain exactly representable in f64 for hundreds of millions of years"
+)]
+pub fn record_outdoor_weather_gauges(sample: &OutdoorWeatherSample) {
+    let source = sample.source;
+    metrics::gauge!("booth_outdoor_weather_temperature_celsius", "source" => source)
+        .set(sample.temperature_celsius);
+    metrics::gauge!(
+        "booth_outdoor_weather_apparent_temperature_celsius",
+        "source" => source
+    )
+    .set(sample.apparent_temperature_celsius);
+    metrics::gauge!(
+        "booth_outdoor_weather_relative_humidity_percent",
+        "source" => source
+    )
+    .set(sample.relative_humidity_percent);
+    metrics::gauge!(
+        "booth_outdoor_weather_cloud_cover_percent",
+        "source" => source
+    )
+    .set(sample.cloud_cover_percent);
+    metrics::gauge!(
+        "booth_outdoor_weather_precipitation_millimeters",
+        "source" => source
+    )
+    .set(sample.precipitation_millimeters);
+    metrics::gauge!(
+        "booth_outdoor_weather_wind_speed_kilometers_per_hour",
+        "source" => source
+    )
+    .set(sample.wind_speed_kilometers_per_hour);
+    metrics::gauge!(
+        "booth_outdoor_weather_shortwave_radiation_watts_per_square_meter",
+        "source" => source
+    )
+    .set(sample.shortwave_radiation_watts_per_square_meter);
+    metrics::gauge!("booth_outdoor_weather_code", "source" => source)
+        .set(f64::from(sample.weather_code));
+    metrics::gauge!(
+        "booth_outdoor_weather_observation_timestamp_seconds",
+        "source" => source
+    )
+    .set(sample.observed_at_unix_seconds as f64);
+    metrics::gauge!(
+        "booth_outdoor_weather_last_success_timestamp_seconds",
+        "source" => source
+    )
+    .set(sample.fetched_at_unix_seconds as f64);
+    metrics::gauge!("booth_outdoor_weather_fetch_success", "source" => source).set(1.0);
+
+    for condition in OUTDOOR_WEATHER_CONDITIONS {
+        metrics::gauge!(
+            "booth_outdoor_weather_condition_info",
+            "source" => source,
+            "condition" => *condition
+        )
+        .set(if *condition == sample.condition {
+            1.0
+        } else {
+            0.0
+        });
+    }
+}
+
+/// Mark the latest weather fetch as failed and increment its bounded reason counter.
+pub fn record_outdoor_weather_failure(source: &'static str, reason: &'static str) {
+    metrics::gauge!("booth_outdoor_weather_fetch_success", "source" => source).set(0.0);
+    metrics::counter!(
+        "booth_outdoor_weather_fetch_failures_total",
+        "source" => source,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 /// Builds [`SystemSnapshot`]s on demand and updates the booth's gauges.
 ///
 /// The sampler subscribes to [`TelemetryEvent::AudioDeviceChange`] events
@@ -970,6 +1097,20 @@ mod tests {
             }),
             ..SystemSnapshot::default()
         });
+        record_outdoor_weather_gauges(&OutdoorWeatherSample {
+            source: "open_meteo",
+            observed_at_unix_seconds: 1_787_055_300,
+            fetched_at_unix_seconds: 1_787_055_312,
+            temperature_celsius: 17.3,
+            apparent_temperature_celsius: 18.1,
+            relative_humidity_percent: 86.0,
+            cloud_cover_percent: 0.0,
+            precipitation_millimeters: 0.0,
+            wind_speed_kilometers_per_hour: 6.3,
+            shortwave_radiation_watts_per_square_meter: 234.0,
+            weather_code: 2,
+            condition: "partly_cloudy",
+        });
         let text = handle.render();
         assert!(
             text.contains("booth_calls_total"),
@@ -998,6 +1139,21 @@ mod tests {
         assert!(
             text.contains("booth_fan_tachometer_available"),
             "missing booth_fan_tachometer_available in:\n{text}"
+        );
+        assert!(
+            text.contains("booth_outdoor_weather_temperature_celsius"),
+            "missing outdoor temperature in:\n{text}"
+        );
+        let current_condition = text
+            .lines()
+            .find(|line| {
+                line.starts_with("booth_outdoor_weather_condition_info{")
+                    && line.contains("condition=\"partly_cloudy\"")
+            })
+            .expect("current outdoor condition should exist");
+        assert!(
+            current_condition.ends_with(" 1"),
+            "current outdoor condition should be active: {current_condition}"
         );
         // Global label is applied to every series.
         assert!(

@@ -19,7 +19,7 @@ For the design rationale see
 | Operator `GET /v1/events`              | Cursor-paginated, type-filterable event history.                                                             |
 | Operator `GET /v1/events/stream`       | Server-sent events feed (same-origin cookie auth only).                                                      |
 | Operator `GET /v1/sessions`            | One row per pickup-to-hangup with derived outcome.                                                           |
-| `dashboards/*.json` + Grafana          | Three boards: overview, call activity, audio.                                                                |
+| `dashboards/*.json` + Grafana          | Overview, call activity, audio, and environmental thermals dashboards.                                      |
 
 ## Data flow
 
@@ -36,6 +36,8 @@ TelemetryBus  ─┬─▶ booth-debug (ring buffer, /v1/events, /v1/ws/telemetr
 
 booth-debug /metrics (loopback) ◀── booth-metrics::MetricsHandle::render
 
+Open-Meteo ── HTTPS every 10 min ──▶ weather collector ──▶ Prometheus registry
+
 vmagent (sidecar) ── scrape /metrics every 10 s ──▶ VictoriaMetrics ──▶ Grafana
 ```
 
@@ -46,7 +48,9 @@ Three independent hosts in the steady-state deployment:
 1. **Booth host (Raspberry Pi).** Runs the `telephone-booth` Rust binary
    and the `telephone-booth-vmagent` systemd sidecar. The booth's
    `GET /metrics` endpoint is bound to loopback only — nothing outside
-   the booth ever scrapes it directly.
+   the booth ever scrapes it directly. When weather collection is enabled,
+   the Rust process also makes one outbound HTTPS request to Open-Meteo every
+   10 minutes.
 2. **Operator host.** Runs the operator API + Postgres + the web UI.
    Receives `POST /v1/events` and `PUT /v1/system` from each booth over
    the public internet (bearer auth). This is where the queryable event
@@ -388,6 +392,7 @@ error messages) ever become labels.
 | `booth_errors_total`                    | `source`                            | `Error` events; `source` is a bounded enum. |
 | `booth_network_receive_bytes_total`     | `iface`                             | sysinfo per-interface counters.           |
 | `booth_network_transmit_bytes_total`    | `iface`                             | sysinfo per-interface counters.           |
+| `booth_outdoor_weather_fetch_failures_total` | `source`, `reason`              | Failed Open-Meteo requests; `reason` is `transport`, `http`, `decode`, or `invalid_data`. |
 
 ### Gauges
 
@@ -408,6 +413,18 @@ error messages) ever become labels.
 | `booth_fan_speed_rpm`                | (none) — measured RPM, or `NaN` without tachometer feedback. |
 | `booth_fan_cooling_state`            | (none) — active kernel thermal cooling state. |
 | `booth_fan_max_cooling_state`        | (none) — highest cooling state supported by the driver. |
+| `booth_outdoor_weather_temperature_celsius` | `source` — modeled outdoor air temperature. |
+| `booth_outdoor_weather_apparent_temperature_celsius` | `source` — modeled apparent temperature. |
+| `booth_outdoor_weather_relative_humidity_percent` | `source` — relative humidity in `[0, 100]`. |
+| `booth_outdoor_weather_cloud_cover_percent` | `source` — total cloud cover in `[0, 100]`. |
+| `booth_outdoor_weather_precipitation_millimeters` | `source` — precipitation in the provider's current interval. |
+| `booth_outdoor_weather_wind_speed_kilometers_per_hour` | `source` — wind speed at 10 metres. |
+| `booth_outdoor_weather_shortwave_radiation_watts_per_square_meter` | `source` — downward shortwave radiation. |
+| `booth_outdoor_weather_code`         | `source` — numeric WMO weather interpretation code. |
+| `booth_outdoor_weather_condition_info` | `source`, `condition` — one-hot bounded condition category. |
+| `booth_outdoor_weather_observation_timestamp_seconds` | `source` — provider observation time as Unix seconds. |
+| `booth_outdoor_weather_last_success_timestamp_seconds` | `source` — booth receipt time for the latest valid sample. |
+| `booth_outdoor_weather_fetch_success` | `source` — 1 when the latest fetch succeeded, otherwise 0. |
 | `booth_audio_peak_amplitude`        | `channel` (`input`, `output`) — linear peak amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_audio_rms_amplitude`         | `channel` (`input`, `output`) — linear RMS amplitude in `[0.0, 1.0]` from the last `AudioLevel` event. |
 | `booth_info`                        | `mode` (`real`, `mock`, `simulator`) — always 1.0; lets Grafana / VictoriaMetrics filter dashboards by runtime mode (e.g. `booth_calls_total * on(booth_id) group_left() booth_info{mode="real"}` to exclude mock / simulator booths). Cardinality is bounded to 3. |
@@ -460,7 +477,7 @@ Or inspect the Prometheus series:
 curl -s http://127.0.0.1:8080/metrics | grep '^booth_fan_'
 ```
 
-### Histograms
+## Histograms
 
 | Metric                                   | Labels    |
 | ---------------------------------------- | --------- |
@@ -474,6 +491,64 @@ query). `reason` and `source` come from small bounded enums so they
 never explode cardinality. Default histogram buckets are
 `metrics-exporter-prometheus`'s defaults (exponential out to several
 seconds); tune in `booth-metrics` if dashboards need finer resolution.
+
+## Outdoor weather
+
+When `[weather]` is enabled, `booth-bin` polls Open-Meteo's current forecast
+API over HTTPS and writes modeled outdoor context directly to the Prometheus
+registry. The default cadence is 600 seconds, so one booth makes 144 requests
+per day. The collector uses the workspace's existing `reqwest` client; no new
+HTTP dependency or operator-backend path is involved.
+
+The request asks for:
+
+- Air temperature and apparent temperature in Celsius.
+- Relative humidity and total cloud cover in percent.
+- Interval precipitation in millimetres.
+- Wind speed at 10 metres in kilometres per hour.
+- Downward shortwave radiation in watts per square metre.
+- The numeric WMO weather code and provider observation time.
+
+Open-Meteo combines and interpolates weather-model output. These values are
+regional modeled conditions, **not** measurements inside the booth enclosure.
+Use them to correlate outside conditions with Pi CPU, router battery, modem
+zones, and fan command; do not use them as evidence of enclosure safety.
+
+The WMO code maps to one of 17 stable condition labels, including `clear_sky`,
+`partly_cloudy`, `rain`, `snowfall`, and `thunderstorm`. The
+`booth_outdoor_weather_condition_info` metric publishes the active condition
+as a one-hot series so Grafana can display text without turning arbitrary
+provider strings into labels. `source` is fixed to `open_meteo`.
+
+On a successful request the collector validates all numeric ranges, updates
+the weather gauges, records provider and receipt timestamps, and sets
+`booth_outdoor_weather_fetch_success` to 1. A transport, HTTP, decode, or
+validation failure:
+
+- Leaves the last valid environmental values intact.
+- Sets `booth_outdoor_weather_fetch_success` to 0.
+- Increments `booth_outdoor_weather_fetch_failures_total` with one bounded
+  `reason` label.
+
+Use this PromQL expression for sample age:
+
+```promql
+time() - booth_outdoor_weather_last_success_timestamp_seconds
+```
+
+The shipped Thermals dashboard warns after 20 minutes and marks the feed
+critical after one hour.
+
+Coordinates are required when weather is enabled. The reference deployment
+uses rounded coordinates so the request does not need street-level precision.
+Coordinates never appear in metric labels or collector logs, but they are sent
+to Open-Meteo. Open-Meteo's privacy terms say API server logs may contain
+coordinates for up to 90 days.
+
+Open-Meteo API data are licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Displays must link
+to [Open-Meteo](https://open-meteo.com/); the checked-in Thermals dashboard
+includes a **Weather data by Open-Meteo.com** dashboard link.
 
 ## Configuration
 
@@ -499,6 +574,21 @@ variables (single underscore between segments):
 - `BOOTH_OBSERVABILITY_FORWARD_ENABLED` — toggle the operator forwarder.
 
 All other observability settings are config-file only.
+
+Weather collection is configured separately:
+
+| Key                            | Default | Purpose |
+| ------------------------------ | ------- | ------- |
+| `weather.enabled`              | `false` | Start the Open-Meteo collector; also requires observability to be enabled. |
+| `weather.latitude`             | unset   | Deployment latitude in `[-90, 90]`; required when enabled. |
+| `weather.longitude`            | unset   | Deployment longitude in `[-180, 180]`; required when enabled. |
+| `weather.poll_interval_seconds`   | `600`   | Poll cadence; minimum 60 seconds. |
+| `weather.request_timeout_seconds` | `15`    | Per-request HTTP timeout; range 1–60 seconds. |
+
+Every weather key has a matching environment override:
+`BOOTH_WEATHER_ENABLED`, `BOOTH_WEATHER_LATITUDE`,
+`BOOTH_WEATHER_LONGITUDE`, `BOOTH_WEATHER_POLL_INTERVAL_SECONDS`, and
+`BOOTH_WEATHER_REQUEST_TIMEOUT_SECONDS`.
 
 Remote-write configuration is **not** in `config.toml`. vmagent reads
 its scrape config from `/etc/phone-booth/vmagent.yaml` and its
@@ -526,6 +616,8 @@ into a Grafana that already has a VictoriaMetrics data source named
 - `booth-call-activity.json` — calls/min, digit histogram, recording
   duration histogram, upload-failure rate.
 - `booth-audio.json` — input/output dBFS, device changes.
+- `booth-thermals.json` — Pi, router battery and modem zones, fan command
+  and optional RPM, plus modeled outdoor weather and freshness.
 
 See `dashboards/README.md` for import instructions.
 
@@ -542,6 +634,13 @@ Three timestamps are relevant when investigating an event:
    the scrape instant on the vmagent host. Grafana dashboards therefore
    render the metric timeline against vmagent's wall clock.
 
+Weather adds two explicit timestamps inside the metric values:
+`booth_outdoor_weather_observation_timestamp_seconds` is the provider's
+model timestamp, while `booth_outdoor_weather_last_success_timestamp_seconds`
+is the booth's wall clock after a valid response is received. Grafana uses the
+latter for freshness because it answers the operational question "when did
+this booth last obtain valid weather data?".
+
 A booth with a badly skewed clock will still produce ordered timelines
 in Grafana (vmagent stamps replace the local timestamp) and ordered
 event listings in the operator UI (`received_at` is monotonic on the
@@ -557,6 +656,15 @@ operator).
   remote_write endpoint. Check `journalctl -u telephone-booth-vmagent`.
   Then `curl -s http://127.0.0.1:8429/api/v1/status/config` on the
   booth to confirm vmagent loaded the scrape config.
+- **Weather panels show no data** — confirm `weather.enabled = true`,
+  both coordinates are configured, and observability is enabled. Inspect
+  `journalctl -u telephone-booth -e` for `outdoor weather fetch failed`,
+  then query `booth_outdoor_weather_fetch_success` and
+  `booth_outdoor_weather_fetch_failures_total`.
+- **Weather is stale but the last values still render** — this is expected
+  failure behavior. The collector preserves the last valid values while
+  setting fetch success to 0. Check the dashboard's freshness stat or subtract
+  `booth_outdoor_weather_last_success_timestamp_seconds` from `time()`.
 - **Remote Prometheus scrape returns 404 / connection refused** —
   `tailscale serve` isn't proxying the loopback listener, or the
   booth's debug surface is down. From the Prometheus host run
