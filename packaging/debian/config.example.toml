@@ -75,6 +75,25 @@ loopback_skip_auth = false
 [telemetry]
 journal_level = "info"
 
+[observability]
+enabled = true
+booth_id = "booth-01"
+sample_interval_ms = 5000
+
+[observability.operator_forward]
+enabled = true
+batch_max = 200
+flush_interval_ms = 2000
+buffer_max = 4096
+
+[weather]
+enabled = false
+# Rounded deployment coordinates; both are required when weather is enabled.
+# latitude = 43.65
+# longitude = -79.43
+poll_interval_seconds = 600
+request_timeout_seconds = 15
+
 [runtime]
 # Autostart mode for the systemd unit. Both default to false (real Pi adapters,
 # no TUI). Setting either to true requires the binary to be built with the

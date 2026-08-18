@@ -11,7 +11,7 @@ data flow and the metric catalog.
 | `booth-overview.json`         | Booth — Overview               | CPU temp, fan command, load, memory, uptime, network, calls/day.      |
 | `booth-call-activity.json`    | Booth — Call activity          | Calls per outcome, dialed digit histogram, recording + upload timing. |
 | `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events.|
-| `booth-thermals.json`         | Booth — Thermals               | Pi CPU, router battery, all thermal zones, repeated sensor charts.    |
+| `booth-thermals.json`         | Booth — Thermals               | Pi, router, modem, fan, outdoor weather, and repeated sensor charts.  |
 | `booth-combined.json`         | Telephone Booth (tabbed)       | Overview, call activity, and audio in three tabs (Grafana 12+, schema v2). |
 
 The four single-focus dashboards use the classic dashboard schema
@@ -42,10 +42,21 @@ multi-booth deployments.
   collapsible **Individual router thermal zones** row. With **All** selected,
   Grafana creates one chart for each of the 24 currently exported sensors.
 
+The dashboard defaults to a rolling 24-hour view. Its combined temperature
+chart overlays Pi CPU, router battery, the hottest of the router's four modem
+zones, outdoor air temperature, and apparent temperature. Separate panels
+retain each source's detail, while the weather row adds current condition,
+humidity, cloud cover, fetch health, and freshness. Fan PWM is a commanded
+duty ratio; the RPM panel remains empty when no tachometer wire is connected.
+
 The router exporter does not publish `booth_id`, so `$booth` and `$router`
 intentionally filter their respective Pi and router series independently.
 The booth, router, and thermal-sensor selectors include an **All** option and
 default to it.
+
+Outdoor values are modeled regional context rather than measurements inside
+the enclosure. The dashboard includes the required
+[Open-Meteo attribution](https://open-meteo.com/) as a dashboard link.
 
 ## Datasource
 

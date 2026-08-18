@@ -18,12 +18,13 @@ name = "telephone-booth"
 path = "src/main.rs"
 
 [features]
-default = ["mock", "audio", "operator", "simulator"]
+default = ["mock", "audio", "operator", "simulator", "weather"]
 mock = ["dep:booth-mock"]
 audio = ["booth-pi/audio"]
 operator = ["booth-pi/operator"]
-pi = ["booth-pi/pi"]
+pi = ["booth-pi/pi", "weather"]
 systemd = []
+weather = ["dep:reqwest"]
 # Interactive `--simulator` TUI. Requires `mock` (for MockGpioPort) and pulls
 # in ratatui + crossterm. The passive `--tui --attach` mode shares this TUI
 # feature, so its WebSocket/TLS client dependencies are optional here too.
@@ -122,6 +123,7 @@ maintainer-scripts = "../../packaging/debian"
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 # `test-util` (paused clock) is needed to reproduce the hold-deadline race
 # deterministically; the runtime itself does not enable it.
 tokio = { workspace = true, features = ["test-util"] }

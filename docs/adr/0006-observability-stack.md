@@ -16,6 +16,9 @@ We need a thorough operational picture of every booth:
 - **Time-series metrics** — counters and histograms derived from the
   same events, plus the host vitals, for Grafana dashboards (calls per
   minute, recording duration histogram, upload failure rate, etc.).
+- **Environmental context** — modeled outdoor temperature, humidity,
+  cloud cover, and conditions that can be correlated with Pi, router,
+  modem, battery, and fan behavior.
 
 We considered three shapes for the metrics pipeline:
 
@@ -74,6 +77,11 @@ We adopt option **3 + c**:
   (`PUT /v1/system`) for the Live System panel. They are **not**
   persisted in Postgres; VictoriaMetrics owns historical host-vitals
   time series.
+- An optional collector in `booth-bin` polls Open-Meteo over HTTPS on a
+  bounded cadence and publishes modeled outdoor conditions only as
+  Prometheus metrics. Rounded coordinates remain configuration values;
+  neither coordinates nor provider payload strings become labels, and
+  weather data is not pushed through the operator API.
 - Grafana dashboards live in this repo under `dashboards/` as JSON
   alongside a small README describing how to import them.
 
@@ -90,8 +98,8 @@ We adopt option **3 + c**:
 - Metric cardinality is bounded by the rules in
   `docs/observability.md`: `booth_id`, `outcome`, `digit`, `from`/`to`
   state, `cpu` index, `mountpoint`, `iface`, `route`,
-  `status_class`, `reason`, `window`, `flag`. No high-cardinality
-  fields ever become labels.
+  `status_class`, `reason`, `window`, `flag`, `source`, `condition`.
+  No high-cardinality fields ever become labels.
 
 **Trade-offs:**
 
@@ -107,6 +115,13 @@ We adopt option **3 + c**:
 - The booth `/metrics` text-format response is loopback-only and
   unauthenticated. Anyone who can reach 127.0.0.1 on the booth can
   scrape it; Tailscale ACLs are the only gate for non-loopback access.
+- Outdoor weather introduces a third-party availability and accuracy
+  dependency. The collector preserves the last valid sample and exports
+  explicit fetch health and freshness, but the values remain regional
+  model output rather than enclosure measurements.
+- Open-Meteo receives the configured coordinates and may retain them in
+  API server logs. The deployment uses rounded coordinates and publishes
+  no address or coordinate labels.
 
 ## Notes
 
@@ -118,3 +133,6 @@ We adopt option **3 + c**:
   vitals + call rate), call activity (durations, outcomes, dialed
   digits), and audio. Adding new dashboards is purely a `dashboards/`
   PR; nothing in the Rust workspace needs to change.
+- Open-Meteo data are CC BY 4.0. Any dashboard or client that displays
+  these values must link to <https://open-meteo.com/>; the Thermals
+  dashboard carries the attribution as a dashboard link.
