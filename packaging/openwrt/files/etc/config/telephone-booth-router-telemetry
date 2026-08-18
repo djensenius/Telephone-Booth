@@ -1,0 +1,5 @@
+config telemetry 'main'
+	option enabled '0'
+	option operator_url ''
+	option auth_header_file '/etc/telephone-booth-router-telemetry/operator-auth-header'
+	option interval_seconds '30'

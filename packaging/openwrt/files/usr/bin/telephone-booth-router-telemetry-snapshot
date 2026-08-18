@@ -1,0 +1,12 @@
+#!/usr/bin/lua
+
+local json = require "luci.jsonc"
+local telemetry = require "telephone_booth_router_telemetry"
+
+local payload = {
+  capturedAt = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+  snapshot = telemetry.collect(),
+}
+
+io.write(json.stringify(payload))
+io.write("\n")

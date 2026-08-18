@@ -1,0 +1,79 @@
+#!/bin/sh
+
+set -u
+
+TAG="telephone-booth-router-telemetry"
+UCI_SECTION="telephone-booth-router-telemetry.main"
+
+operator_url="$(uci -q get "${UCI_SECTION}.operator_url")"
+auth_header_file="$(uci -q get "${UCI_SECTION}.auth_header_file")"
+interval_seconds="$(uci -q get "${UCI_SECTION}.interval_seconds")"
+
+case "$interval_seconds" in
+  ""|*[!0-9]*) interval_seconds=30 ;;
+esac
+[ "$interval_seconds" -ge 5 ] || interval_seconds=30
+
+if [ -z "$operator_url" ]; then
+  logger -p daemon.err -t "$TAG" "operator_url is not configured"
+  exit 1
+fi
+
+case "$operator_url" in
+  https://*) ;;
+  *)
+    logger -p daemon.err -t "$TAG" "operator_url must use HTTPS"
+    exit 1
+    ;;
+esac
+
+if [ -z "$auth_header_file" ] || [ ! -r "$auth_header_file" ]; then
+  logger -p daemon.err -t "$TAG" "auth header file is missing or unreadable"
+  exit 1
+fi
+
+logger -p daemon.info -t "$TAG" "starting ${interval_seconds}s telemetry push loop"
+
+payload=""
+cleanup() {
+  if [ -n "$payload" ]; then
+    rm -f "$payload"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+while true; do
+  if ! payload="$(mktemp /tmp/telephone-booth-router-telemetry.XXXXXX)"; then
+    logger -p daemon.err -t "$TAG" "could not create telemetry payload file"
+    sleep "$interval_seconds"
+    continue
+  fi
+  if /usr/bin/telephone-booth-router-telemetry-snapshot >"$payload"; then
+    if ! curl \
+      --silent \
+      --show-error \
+      --fail-with-body \
+      --connect-timeout 10 \
+      --max-time 20 \
+      --retry 2 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --proto "=https" \
+      --proto-redir "=https" \
+      --request PUT \
+      --header "@${auth_header_file}" \
+      --header "Content-Type: application/json" \
+      --header "User-Agent: telephone-booth-router-telemetry/1" \
+      --data-binary "@${payload}" \
+      "$operator_url" \
+      >/dev/null
+    then
+      logger -p daemon.err -t "$TAG" "Operator telemetry push failed"
+    fi
+  else
+    logger -p daemon.err -t "$TAG" "sensor snapshot collection failed"
+  fi
+  rm -f "$payload"
+  payload=""
+  sleep "$interval_seconds"
+done

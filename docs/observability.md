@@ -224,6 +224,27 @@ sudo systemctl restart prometheus-node-exporter
 sudo tailscale serve --bg --https=9100 http://127.0.0.1:9100
 ```
 
+### GL.iNet router power and thermal telemetry
+
+The installation's GL.iNet E5800 exposes OpenWrt host metrics through
+`prometheus-node-exporter-lua` on port 9100. The collector under
+[`packaging/openwrt/`](../packaging/openwrt/README.md) adds:
+
+- Battery charge, temperature, voltage, current, health, cycle count, and
+  abnormal state.
+- Charger presence, online state, fast-charge state, charging status, and
+  configured voltage/current limits.
+- Every readable thermal zone, keyed by its kernel type and zone name.
+
+The collector drops known invalid thermal sentinels rather than publishing
+them as real temperatures. Prometheus retains the 15-second history. A
+separate OpenWrt `procd` service pushes only the latest structured snapshot
+to the Operator every 30 seconds using a telemetry-scoped token.
+
+The Operator backend is not on the tailnet. Historical graph requests go
+through Grafana's authenticated datasource proxy; port 9090 remains private.
+See [ADR 0010](adr/0010-router-telemetry.md).
+
 `node_exporter` is now reachable from any tailnet peer at:
 
 ```text
