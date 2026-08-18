@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.11.0](https://github.com/djensenius/Telephone-Booth/compare/v0.10.3...v0.11.0) (2026-08-18)
+
+
+### Features
+
+* **observability:** add outdoor weather context ([#155](https://github.com/djensenius/Telephone-Booth/issues/155)) ([7763ad2](https://github.com/djensenius/Telephone-Booth/commit/7763ad2b1d1cb0d3a4ae673ac2088ebff6a7d24e))
+* **observability:** add router power telemetry ([#151](https://github.com/djensenius/Telephone-Booth/issues/151)) ([ac23f67](https://github.com/djensenius/Telephone-Booth/commit/ac23f6745cac394d63be1b0dd90bdcd82f553b4b))
+* **observability:** add thermal dashboard ([#153](https://github.com/djensenius/Telephone-Booth/issues/153)) ([48e283c](https://github.com/djensenius/Telephone-Booth/commit/48e283cd0e76657e0331813bad13a0665dc0ff3d))
+
+
+### Bug Fixes
+
+* **observability:** recover Tailscale metrics proxies ([#154](https://github.com/djensenius/Telephone-Booth/issues/154)) ([26ecd20](https://github.com/djensenius/Telephone-Booth/commit/26ecd205205ae591bee63a8ff63d0cf112fb831f))
+
 ## [0.10.3](https://github.com/djensenius/Telephone-Booth/compare/v0.10.2...v0.10.3) (2026-08-15)
 
 
