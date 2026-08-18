@@ -4,6 +4,8 @@ set -eu
 EXPECTED_TARGET="http://127.0.0.1:8080"
 EXPECTED_PATH="/"
 HTTPS_PORT="443"
+NODE_EXPORTER_TARGET="http://127.0.0.1:9100"
+NODE_EXPORTER_HTTPS_PORT="9100"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "setup-tailscale-serve.sh must run as root; retry with sudo." >&2
@@ -21,6 +23,7 @@ if ! "$TAILSCALE_BIN" status --json >/dev/null 2>&1; then
 fi
 
 "$TAILSCALE_BIN" serve --bg --https="$HTTPS_PORT" --set-path="$EXPECTED_PATH" "$EXPECTED_TARGET"
+"$TAILSCALE_BIN" serve --bg --https="$NODE_EXPORTER_HTTPS_PORT" "$NODE_EXPORTER_TARGET"
 
 if [ -x /usr/bin/telephone-booth ]; then
     STATUS_OUTPUT="$(/usr/bin/telephone-booth tailscale-status)"
@@ -42,11 +45,18 @@ if ! printf '%s\n' "$STATUS_OUTPUT" | grep -F "$EXPECTED_TARGET" >/dev/null 2>&1
     printf '%s\n' "$STATUS_OUTPUT" >&2
     exit 1
 fi
+if ! "$TAILSCALE_BIN" serve status | grep -F "$NODE_EXPORTER_TARGET" >/dev/null 2>&1; then
+    echo "tailscale serve config does not point at $NODE_EXPORTER_TARGET." >&2
+    "$TAILSCALE_BIN" serve status >&2
+    exit 1
+fi
 FINAL_URL="https://$MAGICDNS_NAME/"
+NODE_EXPORTER_URL="https://$MAGICDNS_NAME:$NODE_EXPORTER_HTTPS_PORT/metrics"
 
 echo "Tailscale serve is configured."
 echo "MagicDNS name: $MAGICDNS_NAME"
 echo "Debug URL: $FINAL_URL"
+echo "Node exporter URL: $NODE_EXPORTER_URL"
 
 echo "Verify with: curl -H 'Authorization: Bearer <debug-token>' ${FINAL_URL}healthz"
 exit 0

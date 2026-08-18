@@ -73,8 +73,10 @@ the watchdog. The keepalive is only compiled into binaries built with the
 
 `telephone-booth-tailscale-serve.service` is a oneshot unit that persists
 Tailscale's serve config. It waits for the `tailscaled` backend to report
-ready before applying the serve config, so it comes up cleanly after a
-reboot without a manual restart:
+ready before publishing both the booth metrics/debug surface on HTTPS port
+443 and the loopback node exporter on HTTPS port 9100. If Tailscale takes
+longer than the initial bounded wait, systemd retries the unit instead of
+leaving both Prometheus targets down until a manual restart:
 
 ```sh
 sudo systemctl status telephone-booth-tailscale-serve.service

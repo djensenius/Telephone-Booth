@@ -117,7 +117,9 @@ Tailscale will automatically reconnect to your tailnet.
 
 **Important:** The booth's `telephone-booth-tailscale-serve.service` unit has
 a systemd dependency on `tailscaled.service`, so the serve configuration will
-wait for Tailscale to be ready before starting.
+wait for Tailscale to be ready before starting. It retries after a slow boot
+and publishes both the booth debug/metrics listener on HTTPS port 443 and the
+loopback node exporter on HTTPS port 9100.
 
 ## Optional: Tailscale tags and ACLs
 
@@ -197,15 +199,16 @@ The exact tailnet suffix depends on your Tailscale account (e.g.
 
 The `enable --now` ensures both services start immediately **and** restart
 automatically on reboot. The `telephone-booth-tailscale-serve.service` unit
-depends on `tailscaled.service`, so systemd will wait for Tailscale to be
-ready before configuring the serve proxy.
+depends on `tailscaled.service`, waits for Tailscale to be ready, and retries
+if the initial boot-time wait expires.
 
 The helper is idempotent. If the node is not authenticated it runs
 `tailscale up` and prints the interactive auth URL. It then applies the
-expected serve target:
+expected serve targets:
 
 ```sh
 tailscale serve --bg --https=443 --set-path=/ http://127.0.0.1:8080
+tailscale serve --bg --https=9100 http://127.0.0.1:9100
 ```
 
 ## Verify
@@ -349,7 +352,9 @@ sudo tailscale up --hostname=telephone-booth --advertise-tags=tag:booth
   [LAN fallback](lan-fallback.md) while tailnet access is down.
 - **Serve config is missing**: run
   `sudo /usr/share/telephone-booth/setup-tailscale-serve.sh` or
-  `sudo systemctl restart telephone-booth-tailscale-serve.service`.
+  `sudo systemctl restart telephone-booth-tailscale-serve.service`. Confirm
+  `sudo tailscale serve status` lists both HTTPS port 443 → 8080 and HTTPS
+  port 9100 → 9100.
 - **Certificate errors**: verify HTTPS certificates are enabled in the
   Tailscale admin console. Let's Encrypt certificates are managed and
   renewed by Tailscale; the booth service does not need ACME timers.
