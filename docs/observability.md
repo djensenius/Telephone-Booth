@@ -392,7 +392,7 @@ error messages) ever become labels.
 | `booth_errors_total`                    | `source`                            | `Error` events; `source` is a bounded enum. |
 | `booth_network_receive_bytes_total`     | `iface`                             | sysinfo per-interface counters.           |
 | `booth_network_transmit_bytes_total`    | `iface`                             | sysinfo per-interface counters.           |
-| `booth_outdoor_weather_fetch_failures_total` | `source`, `reason`              | Failed Open-Meteo requests; `reason` is `transport`, `http`, `decode`, or `invalid_data`. |
+| `booth_outdoor_weather_fetch_failures_total` | `source`, `reason`              | Failed Open-Meteo requests; `reason` is `transport`, `http`, `response_too_large`, `decode`, `clock`, or `invalid_data`. |
 
 ### Gauges
 
@@ -522,7 +522,8 @@ provider strings into labels. `source` is fixed to `open_meteo`.
 
 On a successful request the collector validates all numeric ranges, updates
 the weather gauges, records provider and receipt timestamps, and sets
-`booth_outdoor_weather_fetch_success` to 1. A transport, HTTP, decode, or
+`booth_outdoor_weather_fetch_success` to 1. Responses are capped at 64 KiB
+before JSON decoding. A transport, HTTP, oversized-response, decode, clock, or
 validation failure:
 
 - Leaves the last valid environmental values intact.

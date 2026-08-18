@@ -14,7 +14,7 @@ use booth_metrics::{
     OutdoorWeatherSample, record_outdoor_weather_failure, record_outdoor_weather_gauges,
 };
 #[cfg(feature = "weather")]
-use reqwest::Client;
+use reqwest::{Client, Response};
 #[cfg(feature = "weather")]
 use tokio::task::JoinHandle;
 #[cfg(feature = "weather")]
@@ -35,6 +35,10 @@ const OPEN_METEO_URL: &str = "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_SOURCE: &str = "open_meteo";
 #[cfg(feature = "weather")]
 const CURRENT_FIELDS: &str = "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,cloud_cover,wind_speed_10m,shortwave_radiation";
+#[cfg(feature = "weather")]
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+#[cfg(feature = "weather")]
+const MAX_RESPONSE_BYTES_U64: u64 = 64 * 1024;
 
 /// Opt-in modeled outdoor-weather collection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -179,8 +183,18 @@ async fn fetch_current_weather(
     latitude: f64,
     longitude: f64,
 ) -> Result<OutdoorWeatherSample, WeatherFetchError> {
+    fetch_current_weather_from(client, OPEN_METEO_URL, latitude, longitude).await
+}
+
+#[cfg(feature = "weather")]
+async fn fetch_current_weather_from(
+    client: &Client,
+    endpoint: &str,
+    latitude: f64,
+    longitude: f64,
+) -> Result<OutdoorWeatherSample, WeatherFetchError> {
     let response = client
-        .get(OPEN_METEO_URL)
+        .get(endpoint)
         .query(&OpenMeteoQuery {
             latitude,
             longitude,
@@ -194,23 +208,56 @@ async fn fetch_current_weather(
         })
         .send()
         .await
-        .map_err(|error| WeatherFetchError::new("transport", error.to_string()))?;
+        .map_err(|error| WeatherFetchError::new("transport", error.without_url().to_string()))?;
     let status = response.status();
     if !status.is_success() {
         return Err(WeatherFetchError::new(
-            "http_status",
+            "http",
             format!("Open-Meteo returned HTTP {status}"),
         ));
     }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| WeatherFetchError::new("transport", error.to_string()))?;
+    let body = read_response_body(response).await?;
     let fetched_at_unix_seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| WeatherFetchError::new("clock", error.to_string()))?
         .as_secs();
     parse_open_meteo_response(&body, fetched_at_unix_seconds)
+}
+
+#[cfg(feature = "weather")]
+async fn read_response_body(mut response: Response) -> Result<Vec<u8>, WeatherFetchError> {
+    if let Some(content_length) = response.content_length()
+        && content_length > MAX_RESPONSE_BYTES_U64
+    {
+        return Err(WeatherFetchError::new(
+            "response_too_large",
+            format!(
+                "Open-Meteo declared a {content_length}-byte response, exceeding the \
+                 {MAX_RESPONSE_BYTES}-byte limit"
+            ),
+        ));
+    }
+
+    let capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or_default()
+        .min(MAX_RESPONSE_BYTES);
+    let mut body = Vec::with_capacity(capacity);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| WeatherFetchError::new("transport", error.without_url().to_string()))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(WeatherFetchError::new(
+                "response_too_large",
+                format!("Open-Meteo response exceeded the {MAX_RESPONSE_BYTES}-byte limit"),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 #[cfg(feature = "weather")]
@@ -305,6 +352,15 @@ fn condition_for_code(code: u16) -> &'static str {
 mod tests {
     use super::*;
 
+    use std::error::Error;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    type TestResult = std::result::Result<(), Box<dyn Error>>;
+
     const SAMPLE: &str = r#"{
       "current": {
         "time": 1787055300,
@@ -318,6 +374,167 @@ mod tests {
         "shortwave_radiation": 234.0
       }
     }"#;
+
+    fn test_client(timeout: Duration) -> std::result::Result<Client, reqwest::Error> {
+        Client::builder()
+            .timeout(timeout)
+            .user_agent(format!("telephone-booth/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn fetches_expected_current_weather_query() -> TestResult {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/forecast"))
+            .and(header(
+                "user-agent",
+                concat!("telephone-booth/", env!("CARGO_PKG_VERSION")),
+            ))
+            .and(query_param("latitude", "43.65"))
+            .and(query_param("longitude", "-79.43"))
+            .and(query_param("current", CURRENT_FIELDS))
+            .and(query_param("temperature_unit", "celsius"))
+            .and(query_param("wind_speed_unit", "kmh"))
+            .and(query_param("precipitation_unit", "mm"))
+            .and(query_param("timeformat", "unixtime"))
+            .and(query_param("timezone", "UTC"))
+            .and(query_param("forecast_days", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(SAMPLE, "application/json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let endpoint = format!("{}/v1/forecast", server.uri());
+        let sample = fetch_current_weather_from(
+            &test_client(Duration::from_secs(2))?,
+            &endpoint,
+            43.65,
+            -79.43,
+        )
+        .await?;
+
+        assert_eq!(sample.condition, "partly_cloudy");
+        assert!((sample.temperature_celsius - 17.3).abs() < f64::EPSILON);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn classifies_non_success_status_without_coordinates() -> TestResult {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/forecast"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let endpoint = format!("{}/v1/forecast", server.uri());
+        let error = fetch_current_weather_from(
+            &test_client(Duration::from_secs(2))?,
+            &endpoint,
+            43.65,
+            -79.43,
+        )
+        .await
+        .expect_err("non-success response should fail");
+
+        assert_eq!(error.reason, "http");
+        assert!(!error.to_string().contains("43.65"));
+        assert!(!error.to_string().contains("-79.43"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn caps_provider_response_size() -> TestResult {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/forecast"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(vec![b'x'; MAX_RESPONSE_BYTES.saturating_add(1)]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let endpoint = format!("{}/v1/forecast", server.uri());
+        let error = fetch_current_weather_from(
+            &test_client(Duration::from_secs(2))?,
+            &endpoint,
+            43.65,
+            -79.43,
+        )
+        .await
+        .expect_err("oversized response should fail");
+
+        assert_eq!(error.reason, "response_too_large");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn classifies_timeout_without_coordinates() -> TestResult {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/forecast"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(250))
+                    .set_body_raw(SAMPLE, "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let endpoint = format!("{}/v1/forecast", server.uri());
+        let error = fetch_current_weather_from(
+            &test_client(Duration::from_millis(25))?,
+            &endpoint,
+            43.65,
+            -79.43,
+        )
+        .await
+        .expect_err("request timeout should fail");
+
+        assert_eq!(error.reason, "transport");
+        assert!(!error.to_string().contains("43.65"));
+        assert!(!error.to_string().contains("-79.43"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn strips_coordinates_from_body_read_failures() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            let mut request = [0_u8; 2_048];
+            let _bytes_read = socket.read(&mut request).await?;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                      Content-Length: 128\r\nConnection: close\r\n\r\n{\"current\":",
+                )
+                .await?;
+            socket.shutdown().await
+        });
+
+        let endpoint = format!("http://{address}/v1/forecast");
+        let error = fetch_current_weather_from(
+            &test_client(Duration::from_secs(2))?,
+            &endpoint,
+            43.65,
+            -79.43,
+        )
+        .await
+        .expect_err("truncated body should fail");
+        server.await??;
+
+        assert_eq!(error.reason, "transport");
+        assert!(!error.to_string().contains("43.65"));
+        assert!(!error.to_string().contains("-79.43"));
+        Ok(())
+    }
 
     #[test]
     fn parses_current_weather_into_stable_metrics() {
