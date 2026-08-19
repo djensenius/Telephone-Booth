@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/djensenius/Telephone-Booth/compare/v0.11.0...v0.11.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **observability:** make weather conditions readable ([#156](https://github.com/djensenius/Telephone-Booth/issues/156)) ([ef32eae](https://github.com/djensenius/Telephone-Booth/commit/ef32eae4fbee493ea86359b8ed65e857c552c739))
+* **observability:** preserve dialed digits in call telemetry ([#158](https://github.com/djensenius/Telephone-Booth/issues/158)) ([f38d02c](https://github.com/djensenius/Telephone-Booth/commit/f38d02c14f267192ab62a60561b707bf90c0f468))
+
 ## [0.11.0](https://github.com/djensenius/Telephone-Booth/compare/v0.10.3...v0.11.0) (2026-08-18)
 
 
