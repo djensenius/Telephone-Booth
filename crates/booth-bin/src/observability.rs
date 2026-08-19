@@ -255,6 +255,7 @@ impl SessionTracker {
                     out.push(TelemetryEvent::CallEnded {
                         session_id: session.id,
                         outcome,
+                        digits_dialed: session.digits,
                         at_monotonic_ns: monotonic_ns,
                     });
                 }
@@ -598,9 +599,10 @@ fn ingest_record(
     // as the event that produced them.
     let monotonic_ns = monotonic_ns_of(record);
     let synthetic = tracker.observe(&record.event, monotonic_ns);
-    session_handle.set(tracker.current_session_id().map(str::to_string));
+    let active_session_id = tracker.current_session_id();
+    session_handle.set(active_session_id.map(str::to_string));
 
-    if let Some(wire) = wire_for(record, identity, next_seq) {
+    if let Some(wire) = wire_for(record, identity, next_seq, active_session_id) {
         push_with_cap(batch, wire, buffer_max, dropped);
     }
     for synth in synthetic {
@@ -779,12 +781,13 @@ fn wire_for(
     record: &TelemetryRecord,
     identity: &RuntimeIdentity,
     next_seq: &mut u64,
+    active_session_id: Option<&str>,
 ) -> Option<Value> {
     if !should_forward(&record.event) {
         return None;
     }
     let kind = event_kind(&record.event);
-    let session_id = session_id_of(&record.event);
+    let session_id = session_id_for_wire(&record.event, active_session_id);
     let recording_id = recording_id_of(&record.event);
     let payload = event_payload(&record.event);
     let seq = next_event_seq(next_seq);
@@ -796,6 +799,13 @@ fn wire_for(
         payload,
         seq,
     ))
+}
+
+fn session_id_for_wire(event: &TelemetryEvent, active_session_id: Option<&str>) -> Option<String> {
+    if matches!(event, TelemetryEvent::DigitDialed { .. }) {
+        return active_session_id.map(str::to_string);
+    }
+    session_id_of(event)
 }
 
 fn wire_for_synthetic(
@@ -963,8 +973,9 @@ mod tests {
             out.as_slice(),
             [TelemetryEvent::CallEnded {
                 outcome: CallOutcome::HungUpBeforeDial,
+                digits_dialed,
                 ..
-            }]
+            }] if digits_dialed.is_empty()
         ));
         assert!(t.current_session_id().is_none());
     }
@@ -981,13 +992,22 @@ mod tests {
             },
             2,
         );
-        let out = t.observe(&transition("playing_question", "idle", 3), 3);
+        t.observe(
+            &TelemetryEvent::DigitDialed {
+                digit: 0,
+                pulses: 10,
+                at_monotonic_ns: 3,
+            },
+            3,
+        );
+        let out = t.observe(&transition("playing_question", "idle", 4), 4);
         assert!(matches!(
             out.as_slice(),
             [TelemetryEvent::CallEnded {
                 outcome: CallOutcome::HungUpDuringPrompt,
+                digits_dialed,
                 ..
-            }]
+            }] if digits_dialed == "10"
         ));
     }
 
@@ -1037,10 +1057,41 @@ mod tests {
         let ended = TelemetryEvent::CallEnded {
             session_id: "sess-1".to_string(),
             outcome: CallOutcome::HungUpBeforeDial,
+            digits_dialed: String::new(),
             at_monotonic_ns: 2,
         };
         assert!(!should_forward(&started));
         assert!(!should_forward(&ended));
+    }
+
+    #[test]
+    fn digit_wire_uses_active_session_id() {
+        let event = TelemetryEvent::DigitDialed {
+            digit: 7,
+            pulses: 7,
+            at_monotonic_ns: 2,
+        };
+
+        assert_eq!(
+            session_id_for_wire(&event, Some("sess-1")),
+            Some("sess-1".to_string())
+        );
+    }
+
+    #[test]
+    fn call_ended_payload_includes_dialed_digits() {
+        let event = TelemetryEvent::CallEnded {
+            session_id: "sess-1".to_string(),
+            outcome: CallOutcome::RecordingCompleted,
+            digits_dialed: "120".to_string(),
+            at_monotonic_ns: 2,
+        };
+        let payload = event_payload(&event);
+
+        assert_eq!(
+            payload.get("digits_dialed").and_then(Value::as_str),
+            Some("120")
+        );
     }
 
     #[test]

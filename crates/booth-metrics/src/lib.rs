@@ -1040,6 +1040,7 @@ mod tests {
             TelemetryEvent::CallEnded {
                 session_id: "s1".into(),
                 outcome: CallOutcome::RecordingCompleted,
+                digits_dialed: "1".into(),
                 at_monotonic_ns: 0,
             },
             TelemetryEvent::RecordingStopped {
@@ -1080,6 +1081,7 @@ mod tests {
         record_telemetry_event(&TelemetryEvent::CallEnded {
             session_id: "s1".into(),
             outcome: CallOutcome::RecordingCompleted,
+            digits_dialed: "1".into(),
             at_monotonic_ns: 0,
         });
         record_telemetry_event(&TelemetryEvent::DigitDialed {

@@ -1104,6 +1104,8 @@ pub enum TelemetryEvent {
         session_id: String,
         /// Terminal outcome of the call.
         outcome: CallOutcome,
+        /// Digits decoded during the session, in dial order.
+        digits_dialed: String,
         /// Nanoseconds since runtime start.
         at_monotonic_ns: u64,
     },
