@@ -906,7 +906,15 @@ async fn handle_event(
     bus: &TelemetryBus,
 ) -> Result<()> {
     let from = state.clone();
+    let dialed_digit = dialed_digit_for_telemetry(&from, &event);
     let (to, effects) = handle(from.clone(), event.clone());
+    if let Some((digit, pulses)) = dialed_digit {
+        bus.publish(TelemetryEvent::DigitDialed {
+            digit,
+            pulses,
+            at_monotonic_ns: monotonic_ns(),
+        });
+    }
     publish_transition(bus, &from, &to, &event);
     debug!(
         from = from.tag(),
@@ -923,6 +931,18 @@ async fn handle_event(
             .context("effect dispatcher stopped")?;
     }
     Ok(())
+}
+
+fn dialed_digit_for_telemetry(state: &State, event: &Event) -> Option<(u8, u8)> {
+    match (state, event) {
+        (State::Dialing { pulses }, Event::Tick) if (1..=10).contains(pulses) => {
+            Some((if *pulses == 10 { 0 } else { *pulses }, *pulses))
+        }
+        (State::Dialing { .. }, Event::DigitDialed { digit }) if *digit <= 9 => {
+            Some((*digit, if *digit == 0 { 10 } else { *digit }))
+        }
+        _ => None,
+    }
 }
 
 fn publish_transition(bus: &TelemetryBus, from: &State, to: &State, event: &Event) {
@@ -2818,20 +2838,48 @@ fn send_systemd_notify(message: &str) -> std::io::Result<()> {
 mod tests {
     use super::{
         AudioRef, RuntimeConfig, RuntimeStartupConfig, WeatherConfig, apply_runtime_env_overrides,
-        apply_weather_env_overrides, config_path_to_read, is_sha256_hex, operator_audio_ref,
-        upload_recording, validate_config,
+        apply_weather_env_overrides, config_path_to_read, handle_event, is_sha256_hex,
+        operator_audio_ref, upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
     use async_trait::async_trait;
+    use booth_core::{Event, State};
     use booth_hal::{
         BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage,
         OperatorQuestion, SystemSnapshot, TelemetryEvent, UploadSlot,
     };
     use booth_telemetry::TelemetryBus;
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn pulse_timeout_publishes_decoded_digit_telemetry() {
+        let bus = TelemetryBus::new(8);
+        let mut records = bus.subscribe();
+        let (effect_tx, _effect_rx) = mpsc::channel(8);
+        let mut state = State::Dialing { pulses: 10 };
+
+        handle_event(&mut state, Event::Tick, &effect_tx, &bus)
+            .await
+            .expect("handle pulse timeout");
+
+        let digit = records.recv().await.expect("digit telemetry");
+        assert!(matches!(
+            digit.event,
+            TelemetryEvent::DigitDialed {
+                digit: 0,
+                pulses: 10,
+                ..
+            }
+        ));
+        let transition = records.recv().await.expect("state transition");
+        assert!(matches!(
+            transition.event,
+            TelemetryEvent::StateTransition { .. }
+        ));
+    }
 
     #[test]
     fn operator_audio_ref_uses_local_sha_file_when_present() -> std::io::Result<()> {
