@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "booth-bin"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "anyhow",
  "async-trait",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "booth-core"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "booth-hal",
  "heapless",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "booth-debug"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "axum",
  "booth-core",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "booth-hal"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "async-trait",
  "heapless",
@@ -400,7 +400,7 @@ dependencies = [
 
 [[package]]
 name = "booth-metrics"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "booth-hal",
  "booth-telemetry",
@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "booth-mock"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "async-trait",
  "booth-hal",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "booth-pi"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "alsa",
  "anyhow",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "booth-telemetry"
-version = "0.11.0" # x-release-please-version
+version = "0.11.1" # x-release-please-version
 dependencies = [
  "booth-hal",
  "serde",
