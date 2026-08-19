@@ -317,8 +317,9 @@ as a `BoothEvent` row. Events the forwarder emits include:
 
 - `state_transition` — every state-machine transition.
 - `call_started`, `call_ended` — derived by the runtime session tracker
-  (UUIDv4 session id minted on pickup; outcome computed from the phase
-  at hangup; see `crates/booth-bin/src/observability.rs`).
+  (UUIDv4 session id minted on pickup; outcome and the complete
+  `digits_dialed` string captured at hangup; see
+  `crates/booth-bin/src/observability.rs`).
 - `digit_dialed` — one row per completed pulse group, with the digit and
   the live session id.
 - `recording_started`, `recording_stopped` — the latter carries
