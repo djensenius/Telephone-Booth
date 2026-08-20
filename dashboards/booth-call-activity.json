@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Call activity: rate, outcomes, digit histogram, recording duration, upload failures.",
+  "description": "Pickup analytics: selected-range pickups and playback starts, plus end-time outcomes, digit, recording-duration, and upload-failure diagnostics.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -8,9 +8,183 @@
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-      "fieldConfig": { "defaults": { "unit": "ops" } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "description": "Counts handset pickups whose start was observed in the selected range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
       "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_calls_started_total{booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Pickups",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Counts pickups when this end outcome is observed. Selected ranges therefore use end time, not the Operator API's start cohort.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_calls_total{outcome=\"hung_up_before_dial\",booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "No selection",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Counts pickups when this end outcome is observed. Selected ranges therefore use end time, not the Operator API's start cohort.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_digits_dialed_total{digit=~\"[3-9]\",booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Wrong numbers",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 6 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_calls_total{outcome=\"recording_completed\",booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Messages left",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Counts playback starts into the playing_message state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 6 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_state_transitions_total{to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Messages listened to",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Counts playback starts into the playing_instructions state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 6 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(booth_state_transitions_total{to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Instructions heard",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Outcome rates are recorded when pickups end.",
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 7,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
@@ -19,14 +193,15 @@
           "refId": "A"
         }
       ],
-      "title": "Call completions per second by outcome",
+      "title": "Pickup outcomes per second",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
+      "description": "Counts outcomes recorded when pickups ended in the selected range, not outcomes from a start-time cohort.",
       "fieldConfig": { "defaults": { "unit": "short" } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 8,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
@@ -35,14 +210,14 @@
           "refId": "A"
         }
       ],
-      "title": "Calls by outcome over selected range",
+      "title": "Pickup outcomes over selected range",
       "type": "piechart"
     },
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
       "fieldConfig": { "defaults": { "unit": "short" } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 9,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
@@ -51,14 +226,14 @@
           "refId": "A"
         }
       ],
-      "title": "Digits dialed",
+      "title": "Digits dialed over selected range",
       "type": "bargauge"
     },
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
       "fieldConfig": { "defaults": { "unit": "s" } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 10,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
@@ -83,8 +258,8 @@
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
       "fieldConfig": { "defaults": { "unit": "ops" } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
-      "id": 5,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "id": 11,
       "options": { "legend": { "displayMode": "table", "placement": "right" } },
       "targets": [
         {
@@ -95,27 +270,11 @@
       ],
       "title": "Upload failures per second by reason",
       "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-      "fieldConfig": { "defaults": { "unit": "s" } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
-      "id": 6,
-      "options": { "legend": { "displayMode": "table", "placement": "right" } },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(booth_upload_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
-          "legendFormat": "p95 {{outcome}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Upload duration p95 by outcome",
-      "type": "timeseries"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["booth", "calls"],
+  "tags": ["booth", "pickups"],
   "templating": {
     "list": [
       {
@@ -134,7 +293,7 @@
   "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "Booth — Call activity",
+  "title": "Booth — Pickup activity",
   "uid": "booth-call-activity",
   "version": 1,
   "weekStart": ""

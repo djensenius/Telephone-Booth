@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Top-level booth health: vitals, uptime, call rate.",
+  "description": "Top-level booth health: vitals, uptime, pickup rate.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -188,7 +188,7 @@
           "refId": "A"
         }
       ],
-      "title": "Calls per day (rolling 24h)",
+      "title": "Pickups per day (rolling 24h)",
       "type": "timeseries"
     },
     {

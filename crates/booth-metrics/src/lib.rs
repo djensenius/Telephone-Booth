@@ -7,8 +7,10 @@
 //! It also owns the in-process [`metrics`] registry: each sample updates a
 //! handful of gauges (`booth_cpu_temperature_celsius`, …) and each
 //! observed [`TelemetryEvent`] updates the appropriate counter or
-//! histogram (`booth_calls_total{outcome=…}`, `booth_digits_dialed_total{digit=…}`,
-//! `booth_recording_duration_seconds`, …).
+//! histogram. `booth_calls_started_total` counts handset pickups /
+//! interactions, `booth_calls_total{outcome=…}` counts ended-interaction
+//! outcomes, `booth_digits_dialed_total{digit=…}` counts dial attempts,
+//! and `booth_recording_duration_seconds` tracks recording lengths.
 //!
 //! In this PR the crate is freestanding: nothing in `booth-bin` calls
 //! into it yet. The follow-up PR (`tb-runtime`) wires
