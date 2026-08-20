@@ -8,20 +8,34 @@ data flow and the metric catalog.
 
 | File                          | Title                          | Focus                                                                 |
 | ----------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `booth-overview.json`         | Booth — Overview               | CPU temp, fan command, load, memory, uptime, network, calls/day.      |
-| `booth-call-activity.json`    | Booth — Call activity          | Calls per outcome, dialed digit histogram, recording + upload timing. |
-| `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events.|
+| `booth-overview.json`         | Booth — Overview               | CPU temp, fan command, load, memory, uptime, network, pickups/day. |
+| `booth-call-activity.json`    | Booth — Pickup activity        | Selected-range pickup stats plus outcome, digit, recording, and upload-failure diagnostics. |
+| `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events. |
 | `booth-thermals.json`         | Booth — Thermals               | Pi, router, modem, fan, outdoor weather, and repeated sensor charts.  |
-| `booth-combined.json`         | Telephone Booth (tabbed)       | Overview, call activity, and audio in three tabs (Grafana 12+, schema v2). |
+| `booth-combined.json`         | Telephone Booth (tabbed)       | Overview, pickup activity, and audio in three tabs (Grafana 12+, schema v2). |
 
 The four single-focus dashboards use the classic dashboard schema
 (`schemaVersion: 39`) and import into any modern Grafana.
-`booth-combined.json` reorganises the Overview, Call activity, and Audio
+`booth-combined.json` reorganises the Overview, Pickup activity, and Audio
 panels into one dashboard with a tab per section, using Grafana's newer
 dashboard schema (`dashboard.grafana.app/v2`). Use it if you prefer one
 dashboard with tabs; keep the classic files if you run an older Grafana or
 provision dashboards individually. Thermals remains a dedicated classic
 dashboard.
+
+The overview dashboard labels `booth_calls_started_total` as pickups.
+The Pickup activity dashboard and matching combined tab headline show
+selected-range totals for pickups, no selection, wrong numbers,
+messages left, messages listened to, and instructions heard. The playback
+metrics count starts, not completions. The underlying Prometheus series names
+and Operator API analytics may still use interaction terminology; Grafana only
+relabels the start-time metric for dashboard UI consistency.
+
+The **Pickups** panel is start-time based. The no-selection,
+messages-left, and pickup-outcome panels use `booth_calls_total`, which increments
+when a pickup ends. They therefore use end time and may not reconcile
+with the pickup start cohort at a selected-range boundary. The Operator API
+remains the source for cohort-consistent pickup analytics.
 
 All of them use a `$booth` template variable populated from the
 `booth_id` label, so they work out of the box for single- and
@@ -60,7 +74,7 @@ the enclosure. The dashboard includes the required
 
 ## Datasource
 
-The Overview, Call activity, and Audio classic dashboards expect a
+The Overview, Pickup activity, and Audio classic dashboards expect a
 Prometheus-compatible datasource named `VictoriaMetrics` with uid
 `VictoriaMetrics`. The Thermals dashboard instead uses its `$datasource`
 variable described above; the combined dashboard also has a datasource
@@ -126,7 +140,8 @@ different Prometheus-compatible datasource after importing, or change the
 ### The combined tabbed dashboard (`booth-combined.json`)
 
 `booth-combined.json` uses Grafana's newer dashboard schema (v2,
-`dashboard.grafana.app/v2`) so the three sections render as tabs.
+`dashboard.grafana.app/v2`) so the Overview, Pickup activity, and
+Audio sections render as tabs.
 The file is the bare dashboard **spec** (the v2 "JSON model"), which is
 what the UI import expects. A few things to know:
 

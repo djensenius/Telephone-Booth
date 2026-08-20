@@ -19,7 +19,7 @@ For the design rationale see
 | Operator `GET /v1/events`              | Cursor-paginated, type-filterable event history.                                                             |
 | Operator `GET /v1/events/stream`       | Server-sent events feed (same-origin cookie auth only).                                                      |
 | Operator `GET /v1/sessions`            | One row per pickup-to-hangup with derived outcome.                                                           |
-| `dashboards/*.json` + Grafana          | Overview, call activity, audio, and environmental thermals dashboards.                                      |
+| `dashboards/*.json` + Grafana          | Overview, pickup activity, audio, combined-tab, and environmental thermals dashboards.                     |
 
 ## Data flow
 
@@ -384,10 +384,10 @@ error messages) ever become labels.
 
 | Metric                                  | Labels                              | Source                                    |
 | --------------------------------------- | ----------------------------------- | ----------------------------------------- |
-| `booth_calls_started_total`             | (none)                              | `CallStarted` events.                     |
-| `booth_calls_total`                     | `outcome`                           | `CallEnded` events, one of: `hung_up_before_dial`, `hung_up_during_prompt`, `hung_up_during_recording`, `hung_up_during_upload`, `recording_completed`, `recording_failed`, `upload_failed`, `operator_error`, `aborted`. |
+| `booth_calls_started_total`             | (none)                              | `CallStarted` events; each sample is one handset pickup / interaction. |
+| `booth_calls_total`                     | `outcome`                           | `CallEnded` events; counts ended-interaction outcomes. One of: `hung_up_before_dial`, `hung_up_during_prompt`, `hung_up_during_recording`, `hung_up_during_upload`, `recording_completed`, `recording_failed`, `upload_failed`, `operator_error`, `aborted`. |
 | `booth_digits_dialed_total`             | `digit`                             | `DigitDialed` events; `digit` ∈ `0..9`.   |
-| `booth_state_transitions_total`         | `from`, `to`                        | `StateTransition` events.                 |
+| `booth_state_transitions_total`         | `from`, `to`                        | `StateTransition` events, including playback starts such as `to="playing_message"` and `to="playing_instructions"`. |
 | `booth_upload_failures_total`           | `reason`                            | `UploadFailed` events; small bounded enum. |
 | `booth_operator_requests_total`         | `route`, `status_class`             | `OperatorResponse` events.                |
 | `booth_errors_total`                    | `source`                            | `Error` events; `source` is a bounded enum. |
@@ -614,12 +614,38 @@ JSON dashboards live in `dashboards/` and are intended to be imported
 into a Grafana that already has a VictoriaMetrics data source named
 `VictoriaMetrics`. The folder ships:
 
-- `booth-overview.json` — Pi vitals + call rate + uptime.
-- `booth-call-activity.json` — calls/min, digit histogram, recording
-  duration histogram, upload-failure rate.
+- `booth-overview.json` — Pi vitals + pickup rate + uptime.
+- `booth-call-activity.json` — selected-range pickups, no selection,
+  wrong numbers, messages left, messages listened to, instructions heard,
+  plus outcome, digit, recording-duration, and upload-failure diagnostics.
+- `booth-combined.json` — Grafana 12+ tabbed version of the Overview,
+  Pickup activity, and Audio dashboards.
 - `booth-audio.json` — input/output dBFS, device changes.
 - `booth-thermals.json` — Pi, router battery and modem zones, fan command
   and optional RPM, plus modeled outdoor weather and freshness.
+
+Grafana labels `booth_calls_started_total` as pickups while keeping the
+existing Prometheus series names and Operator API analytics terminology:
+
+- **Pickups** —
+  `increase(booth_calls_started_total{booth_id=~"$booth"}[$__range])`
+- **No selection** —
+  `increase(booth_calls_total{outcome="hung_up_before_dial",booth_id=~"$booth"}[$__range])`
+- **Wrong numbers** —
+  `increase(booth_digits_dialed_total{digit=~"[3-9]",booth_id=~"$booth"}[$__range])`
+- **Messages left** —
+  `increase(booth_calls_total{outcome="recording_completed",booth_id=~"$booth"}[$__range])`
+- **Messages listened to** —
+  `increase(booth_state_transitions_total{from!="playing_message",to="playing_message",booth_id=~"$booth"}[$__range])`
+- **Instructions heard** —
+  `increase(booth_state_transitions_total{from!="playing_instructions",to="playing_instructions",booth_id=~"$booth"}[$__range])`
+
+The playback metrics count starts, not completions.
+`booth_calls_started_total` increments when a pickup starts, while
+`booth_calls_total` increments when its outcome is recorded at the end. As a
+result, the no-selection, messages-left, and pickup-outcome panels use end-time
+ranges and may not reconcile with the pickup start count at range
+boundaries. Use the Operator API for start-cohort pickup outcome analytics.
 
 See `dashboards/README.md` for import instructions.
 

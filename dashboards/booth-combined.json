@@ -21,7 +21,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Combined Telephone Booth observability dashboard: overview, call activity, and audio/operator HTTP, organised as tabs.",
+  "description": "Combined Telephone Booth observability dashboard: overview, pickup activity with explicit start-time and end-time cohorts, and audio/operator HTTP, organised as tabs.",
   "editable": true,
   "elements": {
     "panel-1": {
@@ -533,7 +533,7 @@
         "description": "",
         "id": 7,
         "links": [],
-        "title": "Calls per day (rolling 24h)",
+        "title": "Pickups per day (rolling 24h)",
         "vizConfig": {
           "kind": "VizConfig",
           "group": "timeseries",
@@ -634,6 +634,462 @@
                     },
                     "spec": {
                       "editorMode": "code",
+                      "expr": "sum(increase(booth_calls_started_total{booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Counts handset pickups whose start was observed in the selected range.",
+        "id": 9,
+        "links": [],
+        "title": "Pickups",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-10": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(booth_calls_total{outcome=\"hung_up_before_dial\",booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Counts pickups when this end outcome is observed. Selected ranges therefore use end time, not the Operator API's start cohort.",
+        "id": 10,
+        "links": [],
+        "title": "No selection",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-11": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(booth_digits_dialed_total{digit=~\"[3-9]\",booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "",
+        "id": 11,
+        "links": [],
+        "title": "Wrong numbers",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-12": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(booth_calls_total{outcome=\"recording_completed\",booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Counts pickups when this end outcome is observed. Selected ranges therefore use end time, not the Operator API's start cohort.",
+        "id": 12,
+        "links": [],
+        "title": "Messages left",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-13": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_message\",to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Counts playback starts into the playing_message state.",
+        "id": 13,
+        "links": [],
+        "title": "Messages listened to",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_instructions\",to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
+                      "instant": true,
+                      "range": false
+                    }
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Counts playback starts into the playing_instructions state.",
+        "id": 14,
+        "links": [],
+        "title": "Instructions heard",
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "12.0.0",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                },
+                "unit": "short"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto",
+              "reduceOptions": {
+                "calcs": [
+                  "lastNotNull"
+                ],
+                "fields": "",
+                "values": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "panel-21": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
                       "expr": "rate(booth_calls_total{booth_id=~\"$booth\"}[5m])",
                       "instant": false,
                       "range": true,
@@ -648,10 +1104,10 @@
             "transformations": []
           }
         },
-        "description": "",
-        "id": 9,
+        "description": "Outcome rates are recorded when pickups end.",
+        "id": 21,
         "links": [],
-        "title": "Call completions per second by outcome",
+        "title": "Pickup outcomes per second",
         "vizConfig": {
           "kind": "VizConfig",
           "group": "timeseries",
@@ -673,7 +1129,7 @@
         }
       }
     },
-    "panel-10": {
+    "panel-22": {
       "kind": "Panel",
       "spec": {
         "data": {
@@ -707,10 +1163,10 @@
             "transformations": []
           }
         },
-        "description": "",
-        "id": 10,
+        "description": "Counts outcomes recorded when pickups ended in the selected range, not outcomes from a start-time cohort.",
+        "id": 22,
         "links": [],
-        "title": "Calls by outcome over selected range",
+        "title": "Pickup outcomes over selected range",
         "vizConfig": {
           "kind": "VizConfig",
           "group": "piechart",
@@ -732,7 +1188,7 @@
         }
       }
     },
-    "panel-11": {
+    "panel-23": {
       "kind": "Panel",
       "spec": {
         "data": {
@@ -767,9 +1223,9 @@
           }
         },
         "description": "",
-        "id": 11,
+        "id": 23,
         "links": [],
-        "title": "Digits dialed",
+        "title": "Digits dialed over selected range",
         "vizConfig": {
           "kind": "VizConfig",
           "group": "bargauge",
@@ -791,7 +1247,7 @@
         }
       }
     },
-    "panel-12": {
+    "panel-24": {
       "kind": "Panel",
       "spec": {
         "data": {
@@ -870,7 +1326,7 @@
           }
         },
         "description": "",
-        "id": 12,
+        "id": 24,
         "links": [],
         "title": "Recording duration percentiles",
         "vizConfig": {
@@ -894,7 +1350,7 @@
         }
       }
     },
-    "panel-13": {
+    "panel-25": {
       "kind": "Panel",
       "spec": {
         "data": {
@@ -929,7 +1385,7 @@
           }
         },
         "description": "",
-        "id": 13,
+        "id": 25,
         "links": [],
         "title": "Upload failures per second by reason",
         "vizConfig": {
@@ -940,65 +1396,6 @@
             "fieldConfig": {
               "defaults": {
                 "unit": "ops"
-              },
-              "overrides": []
-            },
-            "options": {
-              "legend": {
-                "displayMode": "table",
-                "placement": "right"
-              }
-            }
-          }
-        }
-      }
-    },
-    "panel-14": {
-      "kind": "Panel",
-      "spec": {
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(booth_upload_duration_seconds_bucket{booth_id=~\"$booth\"}[5m])))",
-                      "instant": false,
-                      "range": true,
-                      "legendFormat": "p95 {{outcome}}"
-                    }
-                  },
-                  "refId": "A"
-                }
-              }
-            ],
-            "queryOptions": {},
-            "transformations": []
-          }
-        },
-        "description": "",
-        "id": 14,
-        "links": [],
-        "title": "Upload duration p95 by outcome",
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "timeseries",
-          "version": "12.0.0",
-          "spec": {
-            "fieldConfig": {
-              "defaults": {
-                "unit": "s"
               },
               "overrides": []
             },
@@ -1632,7 +2029,7 @@
         {
           "kind": "TabsLayoutTab",
           "spec": {
-            "title": "Call activity",
+            "title": "Pickup activity",
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -1646,8 +2043,8 @@
                       },
                       "x": 0,
                       "y": 0,
-                      "width": 12,
-                      "height": 8
+                      "width": 8,
+                      "height": 6
                     }
                   },
                   {
@@ -1657,10 +2054,10 @@
                         "kind": "ElementReference",
                         "name": "panel-10"
                       },
-                      "x": 12,
+                      "x": 8,
                       "y": 0,
-                      "width": 12,
-                      "height": 8
+                      "width": 8,
+                      "height": 6
                     }
                   },
                   {
@@ -1670,10 +2067,10 @@
                         "kind": "ElementReference",
                         "name": "panel-11"
                       },
-                      "x": 0,
-                      "y": 8,
-                      "width": 12,
-                      "height": 8
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 6
                     }
                   },
                   {
@@ -1683,10 +2080,10 @@
                         "kind": "ElementReference",
                         "name": "panel-12"
                       },
-                      "x": 12,
-                      "y": 8,
-                      "width": 12,
-                      "height": 8
+                      "x": 0,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6
                     }
                   },
                   {
@@ -1696,10 +2093,10 @@
                         "kind": "ElementReference",
                         "name": "panel-13"
                       },
-                      "x": 0,
-                      "y": 16,
-                      "width": 12,
-                      "height": 8
+                      "x": 8,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6
                     }
                   },
                   {
@@ -1709,9 +2106,74 @@
                         "kind": "ElementReference",
                         "name": "panel-14"
                       },
-                      "x": 12,
-                      "y": 16,
+                      "x": 16,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-21"
+                      },
+                      "x": 0,
+                      "y": 12,
                       "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-22"
+                      },
+                      "x": 12,
+                      "y": 12,
+                      "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-23"
+                      },
+                      "x": 0,
+                      "y": 20,
+                      "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-24"
+                      },
+                      "x": 12,
+                      "y": 20,
+                      "width": 12,
+                      "height": 8
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-25"
+                      },
+                      "x": 0,
+                      "y": 28,
+                      "width": 24,
                       "height": 8
                     }
                   }
