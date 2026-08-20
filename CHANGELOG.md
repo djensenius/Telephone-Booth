@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/djensenius/Telephone-Booth/compare/v0.11.1...v0.12.0) (2026-08-20)
+
+
+### Features
+
+* add pickup analytics dashboards ([#159](https://github.com/djensenius/Telephone-Booth/issues/159)) ([7bf96cd](https://github.com/djensenius/Telephone-Booth/commit/7bf96cd314c83e49e065e98441f7018c2f0f738a))
+
 ## [0.11.1](https://github.com/djensenius/Telephone-Booth/compare/v0.11.0...v0.11.1) (2026-08-19)
 
 
