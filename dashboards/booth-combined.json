@@ -938,7 +938,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(booth_state_transitions_total{to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
+                      "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_message\",to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
                       "instant": true,
                       "range": false
                     }
@@ -1014,7 +1014,7 @@
                     },
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(booth_state_transitions_total{to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
+                      "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_instructions\",to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
                       "instant": true,
                       "range": false
                     }

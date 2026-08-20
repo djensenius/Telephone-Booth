@@ -37,7 +37,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "VictoriaMetrics" },
-      "description": "Counts pickups when this end outcome is observed. Selected ranges therefore use end time, not the Operator API's start cohort.",
+      "description": "Counts wrong-number dial attempts when digits 3-9 are dialed, so selected ranges use dial time rather than end time.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -141,7 +141,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(booth_state_transitions_total{to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
+          "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_message\",to=\"playing_message\",booth_id=~\"$booth\"}[$__range]))",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -170,7 +170,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(booth_state_transitions_total{to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
+          "expr": "sum(increase(booth_state_transitions_total{from!=\"playing_instructions\",to=\"playing_instructions\",booth_id=~\"$booth\"}[$__range]))",
           "instant": true,
           "range": false,
           "refId": "A"

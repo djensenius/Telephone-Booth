@@ -636,9 +636,9 @@ existing Prometheus series names and Operator API analytics terminology:
 - **Messages left** —
   `increase(booth_calls_total{outcome="recording_completed",booth_id=~"$booth"}[$__range])`
 - **Messages listened to** —
-  `increase(booth_state_transitions_total{to="playing_message",booth_id=~"$booth"}[$__range])`
+  `increase(booth_state_transitions_total{from!="playing_message",to="playing_message",booth_id=~"$booth"}[$__range])`
 - **Instructions heard** —
-  `increase(booth_state_transitions_total{to="playing_instructions",booth_id=~"$booth"}[$__range])`
+  `increase(booth_state_transitions_total{from!="playing_instructions",to="playing_instructions",booth_id=~"$booth"}[$__range])`
 
 The playback metrics count starts, not completions.
 `booth_calls_started_total` increments when a pickup starts, while
