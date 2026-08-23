@@ -33,6 +33,8 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432 # main (Node 24)
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
