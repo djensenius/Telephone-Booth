@@ -23,6 +23,11 @@ Record and store **FLAC** (16-bit, 48 kHz, mono).
 - Files are content-addressed (`<sha256>.flac`) on Azure Blob Storage so
   duplicate uploads dedupe naturally.
 
+This decision governs recordings captured by the booth. Operator-supplied
+question and instruction prompts are decode-only inputs: `booth-pi` supports
+the formats accepted by the Operator upload API (FLAC, WAV, AIFF, MP3,
+MP4/M4A, and OGG) without changing the booth's FLAC capture or upload format.
+
 ## Consequences
 
 **Good:**

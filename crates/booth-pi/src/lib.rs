@@ -5,7 +5,7 @@
 //! * `rppal` for GPIO edge detection on configurable BCM pins.
 //! * `cpal` (ALSA on the Pi) for USB-Audio-Class-2 capture and playback,
 //!   notably the user's Focusrite.
-//! * `flacenc` / `claxon` / `symphonia` for FLAC encode + decode.
+//! * `flacenc` / `claxon` for FLAC capture and `symphonia` for prompt decode.
 //! * `reqwest` for the phone-side operator HTTP client.
 //!
 //! Hardware-only dependencies are gated behind the `pi` Cargo feature so the
