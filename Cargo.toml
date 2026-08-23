@@ -120,7 +120,7 @@ cpal = "0.15"
 claxon = "0.4"        # FLAC decode
 flacenc = "0.4"       # FLAC encode (pure Rust)
 hound = "3"           # WAV
-symphonia = { version = "0.5", features = ["all-codecs"] }
+symphonia = { version = "0.5", features = ["all-codecs", "aiff", "isomp4"] }
 
 # Config
 config = { version = "0.14", default-features = false, features = ["toml"] }

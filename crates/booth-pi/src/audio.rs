@@ -1346,6 +1346,34 @@ mod tests {
     use super::*;
     use crate::AudioConfig;
 
+    // Synthetic 440 Hz, 0.25-second clips committed so tests do not require FFmpeg.
+    const OPERATOR_PROMPT_FIXTURES: [(&str, &[u8]); 6] = [
+        (
+            "FLAC",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.flac"),
+        ),
+        (
+            "WAV",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.wav"),
+        ),
+        (
+            "AIFF",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.aiff"),
+        ),
+        (
+            "MP3",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.mp3"),
+        ),
+        (
+            "M4A",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.m4a"),
+        ),
+        (
+            "OGG",
+            include_bytes!("../tests/fixtures/prompt-audio/tone.ogg"),
+        ),
+    ];
+
     fn config_with_channels(channels: u16) -> AudioConfig {
         let dir = std::env::temp_dir().join(format!("booth-pi-test-{}", std::process::id()));
         AudioConfig {
@@ -1357,6 +1385,22 @@ mod tests {
             max_audio_download_bytes: 32 * 1024 * 1024,
             recordings_dir: dir.to_string_lossy().into_owned(),
             mixer: None,
+        }
+    }
+
+    #[test]
+    fn decodes_every_operator_prompt_format() {
+        for (format, bytes) in OPERATOR_PROMPT_FIXTURES {
+            let decoded = decode_audio_bytes(bytes)
+                .unwrap_or_else(|err| panic!("{format} prompt failed to decode: {err}"));
+            assert!(
+                !decoded.samples.is_empty(),
+                "{format} prompt decoded to no samples"
+            );
+            assert!(
+                decoded.sample_rate_hz > 0,
+                "{format} prompt has no sample rate"
+            );
         }
     }
 

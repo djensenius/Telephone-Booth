@@ -409,7 +409,10 @@ pub trait AudioSource: Send + Sync {
 pub struct OperatorQuestion {
     /// Stable id of the question.
     pub id: QuestionId,
-    /// Direct, time-limited URL for the question's audio (FLAC or MP3).
+    /// Direct, time-limited URL for the question's audio.
+    ///
+    /// The Pi adapter supports the formats accepted by the operator upload API:
+    /// FLAC, WAV, AIFF, MP3, MP4/M4A, and OGG.
     pub audio_url: String,
     /// SHA-256 digest of the question audio, when the operator supplied it.
     pub audio_sha256: Option<String>,

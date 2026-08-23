@@ -303,9 +303,11 @@ when its config and the Release PR title disagree. Past regressions
 
 ## Audio & hardware specifics
 
-- Recording format is **FLAC** (`flacenc` for encode, `claxon` /
-  `symphonia` for decode). Don't add MP3 / Opus / WAV pipelines without an
-  ADR. See ADR 0003.
+- Caller recording and upload format is **FLAC** (`flacenc` for encode,
+  `claxon` / `symphonia` for decode). Don't add another capture or encoding
+  pipeline without an ADR. Decode-only operator prompts must remain aligned
+  with the Operator upload formats: FLAC, WAV, AIFF, MP3, MP4/M4A, and OGG.
+  See ADR 0003.
 - Rotary pulses: 10 pulses = digit 0. More than 10 in a single group resets
   to `DialTone`. Pulse-group timeout is 350 ms (`PULSE_GROUP_TIMEOUT_MS`).
 - Digit 1 → random question. Digit 2 → random message. Digit 0 → the

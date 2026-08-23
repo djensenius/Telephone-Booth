@@ -30,8 +30,9 @@ metrics = { workspace = true }
 sha2 = { workspace = true }
 url = { workspace = true }
 
-# Cross-platform audio + decode/encode. Enabled by the `audio` feature so the
-# host TUI simulator on macOS / Linux can use them without the `pi` feature.
+# Cross-platform audio + prompt decode / FLAC encode. Enabled by the `audio`
+# feature so the host TUI simulator on macOS / Linux can use them without the
+# `pi` feature.
 cpal = { workspace = true, optional = true }
 flacenc = { workspace = true, optional = true }
 claxon = { workspace = true, optional = true }
@@ -48,8 +49,8 @@ alsa = { workspace = true, optional = true }
 
 [features]
 default = []
-# Cross-platform audio playback + capture + FLAC handling. Pulls reqwest so
-# remote-URL playback (operator audio) keeps working without the `operator`
+# Cross-platform multi-format prompt playback plus FLAC capture. Pulls reqwest
+# so remote-URL playback (operator audio) keeps working without the `operator`
 # feature. On Linux it also enables `alsa` for startup mixer control (no-op
 # elsewhere).
 audio = ["dep:cpal", "dep:flacenc", "dep:claxon", "dep:hound", "dep:symphonia", "dep:reqwest", "dep:futures-util", "dep:alsa"]
