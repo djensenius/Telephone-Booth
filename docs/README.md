@@ -12,6 +12,7 @@ rebuilds it from the filesystem; CI fails if it drifts.
 ## About the work
 
 - [Artist statement & bio](artist-statement.md) — the installation's concept, site-specific context, and artist bio
+- [St. Anne's installation notes](site-specific/st-anne.md) — questions, operator script, and weekly Anglican readings
 
 ## Setup & Development
 
