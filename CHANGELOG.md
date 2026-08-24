@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/djensenius/Telephone-Booth/compare/v0.12.1...v0.12.2) (2026-08-24)
+
+
+### Documentation
+
+* add St. Anne installation notes ([200d1d7](https://github.com/djensenius/Telephone-Booth/commit/200d1d7ce04fc99c68e27f4a826ca0736ba727f2))
+
 ## [0.12.1](https://github.com/djensenius/Telephone-Booth/compare/v0.12.0...v0.12.1) (2026-08-24)
 
 
