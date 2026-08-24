@@ -67,7 +67,7 @@ the river. His sister stood at a distance, to see what would happen to him.
 The daughter of Pharaoh came down to bathe at the river, while her attendants
 walked beside the river. She saw the basket among the reeds and sent her maid
 to bring it. When she opened it, she saw the child. He was crying, and she
-took pity on him, "This must be one of the Hebrews' children," she said. Then
+took pity on him. "This must be one of the Hebrews' children," she said. Then
 his sister said to Pharaoh's daughter, "Shall I go and get you a nurse from
 the Hebrew women to nurse the child for you?" Pharaoh's daughter said to her,
 "Yes." So the girl went and called the child's mother. Pharaoh's daughter
