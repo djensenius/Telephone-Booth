@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/djensenius/Telephone-Booth/compare/v0.12.0...v0.12.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **ci:** repair dependency audit ([b51e727](https://github.com/djensenius/Telephone-Booth/commit/b51e727fc00c4a86f2ee0c7a310f48d94e480189))
+
 ## [0.12.0](https://github.com/djensenius/Telephone-Booth/compare/v0.11.1...v0.12.0) (2026-08-23)
 
 
