@@ -156,6 +156,32 @@ async fn get_random_question_deserializes_200() -> TestResult {
 }
 
 #[tokio::test]
+async fn random_question_draw_sends_idempotency_header() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    let draw_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(question_body()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let question = client.random_question_with_draw_id(draw_id).await?;
+    assert_eq!(question.id, "11111111-1111-1111-1111-111111111111");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request recording enabled");
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("x-question-draw-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(draw_id)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_random_message_deserializes_audio_sha() -> TestResult {
     let (server, client) = client_with_server().await?;
     Mock::given(method("GET"))

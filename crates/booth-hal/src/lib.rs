@@ -540,6 +540,19 @@ pub trait OperatorClient: Send + Sync {
     /// operator side.
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError>;
 
+    /// Fetch a random question under a stable logical draw identifier.
+    ///
+    /// Callers reuse `draw_id` across transport retries so an operator that
+    /// supports idempotent draws can replay the same selection. The default
+    /// preserves compatibility with adapters that do not expose that feature.
+    async fn random_question_with_draw_id(
+        &self,
+        draw_id: &str,
+    ) -> Result<OperatorQuestion, OperatorError> {
+        let _ = draw_id;
+        self.random_question().await
+    }
+
     /// Fetch a random previously-approved message.
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError>;
 
