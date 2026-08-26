@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/djensenius/Telephone-Booth/compare/v0.12.2...v0.13.0) (2026-08-26)
+
+
+### Features
+
+* **operator:** make question draws retry-safe ([#168](https://github.com/djensenius/Telephone-Booth/issues/168)) ([4cc87a1](https://github.com/djensenius/Telephone-Booth/commit/4cc87a1f750b3316ea6a9e0bec368fb4dadc617d))
+
 ## [0.12.2](https://github.com/djensenius/Telephone-Booth/compare/v0.12.1...v0.12.2) (2026-08-24)
 
 
