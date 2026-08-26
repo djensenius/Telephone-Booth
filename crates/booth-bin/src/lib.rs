@@ -20,8 +20,8 @@ use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BoothStatus, BuiltinTone, GpioEdge, GpioError,
-    GpioPort, LedColour, LedPattern, OperatorClient, OperatorError, PinRole, PowerController,
-    RecordingId, RuntimeMode, StatusLed, TelemetryEvent,
+    GpioPort, LedColour, LedPattern, OperatorClient, OperatorError, OperatorQuestion, PinRole,
+    PowerController, RecordingId, RuntimeMode, StatusLed, TelemetryEvent,
 };
 use booth_pi::{
     AudioConfig, GpioConfig, GpioPull, MAX_UPLOAD_BYTES, MAX_UPLOAD_DURATION_MS, OperatorConfig,
@@ -1831,11 +1831,7 @@ async fn fetch_random_question(
     recordings_dir: &Path,
     token: &FetchToken,
 ) {
-    match retry_operator("GET /v1/questions/random", bus, || {
-        operator.random_question()
-    })
-    .await
-    {
+    match request_random_question(operator, bus).await {
         Ok(question) => {
             // The booth reset (hangup, or a new digit) while this fetch was in
             // flight, so the clip belongs to an abandoned call: drop it instead
@@ -1867,6 +1863,17 @@ async fn fetch_random_question(
                 .await;
         }
     }
+}
+
+async fn request_random_question(
+    operator: &dyn OperatorClient,
+    bus: &TelemetryBus,
+) -> StdResult<OperatorQuestion, OperatorError> {
+    let draw_id = uuid::Uuid::new_v4().to_string();
+    retry_operator("GET /v1/questions/random", bus, || {
+        operator.random_question_with_draw_id(&draw_id)
+    })
+    .await
 }
 
 async fn fetch_random_message(
@@ -2839,7 +2846,7 @@ mod tests {
     use super::{
         AudioRef, RuntimeConfig, RuntimeStartupConfig, WeatherConfig, apply_runtime_env_overrides,
         apply_weather_env_overrides, config_path_to_read, handle_event, is_sha256_hex,
-        operator_audio_ref, upload_recording, validate_config,
+        operator_audio_ref, request_random_question, upload_recording, validate_config,
     };
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2992,12 +2999,36 @@ mod tests {
     #[derive(Default)]
     struct CountingOperator {
         calls: AtomicUsize,
+        question_attempts: AtomicUsize,
+        question_draw_ids: std::sync::Mutex<Vec<String>>,
     }
 
     #[async_trait]
     impl OperatorClient for CountingOperator {
         async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))
+        }
+
+        async fn random_question_with_draw_id(
+            &self,
+            draw_id: &str,
+        ) -> Result<OperatorQuestion, OperatorError> {
+            self.question_draw_ids
+                .lock()
+                .expect("draw ID lock")
+                .push(draw_id.to_string());
+            if self.question_attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                return Err(OperatorError::Server {
+                    status: 503,
+                    body: "retry".to_string(),
+                });
+            }
+            Ok(OperatorQuestion {
+                id: "question-1".to_string(),
+                audio_url: "https://storage.example.com/question.flac".to_string(),
+                audio_sha256: None,
+                description: Some("Question".to_string()),
+            })
         }
 
         async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
@@ -3057,6 +3088,22 @@ mod tests {
         ) -> Result<(), OperatorError> {
             Err(OperatorError::Unsupported("not used by this test".into()))
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn random_question_retries_reuse_one_draw_id() {
+        let operator = CountingOperator::default();
+        let bus = TelemetryBus::new(16);
+
+        let question = request_random_question(&operator, &bus)
+            .await
+            .expect("question should succeed on retry");
+
+        assert_eq!(question.id, "question-1");
+        let draw_ids = operator.question_draw_ids.lock().expect("draw ID lock");
+        assert_eq!(draw_ids.len(), 2);
+        assert_eq!(draw_ids[0], draw_ids[1]);
+        uuid::Uuid::parse_str(&draw_ids[0]).expect("draw ID should be a UUID");
     }
 
     #[tokio::test]

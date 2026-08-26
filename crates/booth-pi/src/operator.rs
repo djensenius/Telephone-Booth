@@ -49,6 +49,8 @@ const FLAC_CONTENT_TYPE: &str = "audio/flac";
 const AZURE_BLOB_TYPE_HEADER: &str = "x-ms-blob-type";
 #[cfg(feature = "operator")]
 const AZURE_BLOCK_BLOB: &str = "BlockBlob";
+#[cfg(feature = "operator")]
+const QUESTION_DRAW_ID_HEADER: &str = "x-question-draw-id";
 /// Azure stores `x-ms-meta-*` request headers as blob metadata. The operator's
 /// `/v1/messages/{id}/complete` handler reads the `sha256` metadata value back
 /// off the blob and rejects the upload with `sha256_metadata_missing` (HTTP
@@ -190,16 +192,26 @@ impl PiOperatorClient {
 
     /// Fetch a random approved question.
     pub async fn get_random_question(&self) -> Result<OperatorQuestion, OperatorError> {
+        self.get_random_question_for_draw(None).await
+    }
+
+    async fn get_random_question_for_draw(
+        &self,
+        draw_id: Option<&str>,
+    ) -> Result<OperatorQuestion, OperatorError> {
         #[cfg(feature = "operator")]
         {
             let question = self
-                .send_json::<ApiQuestion>(reqwest::Method::GET, "/v1/questions/random", None::<&()>)
+                .send_question_json::<ApiQuestion>("/v1/questions/random", draw_id)
                 .await?;
             return Ok(question.into());
         }
 
         #[cfg(not(feature = "operator"))]
-        unsupported()
+        {
+            let _ = draw_id;
+            unsupported()
+        }
     }
 
     /// Fetch a random approved message.
@@ -437,6 +449,23 @@ impl PiOperatorClient {
     }
 
     #[cfg(feature = "operator")]
+    async fn send_question_json<T>(
+        &self,
+        path: &str,
+        draw_id: Option<&str>,
+    ) -> Result<T, OperatorError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response = self
+            .send_with_question_draw_id(reqwest::Method::GET, path, None::<&()>, draw_id)
+            .await?;
+        response.json::<T>().await.map_err(|err| {
+            OperatorError::Protocol(format!("failed to decode operator JSON: {err}").into())
+        })
+    }
+
+    #[cfg(feature = "operator")]
     async fn send_empty(
         &self,
         method: reqwest::Method,
@@ -454,12 +483,27 @@ impl PiOperatorClient {
         path: &str,
         body: Option<&(impl Serialize + Sync)>,
     ) -> Result<reqwest::Response, OperatorError> {
+        self.send_with_question_draw_id(method, path, body, None)
+            .await
+    }
+
+    #[cfg(feature = "operator")]
+    async fn send_with_question_draw_id(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&(impl Serialize + Sync)>,
+        draw_id: Option<&str>,
+    ) -> Result<reqwest::Response, OperatorError> {
         let url = self.api_url_for_path(path);
         debug!(method = method.as_str(), path, "operator request");
 
         let mut request = self.client.request(method, &url);
         if let Some(body) = body {
             request = request.json(body);
+        }
+        if let Some(draw_id) = draw_id {
+            request = request.header(QUESTION_DRAW_ID_HEADER, draw_id);
         }
 
         let response = request.send().await.map_err(operator_transport)?;
@@ -478,6 +522,13 @@ impl PiOperatorClient {
 impl OperatorClient for PiOperatorClient {
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
         self.get_random_question().await
+    }
+
+    async fn random_question_with_draw_id(
+        &self,
+        draw_id: &str,
+    ) -> Result<OperatorQuestion, OperatorError> {
+        self.get_random_question_for_draw(Some(draw_id)).await
     }
 
     async fn random_message(&self) -> Result<OperatorMessage, OperatorError> {
