@@ -2051,10 +2051,17 @@ async fn upload_recording(
             size_bytes: bytes,
             duration_ms: recording_duration_ms,
         };
-        let slot = retry_operator("POST /v1/messages", bus, || {
+        let slot = match retry_operator("POST /v1/messages", bus, || {
             operator.init_upload(question_id.as_ref(), &metadata)
         })
-        .await?;
+        .await
+        {
+            Ok(slot) => slot,
+            // Only the operator's confirmed completed row is idempotent success,
+            // not a conflict from the subsequent blob transfer.
+            Err(OperatorError::DuplicateRecording(_)) => return Ok(()),
+            Err(err) => return Err(err),
+        };
         retry_operator("PUT <presigned-upload-url>", bus, || {
             operator.put_upload(&slot, path, &recording_id)
         })
@@ -3152,6 +3159,7 @@ mod tests {
     #[derive(Default)]
     struct CountingOperator {
         calls: AtomicUsize,
+        init_upload_error: Option<OperatorError>,
         question_attempts: AtomicUsize,
         question_draw_ids: std::sync::Mutex<Vec<String>>,
     }
@@ -3198,6 +3206,9 @@ mod tests {
             _metadata: &booth_hal::UploadMetadata,
         ) -> Result<UploadSlot, OperatorError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
+            if let Some(error) = &self.init_upload_error {
+                return Err(error.clone());
+            }
             Ok(UploadSlot {
                 id: "slot-1".to_string(),
                 upload_url: "https://storage.example.com/blob".to_string(),
@@ -3298,6 +3309,51 @@ mod tests {
                     .into_iter()
                     .any(|record| { matches!(record.event, TelemetryEvent::UploadFailed { .. }) })
             );
+        }
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test(start_paused = true)]
+    async fn replay_only_dequeues_confirmed_duplicate_recordings() {
+        use super::pending_uploads::{PendingUploadSpool, SpoolEntry};
+        use std::sync::Arc;
+        for (error, retained) in [
+            (OperatorError::DuplicateRecording("completed".into()), false),
+            (OperatorError::Conflict("unfinished".into()), true),
+            (OperatorError::InstallationInactive("gap".into()), true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let spool = Arc::new(PendingUploadSpool::open(dir.path()).unwrap());
+            spool
+                .enqueue(&SpoolEntry {
+                    recording_id: "answer".into(),
+                    question_id: None,
+                    path: "answer.flac".into(),
+                    size_bytes: Some(1),
+                    duration_ms: Some(1_000),
+                })
+                .unwrap();
+            let operator = Arc::new(CountingOperator {
+                init_upload_error: Some(error),
+                ..CountingOperator::default()
+            });
+            let source: Arc<tokio::sync::Mutex<Box<dyn booth_hal::AudioSource>>> = Arc::new(
+                tokio::sync::Mutex::new(Box::new(booth_mock::MockAudioSource::default())),
+            );
+            let task = super::spawn_upload_replay(
+                operator.clone(),
+                source,
+                spool.clone(),
+                super::installation::InstallationGate::new(false),
+                TelemetryBus::new(16),
+            );
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(operator.calls.load(Ordering::Relaxed), 1);
+            assert_eq!(spool.contains("answer"), retained);
+            task.abort();
+            let _ = task.await;
         }
     }
 

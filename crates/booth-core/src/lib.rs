@@ -1554,9 +1554,11 @@ mod tests {
         /// `LedColour` cannot represent two channels at once by construction —
         /// this asserts the mapping is total).
         #[test]
-        fn random_walk_keeps_led_single_channel(seq in proptest::collection::vec(0u8..16, 0..200)) {
+        fn random_walk_keeps_led_single_channel(
+            seq in proptest::collection::vec((proptest::bool::ANY, 0u8..20), 0..200)
+        ) {
             let mut state = State::Idle;
-            for code in seq {
+            for (accepting_calls, code) in seq {
                 let event = match code {
                     0 => Event::HookOff,
                     1 => Event::HookOn,
@@ -1571,9 +1573,23 @@ mod tests {
                     10 => Event::UploadFailed { reason: "x".into() },
                     11 => Event::PowerButtonPressed,
                     12 => Event::PowerButtonHeld,
+                    13 => Event::UploadDeferred,
+                    14 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Complete },
+                    15 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Deferred },
+                    16 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Failed { reason: "x".into() } },
+                    17 => Event::UploadFinished { recording_id: "abandoned".into(), outcome: UploadOutcome::Complete },
+                    18 => Event::DigitDialed { digit: 1 },
+                    19 => Event::RecordingFailed { reason: "x".into() },
                     _ => Event::Tick,
                 };
-                let (next, _effects) = handle(state, event);
+                let (next, effects) = handle_with_call_availability(state, event, accepting_calls);
+                if !accepting_calls {
+                    proptest::prop_assert!(!effects.iter().any(|effect| matches!(
+                        effect, Effect::FetchRandomQuestion | Effect::FetchRandomMessage |
+                            Effect::FetchInstructions | Effect::StartRecording |
+                            Effect::Play(_) | Effect::PutStatus(_)
+                    )));
+                }
                 state = next;
                 // The mapping is total and returns exactly one colour.
                 let (_colour, _pattern) = status_led_for(&state);
