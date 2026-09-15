@@ -9,9 +9,412 @@ use booth_hal::{AudioRef, BuiltinTone, TelemetryEvent};
 use booth_telemetry::TelemetryBus;
 use tokio::sync::oneshot;
 
+#[tokio::test(start_paused = true)]
+async fn exhibition_end_defers_inflight_recording_and_restart_replays_without_reboot()
+-> Result<(), Box<dyn Error>> {
+    use booth_bin::pending_uploads::PendingUploadSpool;
+    use booth_hal::InstallationState;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.debug.allow_controls = true;
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(512);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles.operator.enable_installation_state();
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::Active);
+        state.questions.push_back(booth_hal::OperatorQuestion {
+            id: "question".into(),
+            audio_url: "https://mock.invalid/question.flac".into(),
+            audio_sha256: None,
+            description: None,
+        });
+    }
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    wait_for_state(&runtime.commands, "active idle", |s| *s == State::Idle).await?;
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
+    handles.operator.state().lock().await.installation_state =
+        Some(InstallationState::BetweenExhibitions);
+    tokio::time::advance(Duration::from_secs(6)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(
+        snapshot(&runtime.commands).await?,
+        State::Recording { .. }
+    ));
+    inject(&runtime.commands, Event::HookOn).await?;
+    wait_for_state(&runtime.commands, "paused after finalizing", |s| {
+        matches!(s, State::CallsPaused { on_hook: true })
+    })
+    .await?;
+    let spool = PendingUploadSpool::open(dir.path().join("pending-uploads"))?;
+    assert_eq!(spool.scan().len(), 1);
+    assert!(handles.operator.state().lock().await.uploads.is_empty());
+    let playback_count = handles.audio_sink.state().await.history.len();
+    inject(&runtime.commands, Event::HookOff).await?;
+    for digit in 0..=9 {
+        inject(&runtime.commands, Event::RotaryPulse).await?;
+        inject(&runtime.commands, Event::DigitDialed { digit }).await?;
+    }
+    assert_eq!(
+        handles.audio_sink.state().await.history.len(),
+        playback_count
+    );
+    assert!(!bus.snapshot_since(None).iter().any(|record| matches!(
+        record.event,
+        TelemetryEvent::UploadCompleted { .. } | TelemetryEvent::UploadFailed { .. }
+    )));
+    handles.operator.state().lock().await.installation_state = Some(InstallationState::Active);
+    tokio::time::advance(Duration::from_secs(6)).await;
+    wait_for_state(&runtime.commands, "resumed dial tone", |s| {
+        *s == State::DialTone
+    })
+    .await?;
+    for _ in 0..200 {
+        if spool.scan().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(spool.scan().is_empty());
+    assert_eq!(handles.operator.state().lock().await.uploads.len(), 1);
+    assert_eq!(snapshot(&runtime.commands).await?, State::DialTone);
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn upload_pickup_survives_inactive_deferral_and_restart() -> Result<(), Box<dyn Error>> {
+    use booth_bin::observability::SessionTracker;
+    use booth_bin::pending_uploads::PendingUploadSpool;
+    use booth_hal::{InstallationState, OperatorError};
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.debug.allow_controls = true;
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(512);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles.operator.enable_installation_state();
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::Active);
+        state.questions.push_back(booth_hal::OperatorQuestion {
+            id: "question".into(),
+            audio_url: "https://mock.invalid/question.flac".into(),
+            audio_sha256: None,
+            description: None,
+        });
+    }
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    wait_for_state(&runtime.commands, "active idle", |s| *s == State::Idle).await?;
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.latency = Some(Duration::from_millis(500));
+        state.fail_complete_upload = Some(OperatorError::InstallationInactive(
+            "ended during upload".into(),
+        ));
+    }
+    inject(&runtime.commands, Event::HookOn).await?;
+    wait_for_state(&runtime.commands, "on-hook upload", |s| {
+        matches!(s, State::Uploading { on_hook: true, .. })
+    })
+    .await?;
+    let spool = PendingUploadSpool::open(dir.path().join("pending-uploads"))?;
+    for _ in 0..100 {
+        if !spool.scan().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let pending = spool.scan();
+    assert_eq!(pending.len(), 1);
+    let playback_count = handles.audio_sink.state().await.history.len();
+
+    inject(&runtime.commands, Event::HookOff).await?;
+    assert_eq!(
+        snapshot(&runtime.commands).await?,
+        State::Uploading {
+            recording_id: pending[0].recording_id.clone(),
+            question_id: "question".into(),
+            on_hook: false,
+        }
+    );
+    handles.operator.state().lock().await.installation_state =
+        Some(InstallationState::BetweenExhibitions);
+    wait_for_state(&runtime.commands, "off-hook deferred upload", |s| {
+        matches!(s, State::CallsPaused { on_hook: false })
+    })
+    .await?;
+    inject(&runtime.commands, Event::RotaryPulse).await?;
+    inject(&runtime.commands, Event::Tick).await?;
+    assert_eq!(
+        snapshot(&runtime.commands).await?,
+        State::CallsPaused { on_hook: false }
+    );
+    assert_eq!(
+        PendingUploadSpool::open(dir.path().join("pending-uploads"))?.scan(),
+        pending
+    );
+    assert_eq!(handles.operator.state().lock().await.uploads.len(), 1);
+    assert_eq!(
+        handles.audio_sink.state().await.history.len(),
+        playback_count
+    );
+    let records = bus.snapshot_since(None);
+    assert!(!records.iter().any(|record| matches!(
+        record.event,
+        TelemetryEvent::UploadCompleted { .. }
+            | TelemetryEvent::UploadFailed { .. }
+            | TelemetryEvent::Error { .. }
+    )));
+    let mut tracker = SessionTracker::new();
+    let call_events: Vec<_> = records
+        .iter()
+        .flat_map(|record| tracker.observe(&record.event, 0))
+        .collect();
+    assert!(matches!(
+        call_events.as_slice(),
+        [
+            TelemetryEvent::CallStarted { .. },
+            TelemetryEvent::CallEnded { .. }
+        ]
+    ));
+    let last_record = records.last().ok_or("missing runtime telemetry")?.id;
+
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::Active);
+        state.fail_complete_upload = None;
+        state.latency = None;
+    }
+    tokio::time::advance(Duration::from_secs(6)).await;
+    wait_for_state(&runtime.commands, "resumed off-hook dial tone", |s| {
+        *s == State::DialTone
+    })
+    .await?;
+    wait_for_playback(&handles.audio_sink, "resumed dial tone", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::DialTone))
+    })
+    .await?;
+    for _ in 0..100 {
+        if spool.scan().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(spool.scan().is_empty());
+    assert_eq!(handles.operator.state().lock().await.uploads.len(), 2);
+    assert_eq!(snapshot(&runtime.commands).await?, State::DialTone);
+    assert_eq!(
+        handles.audio_sink.state().await.history.len(),
+        playback_count + 1
+    );
+    let resumed_call_events: Vec<_> = bus
+        .snapshot_since(Some(last_record))
+        .iter()
+        .flat_map(|record| tracker.observe(&record.event, 0))
+        .collect();
+    assert!(matches!(
+        resumed_call_events.as_slice(),
+        [TelemetryEvent::CallStarted { .. }]
+    ));
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn completion_conflict_preserves_startup_spool_and_replays_on_manual_start()
+-> Result<(), Box<dyn Error>> {
+    use booth_bin::pending_uploads::{PendingUploadSpool, SpoolEntry};
+    use booth_hal::{InstallationState, OperatorError};
+    use std::time::Duration;
+    let dir = tempfile::tempdir()?;
+    let recording = dir.path().join("answer.flac");
+    std::fs::write(&recording, b"retained-recording")?;
+    let spool = PendingUploadSpool::open(dir.path().join("pending-uploads"))?;
+    spool.enqueue(&SpoolEntry {
+        recording_id: "answer".into(),
+        question_id: Some("question".into()),
+        path: recording.to_string_lossy().into_owned(),
+        size_bytes: Some(18),
+        duration_ms: Some(5000),
+    })?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(512);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles.operator.enable_installation_state();
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::BetweenExhibitions);
+    }
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    wait_for_state(&runtime.commands, "startup paused", |s| {
+        matches!(s, State::CallsPaused { .. })
+    })
+    .await?;
+    tokio::time::advance(Duration::from_secs(31)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(handles.operator.state().lock().await.uploads.is_empty());
+    assert_eq!(spool.scan().len(), 1);
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::Active);
+        state.fail_complete_upload = Some(OperatorError::InstallationInactive(
+            "ended during upload".into(),
+        ));
+    }
+    tokio::time::advance(Duration::from_secs(6)).await;
+    for _ in 0..100 {
+        if !handles.operator.state().lock().await.uploads.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    handles.operator.state().lock().await.installation_state =
+        Some(InstallationState::BetweenExhibitions);
+    wait_for_state(&runtime.commands, "completion deferred", |s| {
+        matches!(s, State::CallsPaused { .. })
+    })
+    .await?;
+    assert_eq!(spool.scan().len(), 1);
+    assert_eq!(std::fs::read(&recording)?, b"retained-recording");
+    assert!(!bus.snapshot_since(None).iter().any(|record| matches!(
+        record.event,
+        TelemetryEvent::UploadCompleted { .. }
+            | TelemetryEvent::UploadFailed { .. }
+            | TelemetryEvent::Error { .. }
+    )));
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.installation_state = Some(InstallationState::Active);
+        state.fail_complete_upload = None;
+    }
+    tokio::time::advance(Duration::from_secs(6)).await;
+    for _ in 0..100 {
+        if spool.scan().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(spool.scan().is_empty());
+    assert_eq!(handles.operator.state().lock().await.uploads.len(), 2);
+    assert_eq!(snapshot(&runtime.commands).await?, State::Idle);
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_startup_status_never_blocks_gpio_or_power_controls() -> Result<(), Box<dyn Error>> {
+    use std::time::Duration;
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.debug.allow_controls = true;
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(128);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles.operator.enable_installation_state();
+    handles.operator.state().lock().await.installation_latency = Some(Duration::from_mins(1));
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    inject(&runtime.commands, Event::HookOff).await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(200), snapshot(&runtime.commands)).await??,
+        State::CallsPaused { on_hook: false }
+    );
+    inject(&runtime.commands, Event::PowerButtonPressed).await?;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        handles.power.actions().await,
+        vec![booth_mock::PowerAction::Reboot]
+    );
+    tokio::time::advance(Duration::from_secs(6)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let state = handles.operator.state();
+    assert!(state.lock().await.installation_checks <= 2);
+    assert!(
+        bus.snapshot_since(None)
+            .iter()
+            .any(|record| matches!(&record.event,
+        TelemetryEvent::Error { source, .. } if source == "installation_state"))
+    );
+    assert!(handles.audio_sink.state().await.history.is_empty());
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
 #[tokio::test]
 async fn runtime_accepts_debug_events_and_dispatches_effects() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(128);
     let (adapters, _handles) = build_mock_adapters(&bus);
@@ -89,7 +492,9 @@ async fn wait_for_message_request(bus: &TelemetryBus) -> Result<(), Box<dyn Erro
 /// `Idle` within a tight deadline.
 #[tokio::test]
 async fn hangup_during_slow_fetch_is_not_blocked() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(256);
     let (adapters, handles) = build_mock_adapters(&bus);
@@ -148,7 +553,9 @@ async fn hangup_during_slow_fetch_is_not_blocked() -> Result<(), Box<dyn Error>>
 /// The upload takes 2 seconds but `StopAudio` fires within 200ms.
 #[tokio::test]
 async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(256);
     let (adapters, handles) = build_mock_adapters(&bus);
@@ -304,6 +711,8 @@ async fn hangup_with_no_recording_in_flight_resets_to_idle() -> Result<(), Box<d
     use booth_hal::AudioSource;
 
     let mut config = booth_bin::RuntimeConfig::default();
+    let dir = tempfile::tempdir()?;
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(256);
     let (adapters, handles) = build_mock_adapters(&bus);
@@ -367,7 +776,9 @@ async fn hangup_with_no_recording_in_flight_resets_to_idle() -> Result<(), Box<d
 /// `PlayingQuestion` on its own.
 #[tokio::test]
 async fn abandoned_fetch_does_not_leak_into_the_next_call() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(256);
     let (adapters, handles) = build_mock_adapters(&bus);
@@ -427,7 +838,9 @@ async fn abandoned_fetch_does_not_leak_into_the_next_call() -> Result<(), Box<dy
 /// sink — the caller hung up and the clip kept playing.
 #[tokio::test]
 async fn hangup_stops_playback_while_an_upload_is_still_running() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     let bus = TelemetryBus::new(512);
     let (adapters, handles) = build_mock_adapters(&bus);

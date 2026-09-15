@@ -21,8 +21,8 @@ use std::path::Path;
 use crate::{MAX_UPLOAD_DURATION_MS, OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
-    BoothStatus, EventBatchAck, OperatorClient, OperatorError, OperatorMessage, OperatorQuestion,
-    QuestionId, RuntimeMode, SystemSnapshot, UploadSlot, redact_url,
+    BoothStatus, EventBatchAck, InstallationState, OperatorClient, OperatorError, OperatorMessage,
+    OperatorQuestion, QuestionId, RuntimeMode, SystemSnapshot, UploadSlot, redact_url,
 };
 
 #[cfg(feature = "operator")]
@@ -520,6 +520,29 @@ impl PiOperatorClient {
 
 #[async_trait]
 impl OperatorClient for PiOperatorClient {
+    fn supports_installation_state(&self) -> bool {
+        true
+    }
+
+    async fn installation_state(&self) -> Result<Option<InstallationState>, OperatorError> {
+        #[cfg(feature = "operator")]
+        {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Status {
+                #[serde(default)]
+                installation_state: Option<InstallationState>,
+            }
+            // Deliberately do not interpret updatedAt/isSynthetic as a heartbeat.
+            let status: Status = self
+                .send_json(reqwest::Method::GET, "/v1/status", None::<&()>)
+                .await?;
+            Ok(status.installation_state)
+        }
+        #[cfg(not(feature = "operator"))]
+        unsupported()
+    }
+
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
         self.get_random_question().await
     }
@@ -700,24 +723,32 @@ fn operator_transport(err: reqwest::Error) -> OperatorError {
 
 #[cfg(feature = "operator")]
 async fn map_operator_response(status: u16, response: reqwest::Response) -> OperatorError {
-    let body = truncated_body(response).await;
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(err) => return operator_transport(err),
+    };
     map_operator_error_body(status, body)
 }
 
 fn map_operator_error_body(status: u16, body: String) -> OperatorError {
+    let error_code = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value.get("error")?.as_str().map(str::to_owned));
+    let max_bytes = max_bytes_from_body(&body);
+    let body: String = body.chars().take(512).collect();
     match status {
         400 => OperatorError::InvalidArgument(body.into()),
         401 => OperatorError::Unauthorized(
             "operator token was rejected; rotate the configured API token".into(),
         ),
-        409 if body.contains("message_already_exists") => {
+        409 if error_code.as_deref() == Some("installation_inactive") => {
+            OperatorError::InstallationInactive(body.into())
+        }
+        409 if error_code.as_deref() == Some("message_already_exists") => {
             OperatorError::DuplicateRecording(body.into())
         }
         409 => OperatorError::Conflict(body.into()),
-        413 => OperatorError::PayloadTooLarge {
-            max_bytes: max_bytes_from_body(&body),
-            body,
-        },
+        413 => OperatorError::PayloadTooLarge { max_bytes, body },
         422 => OperatorError::Unprocessable(body.into()),
         _ => OperatorError::Server { status, body },
     }

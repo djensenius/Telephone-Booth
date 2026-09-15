@@ -47,7 +47,9 @@ async fn wait_for_action(
 
 #[tokio::test]
 async fn short_press_reboots() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.power_button.enabled = true;
     config.power_button.hold_ms = 1_000;
     let bus = TelemetryBus::new(128);
@@ -81,7 +83,9 @@ async fn short_press_reboots() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn hold_powers_off() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.power_button.enabled = true;
     config.power_button.hold_ms = 150;
     let bus = TelemetryBus::new(128);

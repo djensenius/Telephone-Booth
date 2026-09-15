@@ -215,8 +215,8 @@ impl SessionTracker {
         let mut out = Vec::new();
         match event {
             TelemetryEvent::StateTransition { from, to, .. } => {
-                let was_idle = from == "idle";
-                let now_idle = to == "idle";
+                let was_idle = matches!(from.as_str(), "idle" | "calls_paused");
+                let now_idle = matches!(to.as_str(), "idle" | "calls_paused");
                 if was_idle && !now_idle && self.current.is_none() {
                     let id = Uuid::new_v4().to_string();
                     self.current = Some(LiveSession {
@@ -312,30 +312,6 @@ pub fn spawn_event_forwarder(
     // between spawn and the task's first poll.
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
-        // Replay any spooled batches from a previous run before processing
-        // new events. Events have stable eventIds so replay is idempotent.
-        if let Some(ref spool) = event_spool {
-            for (path, body) in spool.drain() {
-                match operator.push_events_json(&body).await {
-                    Ok(ack) => {
-                        debug!(
-                            accepted = ack.accepted,
-                            duplicates = ack.duplicates,
-                            "replayed spooled event batch"
-                        );
-                        EventSpool::remove_file(&path);
-                    }
-                    Err(OperatorError::Unsupported(_)) => {
-                        EventSpool::remove_file(&path);
-                    }
-                    Err(err) => {
-                        warn!(%err, "failed to replay spooled events; will retry next startup");
-                        break;
-                    }
-                }
-            }
-        }
-
         let mut tracker = SessionTracker::new();
         let mut batch: VecDeque<Value> = VecDeque::with_capacity(config.operator_forward.batch_max);
         let mut dropped: u64 = 0;
@@ -349,6 +325,12 @@ pub fn spawn_event_forwarder(
         loop {
             tokio::select! {
                 () = flush_tick(&mut flush) => {
+                    if let Some(ref spool) = event_spool {
+                        tokio::select! {
+                            () = replay_one_batch(&operator, spool) => {}
+                            () = shutdown_requested(&mut shutdown) => break,
+                        }
+                    }
                     if !batch.is_empty() {
                         // Race the flush against the shutdown signal so a
                         // hung operator call (the real client has a 10 s HTTP
@@ -451,6 +433,20 @@ pub fn spawn_event_forwarder(
             }
         }
     })
+}
+
+async fn replay_one_batch(operator: &Arc<dyn OperatorClient>, spool: &EventSpool) {
+    // Bound replay to one request per flush tick; no restart is required.
+    let Some((path, body)) = spool.drain().into_iter().next() else {
+        return;
+    };
+    match operator.push_events_json(&body).await {
+        Ok(_) | Err(OperatorError::Unsupported(_)) => EventSpool::remove_file(&path),
+        Err(OperatorError::InstallationInactive(_)) => {
+            debug!("retaining spooled events between exhibitions");
+        }
+        Err(err) => warn!(%err, "event replay failed; retaining batch for later retry"),
+    }
 }
 
 /// Spawn the system snapshot pusher task.
@@ -662,6 +658,10 @@ async fn flush_once(
             // the batch silently so we don't loop forever.
             batch.clear();
             true
+        }
+        Err(OperatorError::InstallationInactive(_)) => {
+            debug!("installation inactive; keeping unacknowledged events");
+            false
         }
         Err(err) => {
             // Keep the batch buffered for the next flush; the buffer cap
@@ -962,6 +962,58 @@ mod tests {
             [TelemetryEvent::CallStarted { .. }]
         ));
         assert!(t.current_session_id().is_some());
+    }
+
+    #[test]
+    fn paused_transitions_are_not_real_calls_or_errors() {
+        let mut tracker = SessionTracker::new();
+        for (from, to) in [
+            ("idle", "calls_paused"),
+            ("calls_paused", "calls_paused"),
+            ("calls_paused", "idle"),
+        ] {
+            assert!(tracker.observe(&transition(from, to, 1), 1).is_empty());
+        }
+        assert!(tracker.current_session_id().is_none());
+        assert!(matches!(
+            tracker
+                .observe(&transition("calls_paused", "dial_tone", 2), 2)
+                .as_slice(),
+            [TelemetryEvent::CallStarted { .. }]
+        ));
+        assert!(matches!(
+            tracker
+                .observe(&transition("dial_tone", "calls_paused", 3), 3)
+                .as_slice(),
+            [TelemetryEvent::CallEnded {
+                outcome: CallOutcome::HungUpBeforeDial,
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn inactive_conflict_retains_event_batch_and_spool_until_replay() {
+        let inner = Arc::new(booth_mock::MockOperatorClient::new());
+        inner.state().lock().await.fail_events =
+            Some(OperatorError::InstallationInactive("gap".into()));
+        let operator: Arc<dyn OperatorClient> = inner.clone();
+        let identity = RuntimeIdentity::new("booth");
+        let event = json!({"eventId":"retained", "type":"call_ended"});
+        let mut batch = VecDeque::from([event.clone()]);
+        assert!(!flush_once(&operator, &mut batch, &identity).await);
+        assert_eq!(batch, VecDeque::from([event.clone()]));
+        let dir = tempfile::tempdir().unwrap();
+        let spool = EventSpool::open(dir.path()).unwrap();
+        spool.spill(&[event]).unwrap();
+        replay_one_batch(&operator, &spool).await;
+        assert!(spool.has_pending());
+        assert!(inner.state().lock().await.event_batches.is_empty());
+        inner.state().lock().await.fail_events = None;
+        replay_one_batch(&operator, &spool).await;
+        assert!(!spool.has_pending());
+        assert_eq!(inner.state().lock().await.event_batches.len(), 1);
     }
 
     #[test]

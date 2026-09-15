@@ -5,7 +5,10 @@
 //! deleted only on confirmed success. On startup the directory is scanned to
 //! discover uploads that were interrupted by a crash or restart.
 
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +32,18 @@ pub struct SpoolEntry {
 /// A handle to the pending-uploads spool directory.
 pub struct PendingUploadSpool {
     dir: PathBuf,
+    in_flight: Arc<parking_lot::Mutex<HashSet<String>>>,
+}
+
+pub(crate) struct UploadClaim {
+    recording_id: String,
+    in_flight: Arc<parking_lot::Mutex<HashSet<String>>>,
+}
+
+impl Drop for UploadClaim {
+    fn drop(&mut self) {
+        self.in_flight.lock().remove(&self.recording_id);
+    }
 }
 
 impl PendingUploadSpool {
@@ -36,7 +51,25 @@ impl PendingUploadSpool {
     pub fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
         std::fs::create_dir_all(&dir)?;
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            in_flight: Arc::default(),
+        })
+    }
+
+    /// Claim an entry so live uploads and serial replay never race each other.
+    pub(crate) fn claim(&self, recording_id: &str) -> Option<UploadClaim> {
+        if !self.in_flight.lock().insert(recording_id.to_owned()) {
+            return None;
+        }
+        Some(UploadClaim {
+            recording_id: recording_id.to_owned(),
+            in_flight: Arc::clone(&self.in_flight),
+        })
+    }
+
+    pub(crate) fn contains(&self, recording_id: &str) -> bool {
+        self.entry_path(recording_id).is_file()
     }
 
     /// Write a spool entry for a recording about to be uploaded.
@@ -50,12 +83,15 @@ impl PendingUploadSpool {
             .join(format!(".tmp-{}-{}", std::process::id(), monotonic_ns()));
         let json = serde_json::to_vec(entry)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        std::fs::write(&temp_path, &json)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(&json)?;
+        file.sync_all()?;
         if let Err(err) = std::fs::rename(&temp_path, &final_path) {
             // Best-effort cleanup of the temp file on rename failure.
             let _ = std::fs::remove_file(&temp_path);
             return Err(err);
         }
+        std::fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
 

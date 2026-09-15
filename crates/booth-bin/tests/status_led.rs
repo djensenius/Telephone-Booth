@@ -49,10 +49,13 @@ async fn wait_for_idle_indication(bus: &TelemetryBus) -> Result<(), Box<dyn Erro
 
 #[tokio::test]
 async fn boot_indication_is_replaced_by_idle_without_a_transition() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     let bus = TelemetryBus::new(128);
     let (adapters, handles) = build_mock_adapters(&bus);
     let runtime = spawn_runtime(
-        booth_bin::RuntimeConfig::default(),
+        config,
         adapters,
         bus.clone(),
         RuntimeOptions {

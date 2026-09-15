@@ -299,6 +299,7 @@ pub struct MockOperatorClient {
     inner: Arc<Mutex<MockOperatorState>>,
     telemetry: Option<TelemetryBus>,
     request_seq: Arc<AtomicU64>,
+    reconcile_installation: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for MockOperatorClient {
@@ -307,6 +308,7 @@ impl Default for MockOperatorClient {
             inner: Arc::new(Mutex::new(MockOperatorState::default())),
             telemetry: None,
             request_seq: Arc::new(AtomicU64::new(0)),
+            reconcile_installation: Arc::default(),
         }
     }
 }
@@ -314,6 +316,16 @@ impl Default for MockOperatorClient {
 /// In-memory state of the mock operator.
 #[derive(Default)]
 pub struct MockOperatorState {
+    /// Authoritative installation state returned by lifecycle checks.
+    pub installation_state: Option<booth_hal::InstallationState>,
+    /// Persistent failure for lifecycle checks, independent of exhibition I/O.
+    pub fail_installation: Option<OperatorError>,
+    /// Latency for lifecycle checks only.
+    pub installation_latency: Option<Duration>,
+    /// Number of lifecycle checks received.
+    pub installation_checks: usize,
+    /// Persistent completion failure for exercising deferred uploads.
+    pub fail_complete_upload: Option<OperatorError>,
     /// Pre-canned questions, popped FIFO.
     pub questions: VecDeque<OperatorQuestion>,
     /// Pre-canned messages, popped FIFO.
@@ -352,12 +364,18 @@ impl MockOperatorClient {
             inner: Arc::new(Mutex::new(MockOperatorState::default())),
             telemetry: Some(bus.clone()),
             request_seq: Arc::new(AtomicU64::new(0)),
+            reconcile_installation: Arc::default(),
         }
     }
 
     /// Read-only access to the inner state (for assertions).
     pub fn state(&self) -> Arc<Mutex<MockOperatorState>> {
         Arc::clone(&self.inner)
+    }
+
+    /// Enable asynchronous installation reconciliation for this mock and clones.
+    pub fn enable_installation_state(&self) {
+        self.reconcile_installation.store(true, Ordering::Relaxed);
     }
 
     fn begin_request(&self, route: &str) -> (String, Instant) {
@@ -393,7 +411,9 @@ impl MockOperatorClient {
                 status: status_of(result),
                 duration_ms: elapsed_ms(started),
             });
-            if let Err(err) = result {
+            if let Err(err) = result
+                && !matches!(err, OperatorError::InstallationInactive(_))
+            {
                 bus.publish(TelemetryEvent::Error {
                     source: "booth_mock::operator".to_string(),
                     message: err.to_string(),
@@ -411,7 +431,11 @@ fn status_of<T>(result: &Result<T, OperatorError>) -> u16 {
     match result {
         Ok(_) => 200,
         Err(OperatorError::Auth(_) | OperatorError::Unauthorized(_)) => 401,
-        Err(OperatorError::DuplicateRecording(_) | OperatorError::Conflict(_)) => 409,
+        Err(
+            OperatorError::DuplicateRecording(_)
+            | OperatorError::Conflict(_)
+            | OperatorError::InstallationInactive(_),
+        ) => 409,
         Err(OperatorError::InvalidArgument(_) | OperatorError::Unprocessable(_)) => 422,
         Err(OperatorError::PayloadTooLarge { .. }) => 413,
         Err(OperatorError::Server { status, .. }) => *status,
@@ -422,6 +446,30 @@ fn status_of<T>(result: &Result<T, OperatorError>) -> u16 {
 
 #[async_trait]
 impl OperatorClient for MockOperatorClient {
+    fn supports_installation_state(&self) -> bool {
+        self.reconcile_installation.load(Ordering::Relaxed)
+    }
+
+    async fn installation_state(
+        &self,
+    ) -> Result<Option<booth_hal::InstallationState>, OperatorError> {
+        let (latency, result) = {
+            let mut state = self.inner.lock().await;
+            state.installation_checks += 1;
+            (
+                state.installation_latency,
+                state
+                    .fail_installation
+                    .clone()
+                    .map_or(Ok(state.installation_state), Err),
+            )
+        };
+        if let Some(latency) = latency {
+            tokio::time::sleep(latency).await;
+        }
+        result
+    }
+
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError> {
         let (request_id, started) = self.begin_request("GET /mock/random-question");
         self.apply_latency().await;
@@ -513,7 +561,13 @@ impl OperatorClient for MockOperatorClient {
         _duration_ms: u64,
     ) -> Result<(), OperatorError> {
         let (request_id, started) = self.begin_request("POST /mock/messages/complete");
-        let result = Ok(());
+        let result = self
+            .inner
+            .lock()
+            .await
+            .fail_complete_upload
+            .clone()
+            .map_or(Ok(()), Err);
         self.finish_request(&request_id, started, &result);
         result
     }

@@ -1,0 +1,59 @@
+# ADR 0011 - Between-exhibitions admission and durable replay
+
+**Status:** accepted.
+
+## Context
+
+Ending an exhibition is an operator decision, not a network outage. A powered-on
+booth must stop offering calls until an operator explicitly starts again, while
+preserving answers already being recorded and recordings awaiting upload.
+Restarting the process must not be necessary to resume pending work.
+
+## Decision
+
+- Reconcile `GET /v1/status` with the existing booth bearer token on a separate,
+  single task every five seconds, with a five-second deadline and no probe retries.
+  Never await the network in the core, GPIO loop, or watchdog loop.
+- Treat `installationState: between_exhibitions` as authoritative and sticky
+  across failed probes. Only a subsequent successful status response can reopen
+  admission. Missing `installationState` preserves legacy behavior; it does not
+  mean inactive. Ignore status timestamps and `isSynthetic` for admission:
+  an epoch-dated synthetic row can carry lifecycle state without being a heartbeat.
+- Start with admission closed until the first response. An explicit `active`
+  response leases admission for 15 seconds; if it becomes stale, pause calls as
+  *unknown*, not as confirmed between-exhibitions. Continue reporting actual
+  authentication, protocol, and transport failures through logs and telemetry.
+- Centralize exhibition-operation gating in an `OperatorClient` decorator.
+  Status writes, event batches, random content, upload initiation, blob transfer,
+  and completion are deferred while closed; system snapshots remain available.
+  An exact HTTP 409 JSON `error: installation_inactive` closes admission
+  immediately and invalidates any older in-flight status response.
+- Keep call admission pure via `handle_with_call_availability`. `CallsPaused`
+  remembers hook position, plays nothing, and is not a call or error session.
+  Preserve digit mappings. Cancel abandoned prompt results with the existing
+  generation helper; never resolve cached prompts while paused.
+- Do not interrupt recording or finalization. Persist the resulting answer in
+  the existing upload spool before attempting network I/O. Sync its metadata
+  and directory, and fail explicitly if durable storage cannot open or enqueue.
+  A deferral is not an upload acknowledgement or failure.
+- Replay recordings serially on admission reopening and every 30 seconds while
+  open. Share per-recording claims with live uploads; retain failed entries,
+  rotate past failures on later sweeps, and back off after a failed attempt.
+  Recovered uploads never produce call-completion events. Live completion events
+  carry recording identity so they cannot advance an unrelated caller's state.
+- Retain event batches on the new conflict, and replay at most one spooled batch
+  each forwarder flush tick. Keep existing event-spool retention limits.
+  Nothing on the booth starts an installation implicitly.
+
+## Consequences
+
+Manual end/start is noticed within a normal five-second poll cycle. An operation
+already in flight can race the end; the server's typed conflict closes the gap
+without deleting the recording. In-flight recording continues to normal hangup
+or its configured limit. Polling and replay concurrency stay bounded.
+
+Known-active booths temporarily stop offering new calls after a prolonged outage.
+Legacy servers retain their previous behavior. Pending recordings need writable,
+persistent disk space; storage failures remain operational errors, not pretend
+success. The operator contract and the booth must both be deployed to enforce
+the lifecycle across all clients.

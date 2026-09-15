@@ -50,6 +50,7 @@ debug panel will show "Operator: unauthenticated".
 
 | Verb / path                          | Purpose                                                                         |
 | ------------------------------------ | ------------------------------------------------------------------------------- |
+| `GET  /v1/status`                    | Reconciles operator-controlled installation lifecycle every five seconds |
 | `PUT  /v1/status`                    | Posts the current `BoothStatus` whenever it changes                              |
 | `GET  /v1/questions/random`          | After dialing **1**, fetch a random approved question to play                    |
 | `GET  /v1/messages/random`           | After dialing **2**, fetch a random approved message to play                     |
@@ -61,6 +62,30 @@ debug panel will show "Operator: unauthenticated".
 The WebSocket is **operator-side only** — the phone client doesn't open
 it. Status updates from the phone client are HTTP `PUT`s; the operator
 backend fan-outs to connected browsers.
+
+## Between exhibitions
+
+Only an operator can start the next exhibition. The additive `installationState`
+field is `active` or `between_exhibitions`; a missing field preserves old-server
+behavior. An epoch-dated `isSynthetic: true` status may carry this field, but is
+not a fresh booth heartbeat.
+
+At startup the booth waits silently for reconciliation. Confirmed inactivity
+stops new calls, random content requests, status/event writes, and uploads.
+The handset's position is remembered; recordings already in flight finish
+normally and are kept in the durable pending-upload spool. System telemetry,
+GPIO, power controls, and the watchdog continue independently.
+
+HTTP 409 with JSON `error: installation_inactive` is deliberate deferral, not an
+ordinary conflict or an upload success. Both recordings and event batches remain
+pending, including when `/complete` is refused. A manual start resumes admission
+and serial replay without rebooting. Completed/idempotent server replies remain
+successes; the booth does not initiate new upload attempts while paused.
+
+An explicit active response expires after 15 seconds without successful
+reconciliation. Calls then pause as unknown, while real network/authentication
+errors remain visible. Confirmed inactivity does not expire into active merely
+because the API is unreachable. See [ADR 0011](adr/0011-between-exhibitions.md).
 
 ## Audit trail
 
@@ -107,7 +132,7 @@ a `curl` run by hand with the same token.
 | ------ | ------------------------------------------------------------------ |
 | `401`  | API token wrong or revoked. Reissue from the operator UI.          |
 | `403`  | Token valid but lacks scope (shouldn't happen with current schema).|
-| `409`  | Message `sha256` already exists or the completion blob is missing. On reboot, a recording whose message row was created but whose blob never uploaded needs the operator's idempotent re-initiation (returns a fresh SAS for `uploading` messages) to recover. |
+| `409`  | `installation_inactive` defers work until manual start. Other conflicts (duplicate SHA or missing completion blob) remain distinct; interrupted uploads use idempotent re-initiation with a fresh SAS. |
 | `413`  | Uploaded audio exceeds the 25 MiB operator cap.                     |
 | `422`  | Blob verification failed, usually missing/mismatched SHA metadata.  |
 | `400`/`422` | Azure `PUT <SAS URL>` upload omitted `x-ms-blob-type: BlockBlob` (`MissingRequiredHeader`) or `x-ms-meta-sha256` (`/complete` returns `sha256_metadata_missing`). The phone client sends both; a bare `curl` won't. |

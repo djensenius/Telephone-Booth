@@ -23,6 +23,103 @@ use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[tokio::test]
+async fn status_lifecycle_is_additive_and_synthetic_status_is_supported() -> TestResult {
+    for (field, expected) in [
+        (None, None),
+        (Some("active"), Some(booth_hal::InstallationState::Active)),
+        (
+            Some("between_exhibitions"),
+            Some(booth_hal::InstallationState::BetweenExhibitions),
+        ),
+    ] {
+        let (server, client) = client_with_server().await?;
+        let mut body =
+            json!({"status":"idle", "updatedAt":"1970-01-01T00:00:00.000Z", "isSynthetic":true});
+        if let Some(field) = field {
+            body["installationState"] = json!(field);
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/status"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(client.installation_state().await?, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn installation_conflict_is_typed_for_json_empty_and_event_responses() -> TestResult {
+    let (server, client) = client_with_server().await?;
+    let response = ResponseTemplate::new(409)
+        .insert_header("content-type", "application/problem+json")
+        .set_body_json(json!({
+            "type":"about:blank", "title":"Between exhibitions", "status":409,
+            "detail":"deliberate gap ".repeat(100), "error":"installation_inactive"
+        }));
+    Mock::given(path("/v1/questions/random"))
+        .respond_with(response.clone())
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1/status"))
+        .respond_with(response.clone())
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1/messages/unfinished/complete"))
+        .respond_with(response.clone())
+        .mount(&server)
+        .await;
+    Mock::given(path("/v1/events"))
+        .respond_with(response)
+        .mount(&server)
+        .await;
+    assert!(matches!(
+        client.random_question().await,
+        Err(OperatorError::InstallationInactive(_))
+    ));
+    assert!(matches!(
+        client.put_status(BoothStatus::Idle).await,
+        Err(OperatorError::InstallationInactive(_))
+    ));
+    assert!(matches!(
+        client.complete_upload("unfinished", "sha", 1000).await,
+        Err(OperatorError::InstallationInactive(_))
+    ));
+    assert!(matches!(
+        client.push_events_json(r#"{"events":[]}"#).await,
+        Err(OperatorError::InstallationInactive(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_conflicts_and_non_conflict_statuses_stay_distinct() -> TestResult {
+    for (status, body) in [
+        (
+            409,
+            json!({"error":"other_conflict", "detail":"installation_inactive"}),
+        ),
+        (409, json!({"detail":"installation_inactive"})),
+        (422, json!({"error":"installation_inactive"})),
+    ] {
+        let (server, client) = client_with_server().await?;
+        Mock::given(path("/v1/status"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(&server)
+            .await;
+        let error = client.put_status(BoothStatus::Idle).await.unwrap_err();
+        if status == 409 {
+            assert!(matches!(error, OperatorError::Conflict(_)));
+        } else {
+            assert!(matches!(error, OperatorError::Unprocessable(_)));
+        }
+    }
+    Ok(())
+}
+
 struct EmptyBody;
 
 impl Match for EmptyBody {

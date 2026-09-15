@@ -11,7 +11,9 @@ use booth_telemetry::TelemetryBus;
 
 #[tokio::test]
 async fn observability_forwards_call_events_to_operator() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
     config.debug.allow_controls = true;
     config.observability.enabled = true;
     config.observability.booth_id = "booth-test".to_string();
