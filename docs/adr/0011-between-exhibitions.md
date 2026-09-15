@@ -30,6 +30,8 @@ Restarting the process must not be necessary to resume pending work.
   immediately and invalidates any older in-flight status response.
 - Keep call admission pure via `handle_with_call_availability`. `CallsPaused`
   remembers hook position, plays nothing, and is not a call or error session.
+  An interrupted existing call reports `aborted`, not a fabricated caller hangup;
+  confirmed upload outcomes are preserved.
   Preserve digit mappings. Cancel abandoned prompt results with the existing
   generation helper; never resolve cached prompts while paused.
 - Do not interrupt recording or finalization. Sync the finalized FLAC and its

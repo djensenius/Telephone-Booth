@@ -242,6 +242,13 @@ impl SessionTracker {
                     && let Some(session) = self.current.take()
                 {
                     let outcome = match session.phase {
+                        SessionPhase::Prompt
+                        | SessionPhase::Recording
+                        | SessionPhase::Uploading
+                            if to == "calls_paused" =>
+                        {
+                            CallOutcome::Aborted
+                        }
                         SessionPhase::Prompt if session.digits.is_empty() => {
                             CallOutcome::HungUpBeforeDial
                         }
@@ -992,7 +999,45 @@ mod tests {
                 .observe(&transition("dial_tone", "calls_paused", 3), 3)
                 .as_slice(),
             [TelemetryEvent::CallEnded {
-                outcome: CallOutcome::HungUpBeforeDial,
+                outcome: CallOutcome::Aborted,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn lifecycle_pauses_abort_calls_but_preserve_confirmed_upload_outcomes() {
+        for phase in ["dial_tone", "playing_question", "recording", "uploading"] {
+            let mut tracker = SessionTracker::new();
+            tracker.observe(&transition("idle", phase, 1), 1);
+            assert!(matches!(
+                tracker
+                    .observe(&transition(phase, "calls_paused", 2), 2)
+                    .as_slice(),
+                [TelemetryEvent::CallEnded {
+                    outcome: CallOutcome::Aborted,
+                    ..
+                }]
+            ));
+        }
+        let mut tracker = SessionTracker::new();
+        tracker.observe(&transition("idle", "uploading", 1), 1);
+        tracker.observe(
+            &TelemetryEvent::UploadCompleted {
+                recording_id: "answer".into(),
+                session_id: "session".into(),
+                duration_ms: 1,
+                bytes: 1,
+                at_monotonic_ns: 2,
+            },
+            2,
+        );
+        assert!(matches!(
+            tracker
+                .observe(&transition("uploading", "calls_paused", 3), 3)
+                .as_slice(),
+            [TelemetryEvent::CallEnded {
+                outcome: CallOutcome::RecordingCompleted,
                 ..
             }]
         ));
