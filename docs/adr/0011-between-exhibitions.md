@@ -33,6 +33,8 @@ Restarting the process must not be necessary to resume pending work.
   Seed hook position from the physical GPIO snapshot at boot; a handset already
   lifted resumes correctly without requiring a new edge.
   Apply the first dial input even when it arrives before the resume notification.
+  Publish the resumed call transition before digit telemetry so the digit is
+  attributed to that call.
   An interrupted existing call reports `aborted`, not a fabricated caller hangup;
   confirmed upload outcomes are preserved.
   Preserve digit mappings. Cancel abandoned prompt results with the existing

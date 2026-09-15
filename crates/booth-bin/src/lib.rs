@@ -910,6 +910,11 @@ async fn handle_event(
         .flatten();
     let (to, effects) =
         booth_core::handle_with_call_availability(from.clone(), event.clone(), accepting_calls);
+    let resumes_call = matches!(from, State::CallsPaused { .. })
+        && !matches!(to, State::Idle | State::CallsPaused { .. });
+    if resumes_call {
+        publish_transition(bus, &from, &to, &event);
+    }
     if let Some((digit, pulses)) = dialed_digit {
         bus.publish(TelemetryEvent::DigitDialed {
             digit,
@@ -917,7 +922,9 @@ async fn handle_event(
             at_monotonic_ns: monotonic_ns(),
         });
     }
-    publish_transition(bus, &from, &to, &event);
+    if !resumes_call {
+        publish_transition(bus, &from, &to, &event);
+    }
     debug!(
         from = from.tag(),
         to = to.tag(),
@@ -940,9 +947,10 @@ fn dialed_digit_for_telemetry(state: &State, event: &Event) -> Option<(u8, u8)> 
         (State::Dialing { pulses }, Event::Tick) if (1..=10).contains(pulses) => {
             Some((if *pulses == 10 { 0 } else { *pulses }, *pulses))
         }
-        (State::Dialing { .. }, Event::DigitDialed { digit }) if *digit <= 9 => {
-            Some((*digit, if *digit == 0 { 10 } else { *digit }))
-        }
+        (
+            State::DialTone | State::Dialing { .. } | State::CallsPaused { on_hook: false },
+            Event::DigitDialed { digit },
+        ) if *digit <= 9 => Some((*digit, if *digit == 0 { 10 } else { *digit })),
         _ => None,
     }
 }
@@ -3086,6 +3094,50 @@ mod tests {
     };
     use booth_telemetry::TelemetryBus;
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn resumed_direct_digit_is_attached_to_the_new_call() {
+        for initial in [State::CallsPaused { on_hook: false }, State::DialTone] {
+            for digit in 0..=2 {
+                let bus = TelemetryBus::new(32);
+                let (effect_tx, _effect_rx) = mpsc::channel(32);
+                let gate = super::installation::InstallationGate::new(false);
+                let mut state = initial.clone();
+                if state == State::DialTone {
+                    super::publish_transition(&bus, &State::Idle, &state, &Event::HookOff);
+                }
+                handle_event(
+                    &mut state,
+                    Event::DigitDialed { digit },
+                    &effect_tx,
+                    &bus,
+                    &gate,
+                )
+                .await
+                .expect("handle first direct digit");
+                handle_event(&mut state, Event::HookOn, &effect_tx, &bus, &gate)
+                    .await
+                    .expect("hang up");
+                let mut tracker = super::observability::SessionTracker::new();
+                let events: Vec<_> = bus
+                    .snapshot_since(None)
+                    .into_iter()
+                    .flat_map(|record| tracker.observe(&record.event, 0))
+                    .collect();
+                assert!(
+                    matches!(
+                        events.as_slice(),
+                        [TelemetryEvent::CallStarted { .. }, TelemetryEvent::CallEnded {
+                            outcome: booth_hal::CallOutcome::HungUpDuringPrompt,
+                            digits_dialed,
+                            ..
+                        }] if digits_dialed == &digit.to_string()
+                    ),
+                    "{initial:?}: {events:?}"
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn pulse_timeout_publishes_decoded_digit_telemetry() {
