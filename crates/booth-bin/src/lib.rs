@@ -1657,8 +1657,6 @@ async fn effect_task(
                         .await;
                     continue;
                 };
-                // Enqueue in spool synchronously so it's durable before we
-                // hand off to the background task.
                 let spool_entry = pending_uploads::SpoolEntry {
                     recording_id: recording_id.clone(),
                     question_id: Some(question_id.clone()),
@@ -1666,39 +1664,33 @@ async fn effect_task(
                     size_bytes: Some(bytes),
                     duration_ms: recording_duration_ms,
                 };
-                if let Err(err) = upload_spool.enqueue(&spool_entry) {
-                    error!(%err, %recording_id, "cannot persist upload; retaining recording without uploading");
-                    send_upload_outcome(
-                        Some(&event_tx),
-                        &recording_id,
-                        UploadOutcome::Failed {
-                            reason: format!("cannot persist pending upload: {err}"),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                if !installation.accepting_calls() {
-                    info!(%recording_id, "recording durably deferred until installation is available");
-                    send_upload_outcome(Some(&event_tx), &recording_id, UploadOutcome::Deferred)
-                        .await;
-                    continue;
-                }
-                if let Some(sid) = session_id.clone() {
-                    bus.publish(TelemetryEvent::UploadStarted {
-                        recording_id: recording_id.clone(),
-                        session_id: sid,
-                        at_monotonic_ns: monotonic_ns(),
-                    });
-                }
-
                 let op = Arc::clone(&operator);
                 let ev_tx = event_tx.clone();
                 let b = bus.clone();
                 let spool = Arc::clone(&upload_spool);
                 let audio_src = Arc::clone(&audio_source);
+                let installation = installation.clone();
                 operator_tasks.spawn(async move {
                     let _claim = claim;
+                    if let Err(err) = spool.clone().run_blocking(move |spool| spool.enqueue(&spool_entry)).await {
+                        error!(%err, %recording_id, "cannot persist upload; retaining recording without uploading");
+                        send_upload_outcome(Some(&ev_tx), &recording_id, UploadOutcome::Failed {
+                            reason: format!("cannot persist pending upload: {err}"),
+                        }).await;
+                        return;
+                    }
+                    if !installation.accepting_calls() {
+                        info!(%recording_id, "recording durably deferred until installation is available");
+                        send_upload_outcome(Some(&ev_tx), &recording_id, UploadOutcome::Deferred).await;
+                        return;
+                    }
+                    if let Some(sid) = session_id.clone() {
+                        b.publish(TelemetryEvent::UploadStarted {
+                            recording_id: recording_id.clone(),
+                            session_id: sid,
+                            at_monotonic_ns: monotonic_ns(),
+                        });
+                    }
                     let started = Instant::now();
                     let success = upload_recording(
                         &*op,
@@ -1714,8 +1706,11 @@ async fn effect_task(
                         recording_duration_ms,
                     )
                     .await;
-                    if success && let Err(err) = spool.dequeue(&recording_id) {
-                        warn!(%err, %recording_id, "cannot remove completed upload from spool");
+                    if success {
+                        let id = recording_id.clone();
+                        if let Err(err) = spool.run_blocking(move |spool| spool.dequeue(&id)).await {
+                            warn!(%err, %recording_id, "cannot remove completed upload from spool");
+                        }
                     }
                 });
             }
@@ -2171,7 +2166,13 @@ fn spawn_upload_replay(
                 continue;
             }
             // One replay at a time, with claims shared by foreground uploads.
-            let mut entries = spool.scan();
+            let mut entries = match spool.clone().run_blocking(|spool| Ok(spool.scan())).await {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!(%err, "pending-upload scan failed");
+                    continue;
+                }
+            };
             entries.sort_by(|a, b| a.recording_id.cmp(&b.recording_id));
             if let Some(last) = &last_attempt {
                 let start = entries
@@ -2187,8 +2188,18 @@ fn spawn_upload_replay(
                 let Some(_claim) = spool.claim(&entry.recording_id) else {
                     continue;
                 };
-                if !spool.contains(&entry.recording_id) {
-                    continue;
+                let id = entry.recording_id.clone();
+                match spool
+                    .clone()
+                    .run_blocking(move |spool| Ok(spool.contains(&id)))
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(err) => {
+                        warn!(%err, recording_id = %entry.recording_id, "cannot inspect pending upload");
+                        continue;
+                    }
                 }
                 last_attempt = Some(entry.recording_id.clone());
                 let bytes = match entry.size_bytes {
@@ -2216,7 +2227,12 @@ fn spawn_upload_replay(
                 )
                 .await;
                 if success {
-                    if let Err(err) = spool.dequeue(&entry.recording_id) {
+                    let id = entry.recording_id.clone();
+                    if let Err(err) = spool
+                        .clone()
+                        .run_blocking(move |spool| spool.dequeue(&id))
+                        .await
+                    {
                         warn!(%err, recording_id = %entry.recording_id, "cannot remove replayed upload from spool");
                     }
                 } else {
@@ -3313,7 +3329,7 @@ mod tests {
     }
 
     #[cfg(feature = "mock")]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn replay_only_dequeues_confirmed_duplicate_recordings() {
         use super::pending_uploads::{PendingUploadSpool, SpoolEntry};
         use std::sync::Arc;
@@ -3347,9 +3363,15 @@ mod tests {
                 super::installation::InstallationGate::new(false),
                 TelemetryBus::new(16),
             );
-            for _ in 0..32 {
-                tokio::task::yield_now().await;
-            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while operator.calls.load(Ordering::Relaxed) != 1
+                    || spool.contains("answer") != retained
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
             assert_eq!(operator.calls.load(Ordering::Relaxed), 1);
             assert_eq!(spool.contains("answer"), retained);
             task.abort();

@@ -47,6 +47,17 @@ impl Drop for UploadClaim {
 }
 
 impl PendingUploadSpool {
+    /// Execute a filesystem transaction off the async worker. Callers bound
+    /// concurrency and await durability before starting a network upload.
+    pub(crate) async fn run_blocking<T: Send + 'static>(
+        self: Arc<Self>,
+        operation: impl FnOnce(&Self) -> std::io::Result<T> + Send + 'static,
+    ) -> std::io::Result<T> {
+        tokio::task::spawn_blocking(move || operation(&self))
+            .await
+            .map_err(std::io::Error::other)?
+    }
+
     /// Open (or create) the spool directory.
     pub fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
@@ -186,6 +197,21 @@ fn monotonic_ns() -> u64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn filesystem_transactions_run_off_async_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Arc::new(PendingUploadSpool::open(dir.path()).unwrap());
+        let async_thread = std::thread::current().id();
+        let filesystem_thread = spool
+            .run_blocking(|spool| {
+                assert!(spool.scan().is_empty());
+                Ok(std::thread::current().id())
+            })
+            .await
+            .unwrap();
+        assert_ne!(filesystem_thread, async_thread);
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("spool-test-{}", uuid::Uuid::new_v4()));

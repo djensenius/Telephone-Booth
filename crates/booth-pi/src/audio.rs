@@ -1082,6 +1082,7 @@ fn finalize_recording(
 ) -> Result<RecordingHandle, AudioError> {
     use flacenc::component::BitRepr;
     use flacenc::error::Verify;
+    use std::io::Write as _;
     std::fs::create_dir_all(&config.recordings_dir).map_err(|err| {
         AudioError::Io(format!("create recordings dir {}: {err}", config.recordings_dir).into())
     })?;
@@ -1133,9 +1134,14 @@ fn finalize_recording(
         monotonic_ns()
     ));
     let final_path = std::path::Path::new(&config.recordings_dir).join(format!("{sha256}.flac"));
-    std::fs::write(&temp_path, encoded).map_err(|err| {
+    let mut file = std::fs::File::create(&temp_path).map_err(|err| {
         AudioError::Io(format!("write temp recording {}: {err}", temp_path.display()).into())
     })?;
+    file.write_all(encoded)
+        .and_then(|()| file.sync_all())
+        .map_err(|err| {
+            AudioError::Io(format!("persist recording {}: {err}", temp_path.display()).into())
+        })?;
     std::fs::rename(&temp_path, &final_path).map_err(|err| {
         AudioError::Io(
             format!(
@@ -1146,6 +1152,11 @@ fn finalize_recording(
             .into(),
         )
     })?;
+    std::fs::File::open(&config.recordings_dir)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|err| {
+            AudioError::Io(format!("sync recordings dir {}: {err}", config.recordings_dir).into())
+        })?;
     let size_bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     let frames =
         u64::try_from(samples.len()).unwrap_or(u64::MAX) / u64::from(config.channels.max(1));

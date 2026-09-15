@@ -32,9 +32,11 @@ Restarting the process must not be necessary to resume pending work.
   remembers hook position, plays nothing, and is not a call or error session.
   Preserve digit mappings. Cancel abandoned prompt results with the existing
   generation helper; never resolve cached prompts while paused.
-- Do not interrupt recording or finalization. Persist the resulting answer in
-  the existing upload spool before attempting network I/O. Sync its metadata
-  and directory, and fail explicitly if durable storage cannot open or enqueue.
+- Do not interrupt recording or finalization. Sync the finalized FLAC and its
+  directory, then persist the answer in the existing upload spool before network
+  I/O. Sync spool metadata and its directory on the blocking pool, within the
+  bounded upload tasks rather than the critical effect dispatcher. Fail
+  explicitly if durable storage cannot open or enqueue.
   A deferral is not an upload acknowledgement or failure.
 - Replay recordings serially on admission reopening and every 30 seconds while
   open. Share per-recording claims with live uploads; retain failed entries,
