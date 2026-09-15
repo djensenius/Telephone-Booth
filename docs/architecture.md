@@ -56,6 +56,13 @@ States: `Idle`, `DialTone`, `Dialing { pulses }`, `RingingQuestion`,
 `Uploading { recording_id, on_hook }`,
 `PlayingMessage`, `PlayingInstructions`, `CallUnavailable`, `Error { reason }`.
 
+`CallsPaused { on_hook }` is the silent, non-call admission state. The runtime
+passes its reconciled availability to the pure `handle_with_call_availability`
+function; the existing `handle` entry point preserves legacy behavior. A paused
+booth still handles power controls and finalizes recordings already in progress.
+It never fetches or plays prompts, including cached prompts.
+See [ADR 0011](adr/0011-between-exhibitions.md) for lifecycle, freshness, and replay policy.
+
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
 `DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `RecordingFailed`,
 `UploadComplete`, `UploadFailed`, `Tick`.
@@ -88,6 +95,16 @@ post-upload routing changes. `on_hook` (carried from `FinishingRecording` into
 returns to `Idle` silently instead of playing a dial tone to an empty booth.
 Recordings shorter than `audio.min_recording_secs` are discarded rather than
 uploaded.
+
+If the exhibition ends, finalized answers are durably spooled and deferred rather
+than acknowledged as uploaded. Live `UploadFinished` events carry recording
+identity; replayed uploads send no call-state event. A single background replay
+worker resumes pending recordings when an operator starts the next exhibition,
+without rebooting.
+
+Picking up during an in-flight upload updates the remembered hook position without
+starting another call. If that upload is deferred between exhibitions, manual
+restart restores dial tone to the lifted handset while replay sends the saved answer.
 
 If the audio adapter cannot start or finalize a recording, the runtime feeds in
 `RecordingFailed` so the booth recovers instead of waiting forever for a

@@ -5,7 +5,10 @@
 //! deleted only on confirmed success. On startup the directory is scanned to
 //! discover uploads that were interrupted by a crash or restart.
 
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,14 +32,55 @@ pub struct SpoolEntry {
 /// A handle to the pending-uploads spool directory.
 pub struct PendingUploadSpool {
     dir: PathBuf,
+    in_flight: Arc<parking_lot::Mutex<HashSet<String>>>,
+}
+
+pub(crate) struct UploadClaim {
+    recording_id: String,
+    in_flight: Arc<parking_lot::Mutex<HashSet<String>>>,
+}
+
+impl Drop for UploadClaim {
+    fn drop(&mut self) {
+        self.in_flight.lock().remove(&self.recording_id);
+    }
 }
 
 impl PendingUploadSpool {
+    /// Execute a filesystem transaction off the async worker. Callers bound
+    /// concurrency and await durability before starting a network upload.
+    pub(crate) async fn run_blocking<T: Send + 'static>(
+        self: Arc<Self>,
+        operation: impl FnOnce(&Self) -> std::io::Result<T> + Send + 'static,
+    ) -> std::io::Result<T> {
+        tokio::task::spawn_blocking(move || operation(&self))
+            .await
+            .map_err(std::io::Error::other)?
+    }
+
     /// Open (or create) the spool directory.
     pub fn open(dir: impl Into<PathBuf>) -> std::io::Result<Self> {
         let dir = dir.into();
         std::fs::create_dir_all(&dir)?;
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            in_flight: Arc::default(),
+        })
+    }
+
+    /// Claim an entry so live uploads and serial replay never race each other.
+    pub(crate) fn claim(&self, recording_id: &str) -> Option<UploadClaim> {
+        if !self.in_flight.lock().insert(recording_id.to_owned()) {
+            return None;
+        }
+        Some(UploadClaim {
+            recording_id: recording_id.to_owned(),
+            in_flight: Arc::clone(&self.in_flight),
+        })
+    }
+
+    pub(crate) fn contains(&self, recording_id: &str) -> bool {
+        self.entry_path(recording_id).is_file()
     }
 
     /// Write a spool entry for a recording about to be uploaded.
@@ -50,12 +94,15 @@ impl PendingUploadSpool {
             .join(format!(".tmp-{}-{}", std::process::id(), monotonic_ns()));
         let json = serde_json::to_vec(entry)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        std::fs::write(&temp_path, &json)?;
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(&json)?;
+        file.sync_all()?;
         if let Err(err) = std::fs::rename(&temp_path, &final_path) {
             // Best-effort cleanup of the temp file on rename failure.
             let _ = std::fs::remove_file(&temp_path);
             return Err(err);
         }
+        std::fs::File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
 
@@ -150,6 +197,21 @@ fn monotonic_ns() -> u64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn filesystem_transactions_run_off_async_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Arc::new(PendingUploadSpool::open(dir.path()).unwrap());
+        let async_thread = std::thread::current().id();
+        let filesystem_thread = spool
+            .run_blocking(|spool| {
+                assert!(spool.scan().is_empty());
+                Ok(std::thread::current().id())
+            })
+            .await
+            .unwrap();
+        assert_ne!(filesystem_thread, async_thread);
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("spool-test-{}", uuid::Uuid::new_v4()));

@@ -64,3 +64,4 @@ rebuilds it from the filesystem; CI fails if it drifts.
 - [0008 — Automated releases](adr/0008-automated-releases.md)
 - [0009 — Status LED and power button port](adr/0009-status-led-power-button.md)
 - [0010 — GL.iNet router telemetry](adr/0010-router-telemetry.md)
+- [0011 - Between-exhibitions admission and durable replay](adr/0011-between-exhibitions.md)

@@ -71,6 +71,12 @@ pub const LED_FADE_MS: u32 = 1500;
 #[must_use]
 pub fn status_led_for(state: &State) -> (LedColour, LedPattern) {
     match state {
+        State::CallsPaused { .. } => (
+            LedColour::Blue,
+            LedPattern::Steady {
+                brightness: LED_BRIGHTNESS_DIM,
+            },
+        ),
         // On hook: a calm, dim green "ready" glow.
         State::Idle => (
             LedColour::Green,
@@ -129,6 +135,12 @@ pub fn status_led_for(state: &State) -> (LedColour, LedPattern) {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum State {
+    /// No new calls until the runtime reconciles an available installation.
+    /// This is not a call or an operator/network error.
+    CallsPaused {
+        /// Remember the handset position while admission is paused.
+        on_hook: bool,
+    },
     /// Receiver on hook. Nothing is playing or recording.
     Idle,
     /// Receiver off hook. Dial tone is playing; we are waiting for the user
@@ -206,7 +218,7 @@ impl State {
     #[must_use]
     pub fn status(&self) -> BoothStatus {
         match self {
-            State::Idle => BoothStatus::Idle,
+            State::Idle | State::CallsPaused { .. } => BoothStatus::Idle,
             State::DialTone | State::Dialing { .. } => BoothStatus::DialTone,
             State::RingingQuestion { .. } | State::PlayingQuestion { .. } | State::Beep { .. } => {
                 BoothStatus::PlayingQuestion
@@ -225,6 +237,7 @@ impl State {
     pub fn tag(&self) -> &'static str {
         match self {
             State::Idle => "idle",
+            State::CallsPaused { .. } => "calls_paused",
             State::DialTone => "dial_tone",
             State::Dialing { .. } => "dialing",
             State::RingingQuestion { .. } => "ringing_question",
@@ -257,6 +270,14 @@ impl Default for State {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    /// A specific live recording finished its upload attempt. Results for an
+    /// abandoned call must not advance a later caller's upload state.
+    UploadFinished {
+        /// Content-addressed recording id.
+        recording_id: RecordingId,
+        /// Whether it uploaded, was durably deferred, or failed.
+        outcome: UploadOutcome,
+    },
     /// Hook switch closed: the receiver is back on the cradle.
     HookOn,
     /// Hook switch opened: the receiver was lifted.
@@ -285,6 +306,8 @@ pub enum Event {
     },
     /// The upload completed successfully.
     UploadComplete,
+    /// The recording is durable locally and will be retried later, not uploaded.
+    UploadDeferred,
     /// The upload failed (we'll log + return to dial tone).
     UploadFailed {
         /// Diagnostic message.
@@ -324,6 +347,21 @@ pub enum Event {
     PowerButtonPressed,
     /// The physical power button was held past the configured threshold.
     PowerButtonHeld,
+}
+
+/// Result of an upload attempt, distinct from locally durable deferral.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum UploadOutcome {
+    /// The operator confirmed completion.
+    Complete,
+    /// Kept in the local spool for a later exhibition.
+    Deferred,
+    /// An actual upload or storage error occurred.
+    Failed {
+        /// Diagnostic message.
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -401,8 +439,22 @@ pub enum Effect {
 /// (especially [`Effect::PutStatus`]) rather than published directly here.
 #[must_use]
 pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
+    handle_with_call_availability(state, event, true)
+}
+
+/// Apply an event with the runtime's reconciled call-admission decision.
+///
+/// Pausing never cuts a recording already in flight. It suppresses new prompts,
+/// dial tones and status writes, but still finalizes and spools answers. No
+/// clocks or network operations are performed here.
+#[must_use]
+pub fn handle_with_call_availability(
+    state: State,
+    event: Event,
+    accepting_calls: bool,
+) -> (State, Vec<Effect>) {
     let led_before = status_led_for(&state);
-    let (next, mut effects) = handle_inner(state, event);
+    let (next, mut effects) = handle_available(state, event, accepting_calls);
     let led_after = status_led_for(&next);
     // Emit a status-LED update on every transition whose indication changes.
     // The core is the single source of truth for the state → LED mapping; the
@@ -418,6 +470,80 @@ pub fn handle(state: State, event: Event) -> (State, Vec<Effect>) {
         effects.insert(0, Effect::SetStatusLed { colour, pattern });
     }
     (next, effects)
+}
+
+fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State, Vec<Effect>) {
+    let event = if let Event::UploadFinished {
+        recording_id,
+        outcome,
+    } = event
+    {
+        if !matches!(&state, State::Uploading { recording_id: current, .. } if current == &recording_id)
+        {
+            return (state, vec![]);
+        }
+        match outcome {
+            UploadOutcome::Complete => Event::UploadComplete,
+            UploadOutcome::Deferred => Event::UploadDeferred,
+            UploadOutcome::Failed { reason } => Event::UploadFailed { reason },
+        }
+    } else {
+        event
+    };
+    if matches!(event, Event::PowerButtonPressed | Event::PowerButtonHeld) {
+        return handle_inner(state, event);
+    }
+    let on_hook = match event {
+        Event::HookOn => true,
+        Event::HookOff => false,
+        _ => match &state {
+            State::Idle => true,
+            State::CallsPaused { on_hook }
+            | State::FinishingRecording { on_hook, .. }
+            | State::Uploading { on_hook, .. } => *on_hook,
+            _ => false,
+        },
+    };
+    if accepting_calls {
+        if matches!(state, State::CallsPaused { .. }) {
+            let (resumed, mut effects) = if on_hook {
+                (State::Idle, vec![Effect::PutStatus(BoothStatus::Idle)])
+            } else {
+                handle_inner(State::Idle, Event::HookOff)
+            };
+            if matches!(event, Event::RotaryPulse | Event::DigitDialed { .. }) {
+                let (next, input_effects) = handle_inner(resumed, event);
+                effects.extend(input_effects);
+                return (next, effects);
+            }
+            return (resumed, effects);
+        }
+        return handle_inner(state, event);
+    }
+    let protected = matches!(
+        state,
+        State::Recording { .. } | State::FinishingRecording { .. } | State::Uploading { .. }
+    );
+    if !protected {
+        let effects = if matches!(state, State::CallsPaused { .. }) {
+            vec![]
+        } else {
+            vec![Effect::StopAudio, Effect::CancelPulseTimeout]
+        };
+        return (State::CallsPaused { on_hook }, effects);
+    }
+    let (next, mut effects) = handle_inner(state, event);
+    effects.retain(|effect| !matches!(effect, Effect::PutStatus(_) | Effect::Play(_)));
+    if matches!(
+        next,
+        State::Recording { .. } | State::FinishingRecording { .. } | State::Uploading { .. }
+    ) {
+        (next, effects)
+    } else {
+        effects.push(Effect::StopAudio);
+        effects.push(Effect::CancelPulseTimeout);
+        (State::CallsPaused { on_hook }, effects)
+    }
 }
 
 fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
@@ -475,6 +601,13 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 
     match (state, event) {
+        (S::Uploading { on_hook, .. }, E::UploadDeferred) => {
+            if on_hook {
+                (S::Idle, vec![Effect::PutStatus(BoothStatus::Idle)])
+            } else {
+                handle_inner(S::Idle, E::HookOff)
+            }
+        }
         // ---- Idle ----
         (S::Idle, E::HookOff) => (
             S::DialTone,
@@ -514,7 +647,7 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
             let digit = if pulses == 10 { 0 } else { pulses };
             decode_digit(digit)
         }
-        (S::Dialing { .. }, E::DigitDialed { digit }) => decode_digit(digit),
+        (S::DialTone | S::Dialing { .. }, E::DigitDialed { digit }) => decode_digit(digit),
 
         // ---- RingingQuestion -> PlayingQuestion -> Beep -> Recording ----
         (S::RingingQuestion { question_id }, E::PlaybackEnded) => (
@@ -588,6 +721,21 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
         // tone instead of resetting silently.
         (S::FinishingRecording { question_id, .. }, E::HookOff) => (
             S::FinishingRecording {
+                question_id,
+                on_hook: false,
+            },
+            vec![],
+        ),
+        (
+            S::Uploading {
+                recording_id,
+                question_id,
+                ..
+            },
+            E::HookOff,
+        ) => (
+            S::Uploading {
+                recording_id,
                 question_id,
                 on_hook: false,
             },
@@ -819,6 +967,116 @@ fn decode_digit(digit: u8) -> (State, Vec<Effect>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_calls_do_not_play_fetch_or_write_status_for_any_digit() {
+        let (mut state, _) = handle_with_call_availability(State::Idle, Event::HookOff, false);
+        assert_eq!(state, State::CallsPaused { on_hook: false });
+        for digit in 0..=9 {
+            for event in [
+                Event::RotaryPulse,
+                Event::DigitDialed { digit },
+                Event::Tick,
+                Event::PlaybackEnded,
+            ] {
+                let (next, effects) = handle_with_call_availability(state, event, false);
+                assert!(effects.is_empty());
+                state = next;
+            }
+        }
+        let (state, effects) = handle_with_call_availability(state, Event::Tick, true);
+        assert_eq!(state, State::DialTone);
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))));
+    }
+
+    #[test]
+    fn exhibition_end_preserves_recording_and_durably_deferred_routing() {
+        let recording = State::Recording {
+            question_id: "question".into(),
+        };
+        let (state, effects) = handle_with_call_availability(recording.clone(), Event::Tick, false);
+        assert_eq!(state, recording);
+        assert!(effects.is_empty());
+        let (state, effects) = handle_with_call_availability(state, Event::HookOn, false);
+        assert!(matches!(
+            state,
+            State::FinishingRecording { on_hook: true, .. }
+        ));
+        assert!(effects.contains(&Effect::StopRecording));
+        let (state, effects) = handle_with_call_availability(
+            state,
+            Event::RecordingFinished {
+                recording_id: "answer".into(),
+            },
+            false,
+        );
+        assert!(effects.contains(&Effect::UploadRecording {
+            recording_id: "answer".into(),
+            question_id: "question".into(),
+        }));
+        let (state, effects) = handle_with_call_availability(
+            state,
+            Event::UploadFinished {
+                recording_id: "answer".into(),
+                outcome: UploadOutcome::Deferred,
+            },
+            false,
+        );
+        assert_eq!(state, State::CallsPaused { on_hook: true });
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Play(_) | Effect::PutStatus(_)))
+        );
+        assert_eq!(
+            handle_with_call_availability(state, Event::Tick, true).0,
+            State::Idle
+        );
+    }
+
+    #[test]
+    fn admission_resume_preserves_first_dial_input() {
+        let (state, effects) = handle_with_call_availability(
+            State::CallsPaused { on_hook: false },
+            Event::RotaryPulse,
+            true,
+        );
+        assert_eq!(state, State::Dialing { pulses: 1 });
+        assert!(effects.contains(&Effect::ArmPulseTimeout));
+        let (_, effects) = handle(state, Event::Tick);
+        assert!(effects.contains(&Effect::FetchRandomQuestion));
+
+        for (digit, expected) in [
+            (0, Effect::FetchInstructions),
+            (1, Effect::FetchRandomQuestion),
+            (2, Effect::FetchRandomMessage),
+        ] {
+            let (_, effects) = handle_with_call_availability(
+                State::CallsPaused { on_hook: false },
+                Event::DigitDialed { digit },
+                true,
+            );
+            assert!(effects.contains(&expected));
+        }
+    }
+
+    #[test]
+    fn recovered_upload_cannot_complete_a_different_call() {
+        let state = State::Uploading {
+            recording_id: "new".into(),
+            question_id: "question".into(),
+            on_hook: false,
+        };
+        let (next, effects) = handle(
+            state.clone(),
+            Event::UploadFinished {
+                recording_id: "old".into(),
+                outcome: UploadOutcome::Complete,
+            },
+        );
+        assert_eq!(next, state);
+        assert!(effects.is_empty());
+    }
 
     #[test]
     fn pickup_starts_dialtone() {
@@ -1328,9 +1586,11 @@ mod tests {
         /// `LedColour` cannot represent two channels at once by construction —
         /// this asserts the mapping is total).
         #[test]
-        fn random_walk_keeps_led_single_channel(seq in proptest::collection::vec(0u8..16, 0..200)) {
+        fn random_walk_keeps_led_single_channel(
+            seq in proptest::collection::vec((proptest::bool::ANY, 0u8..20), 0..200)
+        ) {
             let mut state = State::Idle;
-            for code in seq {
+            for (accepting_calls, code) in seq {
                 let event = match code {
                     0 => Event::HookOff,
                     1 => Event::HookOn,
@@ -1345,9 +1605,23 @@ mod tests {
                     10 => Event::UploadFailed { reason: "x".into() },
                     11 => Event::PowerButtonPressed,
                     12 => Event::PowerButtonHeld,
+                    13 => Event::UploadDeferred,
+                    14 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Complete },
+                    15 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Deferred },
+                    16 => Event::UploadFinished { recording_id: "rec".into(), outcome: UploadOutcome::Failed { reason: "x".into() } },
+                    17 => Event::UploadFinished { recording_id: "abandoned".into(), outcome: UploadOutcome::Complete },
+                    18 => Event::DigitDialed { digit: 1 },
+                    19 => Event::RecordingFailed { reason: "x".into() },
                     _ => Event::Tick,
                 };
-                let (next, _effects) = handle(state, event);
+                let (next, effects) = handle_with_call_availability(state, event, accepting_calls);
+                if !accepting_calls {
+                    proptest::prop_assert!(!effects.iter().any(|effect| matches!(
+                        effect, Effect::FetchRandomQuestion | Effect::FetchRandomMessage |
+                            Effect::FetchInstructions | Effect::StartRecording |
+                            Effect::Play(_) | Effect::PutStatus(_)
+                    )));
+                }
                 state = next;
                 // The mapping is total and returns exactly one colour.
                 let (_colour, _pattern) = status_led_for(&state);

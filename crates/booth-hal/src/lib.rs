@@ -484,6 +484,16 @@ pub enum BoothStatus {
     CallUnavailable,
 }
 
+/// Operator-controlled exhibition lifecycle, independent of booth connectivity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallationState {
+    /// An operator explicitly started the exhibition.
+    Active,
+    /// Calls and exhibition writes are paused until an operator starts again.
+    BetweenExhibitions,
+}
+
 /// Errors talking to the operator backend.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum OperatorError {
@@ -505,6 +515,9 @@ pub enum OperatorError {
     /// The operator rejected the request because it conflicts with current state.
     #[error("operator conflict: {0}")]
     Conflict(Cow<'static, str>),
+    /// The installation is deliberately inactive; retain work for manual restart.
+    #[error("operator installation inactive: {0}")]
+    InstallationInactive(Cow<'static, str>),
     /// The uploaded audio exceeds the operator's accepted size cap.
     #[error("operator payload too large: {body}")]
     PayloadTooLarge {
@@ -536,6 +549,20 @@ pub enum OperatorError {
 #[cfg(feature = "std")]
 #[async_trait::async_trait]
 pub trait OperatorClient: Send + Sync {
+    /// Whether this adapter can reconcile the operator's exhibition lifecycle.
+    /// Local adapters default to legacy behavior without a network probe.
+    fn supports_installation_state(&self) -> bool {
+        false
+    }
+
+    /// Read the authoritative lifecycle from `GET /v1/status`.
+    ///
+    /// `None` means an older server omitted the additive field, not inactivity.
+    /// Synthetic status timestamps are not booth heartbeats.
+    async fn installation_state(&self) -> Result<Option<InstallationState>, OperatorError> {
+        Ok(None)
+    }
+
     /// Fetch a random question and bump its play-count counter on the
     /// operator side.
     async fn random_question(&self) -> Result<OperatorQuestion, OperatorError>;

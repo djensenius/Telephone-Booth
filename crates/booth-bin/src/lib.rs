@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::result::Result as StdResult;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, handle};
+use booth_core::{Effect, Event, PULSE_GROUP_TIMEOUT_MS, State, UploadOutcome, handle};
 use booth_debug::{DebugConfig, DebugToken, RuntimeCommand};
 use booth_hal::{
     AudioError, AudioRef, AudioSink, AudioSource, BoothStatus, BuiltinTone, GpioEdge, GpioError,
@@ -40,6 +40,7 @@ pub mod simulator;
 
 pub mod event_spool;
 pub mod file_storage;
+mod installation;
 pub mod observability;
 pub mod pending_uploads;
 pub mod weather;
@@ -550,24 +551,33 @@ async fn run_runtime(
         power,
     } = adapters;
 
+    let initial_hook_on = gpio
+        .snapshot(PinRole::Hook)
+        .await
+        .context("read initial handset position")?;
+    bus.publish(TelemetryEvent::GpioEdge(GpioEdge {
+        role: PinRole::Hook,
+        level: initial_hook_on,
+        at_monotonic_ns: monotonic_ns(),
+    }));
+    let installation = installation::InstallationGate::new(operator.supports_installation_state());
+    let mut installation_rx = installation.subscribe();
+    let lifecycle_operator = Arc::clone(&operator);
+    let operator: Arc<dyn OperatorClient> = Arc::new(installation::ExhibitionOperator {
+        inner: operator,
+        gate: installation.clone(),
+    });
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(EVENT_CHANNEL);
     let (effect_tx, effect_rx) = mpsc::channel::<Effect>(EFFECT_CHANNEL);
     let (audio_tx, audio_rx) = mpsc::channel::<AudioCommand>(32);
     let next_remote_audio = Arc::new(Mutex::new(None));
     let recordings_dir = PathBuf::from(config.audio.recordings_dir.clone());
     let spool_dir = pending_uploads_dir_for(&config.audio.recordings_dir);
-    let upload_spool = match pending_uploads::PendingUploadSpool::open(&spool_dir) {
-        Ok(spool) => Arc::new(spool),
-        Err(err) => {
-            warn!(dir = %spool_dir.display(), %err, "cannot open pending-upload spool; uploads will not be durable");
-            Arc::new(
-                pending_uploads::PendingUploadSpool::open(
-                    std::env::temp_dir().join("phone-booth-spool"),
-                )
-                .map_err(|e| anyhow!("fallback spool: {e}"))?,
-            )
-        }
-    };
+    let upload_spool = Arc::new(
+        pending_uploads::PendingUploadSpool::open(&spool_dir)
+            .context("cannot open durable pending-upload spool")?,
+    );
+    let installation_task = installation.spawn_reconciler(lifecycle_operator, bus.clone());
     let session_handle = SessionHandle::default();
 
     // Open the durable event spool for the operator forwarder.
@@ -692,6 +702,7 @@ async fn run_runtime(
         bus.clone(),
     ));
     let audio_source: Arc<Mutex<Box<dyn AudioSource>>> = Arc::new(Mutex::new(audio_source));
+    let shutting_down = Arc::new(AtomicBool::new(false));
     let effect_task = tokio::spawn(effect_task(
         effect_rx,
         audio_tx.clone(),
@@ -706,6 +717,8 @@ async fn run_runtime(
         session_handle.clone(),
         Arc::clone(&upload_spool),
         u64::from(config.audio.min_recording_secs).saturating_mul(1000),
+        installation.clone(),
+        Arc::clone(&shutting_down),
     ));
 
     let debug_handles = if options.start_debug {
@@ -738,55 +751,25 @@ async fn run_runtime(
         None
     };
 
-    // Recover pending uploads from a previous run that was interrupted.
-    {
-        let pending = upload_spool.scan();
-        if !pending.is_empty() {
-            info!(
-                count = pending.len(),
-                "recovering pending uploads from spool"
-            );
-            for entry in pending {
-                let operator = Arc::clone(&operator);
-                let event_tx = event_tx.clone();
-                let bus = bus.clone();
-                let session_handle = session_handle.clone();
-                let spool = Arc::clone(&upload_spool);
-                tokio::spawn(async move {
-                    let started = Instant::now();
-                    let path = entry.path.clone();
-                    let recording_id = entry.recording_id.clone();
-                    let question_id = entry.question_id.clone();
-                    let bytes = match entry.size_bytes {
-                        Some(bytes) => bytes,
-                        None => tokio::fs::metadata(&path).await.map_or(0, |m| m.len()),
-                    };
-                    let success = upload_recording(
-                        &*operator,
-                        None,
-                        &path,
-                        &event_tx,
-                        &bus,
-                        recording_id.clone(),
-                        question_id,
-                        session_handle.current(),
-                        started,
-                        bytes,
-                        entry.duration_ms,
-                    )
-                    .await;
-                    if success {
-                        spool.dequeue(&recording_id).ok();
-                    }
-                });
-            }
-        }
-    }
+    let upload_replay = spawn_upload_replay(
+        Arc::clone(&operator),
+        Arc::clone(&audio_source),
+        Arc::clone(&upload_spool),
+        installation.clone(),
+        bus.clone(),
+    );
 
     notify_ready(options.notify_systemd);
     let mut watchdog = arm_watchdog(options.notify_systemd);
 
-    let mut state = State::default();
+    let mut accepting_calls = installation.accepting_calls();
+    let mut state = if accepting_calls {
+        State::default()
+    } else {
+        State::CallsPaused {
+            on_hook: initial_hook_on,
+        }
+    };
 
     // Startup is done: replace the boot indication with the one the core maps
     // to the initial state. Without this an on-hook booth would stay on the
@@ -795,11 +778,23 @@ async fn run_runtime(
         let (colour, pattern) = booth_core::status_led_for(&state);
         apply_status_led(&status_led, colour, pattern, &bus, "ready").await;
     }
+    if accepting_calls && !initial_hook_on {
+        handle_event(&mut state, Event::HookOff, &effect_tx, &bus, &installation).await?;
+    }
 
     let mut shutdown = shutdown_signal(options.listen_signals);
 
     loop {
         tokio::select! {
+            changed = installation_rx.changed() => {
+                if changed.is_ok() {
+                    let available = installation.accepting_calls();
+                    if available != accepting_calls || (available && matches!(state, State::CallsPaused { .. })) {
+                        accepting_calls = available;
+                        handle_event(&mut state, Event::Tick, &effect_tx, &bus, &installation).await?;
+                    }
+                }
+            }
             () = watchdog_tick(&mut watchdog) => {
                 // Emitted from inside the loop: if the loop is wedged in
                 // handle_event this branch never fires, so systemd stops
@@ -811,13 +806,13 @@ async fn run_runtime(
                     warn!("event channel closed");
                     break;
                 };
-                handle_event(&mut state, event, &effect_tx, &bus).await?;
+                handle_event(&mut state, event, &effect_tx, &bus, &installation).await?;
             }
             command = cmd_rx.recv() => {
                 match command {
                     Some(RuntimeCommand::InjectEvent(event)) => {
                         if config.debug.allow_controls {
-                            handle_event(&mut state, event, &effect_tx, &bus).await?;
+                            handle_event(&mut state, event, &effect_tx, &bus, &installation).await?;
                         } else {
                             bus.publish(TelemetryEvent::Error {
                                 source: "booth_bin::debug".to_string(),
@@ -838,17 +833,19 @@ async fn run_runtime(
         }
     }
 
+    shutting_down.store(true, Ordering::SeqCst);
+    drop(event_rx);
     let _ = audio_tx.send(AudioCommand::Shutdown).await;
+    installation_task.abort();
+    upload_replay.abort();
     gpio_task.abort();
     if let Some(task) = power_button_task {
         task.abort();
     }
     audio_task.abort();
-    // Stop the effect dispatcher *before* the terminal indication so a queued
-    // `Effect::SetStatusLed` cannot overwrite the fade after it starts. `abort`
-    // only requests cancellation, so wait for the task to actually stop —
-    // otherwise an in-flight `apply_status_led` could still land afterwards.
-    effect_task.abort();
+    // Drain accepted recording persistence, but cancel network work and other
+    // queued effects before the terminal indication.
+    drop(effect_tx);
     let _ = effect_task.await;
     // Drive the "shutting down" indication (red fade to off) directly, since the
     // effect task is no longer processing `Effect::SetStatusLed`.
@@ -904,10 +901,20 @@ async fn handle_event(
     event: Event,
     effect_tx: &mpsc::Sender<Effect>,
     bus: &TelemetryBus,
+    installation: &installation::InstallationGate,
 ) -> Result<()> {
     let from = state.clone();
-    let dialed_digit = dialed_digit_for_telemetry(&from, &event);
-    let (to, effects) = handle(from.clone(), event.clone());
+    let accepting_calls = installation.accepting_calls();
+    let dialed_digit = accepting_calls
+        .then(|| dialed_digit_for_telemetry(&from, &event))
+        .flatten();
+    let (to, effects) =
+        booth_core::handle_with_call_availability(from.clone(), event.clone(), accepting_calls);
+    let resumes_call = matches!(from, State::CallsPaused { .. })
+        && !matches!(to, State::Idle | State::CallsPaused { .. });
+    if resumes_call {
+        publish_transition(bus, &from, &to, &event);
+    }
     if let Some((digit, pulses)) = dialed_digit {
         bus.publish(TelemetryEvent::DigitDialed {
             digit,
@@ -915,7 +922,9 @@ async fn handle_event(
             at_monotonic_ns: monotonic_ns(),
         });
     }
-    publish_transition(bus, &from, &to, &event);
+    if !resumes_call {
+        publish_transition(bus, &from, &to, &event);
+    }
     debug!(
         from = from.tag(),
         to = to.tag(),
@@ -938,9 +947,10 @@ fn dialed_digit_for_telemetry(state: &State, event: &Event) -> Option<(u8, u8)> 
         (State::Dialing { pulses }, Event::Tick) if (1..=10).contains(pulses) => {
             Some((if *pulses == 10 { 0 } else { *pulses }, *pulses))
         }
-        (State::Dialing { .. }, Event::DigitDialed { digit }) if *digit <= 9 => {
-            Some((*digit, if *digit == 0 { 10 } else { *digit }))
-        }
+        (
+            State::DialTone | State::Dialing { .. } | State::CallsPaused { on_hook: false },
+            Event::DigitDialed { digit },
+        ) if *digit <= 9 => Some((*digit, if *digit == 0 { 10 } else { *digit })),
         _ => None,
     }
 }
@@ -1465,15 +1475,31 @@ async fn effect_task(
     session_handle: SessionHandle,
     upload_spool: Arc<pending_uploads::PendingUploadSpool>,
     min_recording_ms: u64,
+    installation: installation::InstallationGate,
+    shutting_down: Arc<AtomicBool>,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    let mut durability_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     let mut pending_operator_effects = VecDeque::new();
     let mut effect_rx_closed = false;
-    let fetch_generation = FetchGeneration::default();
+    let fetch_generation = installation.fetch_generation.clone();
     let (status_tx, status_task) = spawn_status_writer(Arc::clone(&operator), bus.clone());
 
     loop {
+        if shutting_down.load(Ordering::SeqCst) {
+            operator_tasks.abort_all();
+            status_task.abort();
+        }
+        while let Some(result) = durability_tasks.try_join_next() {
+            log_operator_task_result(result, "upload durability task panicked");
+        }
+        if shutting_down.load(Ordering::SeqCst) && durability_tasks.len() >= OPERATOR_CONCURRENCY {
+            if let Some(result) = durability_tasks.join_next().await {
+                log_operator_task_result(result, "upload durability task panicked");
+            }
+            continue;
+        }
         // Drain any already-finished operator tasks so the set stays tidy.
         while let Some(result) = operator_tasks.try_join_next() {
             log_operator_task_result(result, "operator background task panicked");
@@ -1513,6 +1539,10 @@ async fn effect_task(
             }
         };
 
+        if shutting_down.load(Ordering::SeqCst) && !matches!(effect, Effect::UploadRecording { .. })
+        {
+            continue;
+        }
         match effect {
             // --- Critical path: executed inline, never blocked by network ---
             Effect::Play(source) => {
@@ -1619,6 +1649,14 @@ async fn effect_task(
                         Ok(p) => p,
                         Err(err) => {
                             publish_audio_error(&bus, &err);
+                            send_upload_outcome(
+                                Some(&event_tx),
+                                &recording_id,
+                                UploadOutcome::Failed {
+                                    reason: err.to_string(),
+                                },
+                            )
+                            .await;
                             continue;
                         }
                     };
@@ -1652,19 +1690,16 @@ async fn effect_task(
                     if let Err(err) = tokio::fs::remove_file(&path).await {
                         debug!(%recording_id, path = %path, %err, "could not remove discarded recording file");
                     }
-                    let _ = event_tx.send(Event::UploadComplete).await;
+                    send_upload_outcome(Some(&event_tx), &recording_id, UploadOutcome::Complete)
+                        .await;
                     continue;
                 }
                 let session_id = session_handle.current();
-                if let Some(sid) = session_id.clone() {
-                    bus.publish(TelemetryEvent::UploadStarted {
-                        recording_id: recording_id.clone(),
-                        session_id: sid,
-                        at_monotonic_ns: monotonic_ns(),
-                    });
-                }
-                // Enqueue in spool synchronously so it's durable before we
-                // hand off to the background task.
+                let Some(claim) = upload_spool.claim(&recording_id) else {
+                    send_upload_outcome(Some(&event_tx), &recording_id, UploadOutcome::Deferred)
+                        .await;
+                    continue;
+                };
                 let spool_entry = pending_uploads::SpoolEntry {
                     recording_id: recording_id.clone(),
                     question_id: Some(question_id.clone()),
@@ -1672,22 +1707,53 @@ async fn effect_task(
                     size_bytes: Some(bytes),
                     duration_ms: recording_duration_ms,
                 };
-                if let Err(err) = upload_spool.enqueue(&spool_entry) {
-                    warn!(%err, "failed to write upload spool entry; upload will not survive crash");
-                }
-
                 let op = Arc::clone(&operator);
                 let ev_tx = event_tx.clone();
                 let b = bus.clone();
                 let spool = Arc::clone(&upload_spool);
                 let audio_src = Arc::clone(&audio_source);
+                let installation = installation.clone();
+                let persistence_spool = Arc::clone(&spool);
+                let (persisted_tx, persisted_rx) = tokio::sync::oneshot::channel();
+                durability_tasks.spawn_blocking(move || {
+                    if let Err(Err(err)) = persisted_tx.send(persistence_spool.enqueue(&spool_entry)) {
+                        error!(%err, "pending upload persistence failed after network task stopped");
+                    }
+                });
+                if shutting_down.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let shutting_down = Arc::clone(&shutting_down);
                 operator_tasks.spawn(async move {
+                    let _claim = claim;
+                    if let Err(err) = persisted_rx.await.unwrap_or_else(|err| Err(std::io::Error::other(err))) {
+                        error!(%err, %recording_id, "cannot persist upload; retaining recording without uploading");
+                        send_upload_outcome(Some(&ev_tx), &recording_id, UploadOutcome::Failed {
+                            reason: format!("cannot persist pending upload: {err}"),
+                        }).await;
+                        return;
+                    }
+                    if shutting_down.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if !installation.accepting_calls() {
+                        info!(%recording_id, "recording durably deferred until installation is available");
+                        send_upload_outcome(Some(&ev_tx), &recording_id, UploadOutcome::Deferred).await;
+                        return;
+                    }
+                    if let Some(sid) = session_id.clone() {
+                        b.publish(TelemetryEvent::UploadStarted {
+                            recording_id: recording_id.clone(),
+                            session_id: sid,
+                            at_monotonic_ns: monotonic_ns(),
+                        });
+                    }
                     let started = Instant::now();
                     let success = upload_recording(
                         &*op,
                         Some(&audio_src),
                         &path,
-                        &ev_tx,
+                        Some(&ev_tx),
                         &b,
                         recording_id.clone(),
                         Some(question_id),
@@ -1698,7 +1764,10 @@ async fn effect_task(
                     )
                     .await;
                     if success {
-                        spool.dequeue(&recording_id).ok();
+                        let id = recording_id.clone();
+                        if let Err(err) = spool.run_blocking(move |spool| spool.dequeue(&id)).await {
+                            warn!(%err, %recording_id, "cannot remove completed upload from spool");
+                        }
                     }
                 });
             }
@@ -1768,7 +1837,15 @@ async fn effect_task(
         }
     }
 
-    // Drain remaining operator tasks on shutdown.
+    operator_tasks.abort_all();
+    status_task.abort();
+    if let Some(task) = pulse_timeout {
+        task.abort();
+    }
+    while let Some(result) = durability_tasks.join_next().await {
+        log_operator_task_result(result, "upload durability task panicked during shutdown");
+    }
+    // Join cancelled network tasks after durable writes have finished.
     while let Some(result) = operator_tasks.join_next().await {
         if let Err(err) = result
             && !err.is_cancelled()
@@ -1776,7 +1853,6 @@ async fn effect_task(
             warn!(%err, "operator background task panicked during shutdown");
         }
     }
-    // Close the status queue and let the writer flush what is already queued.
     drop(status_tx);
     log_operator_task_result(status_task.await, "status writer task panicked");
 }
@@ -1852,6 +1928,9 @@ async fn fetch_random_question(
                 .await;
         }
         Err(err) => {
+            if matches!(err, OperatorError::InstallationInactive(_)) {
+                return;
+            }
             publish_operator_error(bus, "random_question", &err);
             if !token.is_current() {
                 return;
@@ -1898,6 +1977,9 @@ async fn fetch_random_message(
             let _ = event_tx.send(Event::MessageReady).await;
         }
         Err(err) => {
+            if matches!(err, OperatorError::InstallationInactive(_)) {
+                return;
+            }
             publish_operator_error(bus, "random_message", &err);
             if !token.is_current() {
                 return;
@@ -1937,6 +2019,9 @@ async fn fetch_instructions(
             let _ = event_tx.send(Event::InstructionsReady).await;
         }
         Err(err) => {
+            if matches!(err, OperatorError::InstallationInactive(_)) {
+                return;
+            }
             publish_operator_error(bus, "random_instruction", &err);
             if !token.is_current() {
                 return;
@@ -2009,7 +2094,7 @@ async fn upload_recording(
     operator: &dyn OperatorClient,
     audio_source: Option<&Arc<Mutex<Box<dyn AudioSource>>>>,
     path: &str,
-    event_tx: &mpsc::Sender<Event>,
+    event_tx: Option<&mpsc::Sender<Event>>,
     bus: &TelemetryBus,
     recording_id: RecordingId,
     question_id: Option<booth_hal::QuestionId>,
@@ -2025,10 +2110,17 @@ async fn upload_recording(
             size_bytes: bytes,
             duration_ms: recording_duration_ms,
         };
-        let slot = retry_operator("POST /v1/messages", bus, || {
+        let slot = match retry_operator("POST /v1/messages", bus, || {
             operator.init_upload(question_id.as_ref(), &metadata)
         })
-        .await?;
+        .await
+        {
+            Ok(slot) => slot,
+            // Only the operator's confirmed completed row is idempotent success,
+            // not a conflict from the subsequent blob transfer.
+            Err(OperatorError::DuplicateRecording(_)) => return Ok(()),
+            Err(err) => return Err(err),
+        };
         retry_operator("PUT <presigned-upload-url>", bus, || {
             operator.put_upload(&slot, path, &recording_id)
         })
@@ -2059,8 +2151,13 @@ async fn upload_recording(
                     warn!(%recording_id, %err, "failed to clean up recording metadata");
                 }
             }
-            let _ = event_tx.send(Event::UploadComplete).await;
+            send_upload_outcome(event_tx, &recording_id, UploadOutcome::Complete).await;
             true
+        }
+        Err(OperatorError::InstallationInactive(_)) => {
+            info!(%recording_id, "upload deferred between exhibitions; recording remains in spool");
+            send_upload_outcome(event_tx, &recording_id, UploadOutcome::Deferred).await;
+            false
         }
         Err(err) => {
             publish_operator_error(bus, "upload_recording", &err);
@@ -2072,14 +2169,143 @@ async fn upload_recording(
                     at_monotonic_ns: monotonic_ns(),
                 });
             }
-            let _ = event_tx
-                .send(Event::UploadFailed {
+            send_upload_outcome(
+                event_tx,
+                &recording_id,
+                UploadOutcome::Failed {
                     reason: err.to_string(),
-                })
-                .await;
+                },
+            )
+            .await;
             false
         }
     }
+}
+
+async fn send_upload_outcome(
+    event_tx: Option<&mpsc::Sender<Event>>,
+    recording_id: &str,
+    outcome: UploadOutcome,
+) {
+    if let Some(event_tx) = event_tx {
+        let _ = event_tx
+            .send(Event::UploadFinished {
+                recording_id: recording_id.to_owned(),
+                outcome,
+            })
+            .await;
+    }
+}
+
+fn spawn_upload_replay(
+    operator: Arc<dyn OperatorClient>,
+    audio_source: Arc<Mutex<Box<dyn AudioSource>>>,
+    spool: Arc<pending_uploads::PendingUploadSpool>,
+    installation: installation::InstallationGate,
+    bus: TelemetryBus,
+) -> JoinHandle<()> {
+    let mut changed = installation.subscribe();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut was_available = false;
+        let mut last_attempt: Option<String> = None;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                result = changed.changed() => {
+                    if result.is_err() {
+                        break;
+                    }
+                    let available = installation.accepting_calls();
+                    let resumed = available && !was_available;
+                    was_available = available;
+                    if !resumed {
+                        continue;
+                    }
+                }
+            }
+            was_available = installation.accepting_calls();
+            if !was_available {
+                continue;
+            }
+            // One replay at a time, with claims shared by foreground uploads.
+            let mut entries = match spool.clone().run_blocking(|spool| Ok(spool.scan())).await {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!(%err, "pending-upload scan failed");
+                    continue;
+                }
+            };
+            entries.sort_by(|a, b| a.recording_id.cmp(&b.recording_id));
+            if let Some(last) = &last_attempt {
+                let start = entries
+                    .iter()
+                    .position(|entry| entry.recording_id > *last)
+                    .unwrap_or(0);
+                entries.rotate_left(start);
+            }
+            for entry in entries {
+                if !installation.accepting_calls() {
+                    break;
+                }
+                let Some(_claim) = spool.claim(&entry.recording_id) else {
+                    continue;
+                };
+                let id = entry.recording_id.clone();
+                match spool
+                    .clone()
+                    .run_blocking(move |spool| Ok(spool.contains(&id)))
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(err) => {
+                        warn!(%err, recording_id = %entry.recording_id, "cannot inspect pending upload");
+                        continue;
+                    }
+                }
+                last_attempt = Some(entry.recording_id.clone());
+                let bytes = match entry.size_bytes {
+                    Some(bytes) => bytes,
+                    None => match tokio::fs::metadata(&entry.path).await {
+                        Ok(metadata) => metadata.len(),
+                        Err(err) => {
+                            warn!(%err, recording_id = %entry.recording_id, "cannot read pending recording");
+                            continue;
+                        }
+                    },
+                };
+                let success = upload_recording(
+                    &*operator,
+                    Some(&audio_source),
+                    &entry.path,
+                    None,
+                    &bus,
+                    entry.recording_id.clone(),
+                    entry.question_id,
+                    None,
+                    Instant::now(),
+                    bytes,
+                    entry.duration_ms,
+                )
+                .await;
+                if success {
+                    let id = entry.recording_id.clone();
+                    if let Err(err) = spool
+                        .clone()
+                        .run_blocking(move |spool| spool.dequeue(&id))
+                        .await
+                    {
+                        warn!(%err, recording_id = %entry.recording_id, "cannot remove replayed upload from spool");
+                    }
+                } else {
+                    // Back off the entire replay sweep during outages.
+                    break;
+                }
+            }
+        }
+    })
 }
 
 async fn retry_operator<T, F, Fut>(
@@ -2129,7 +2355,11 @@ fn operator_status<T>(result: &StdResult<T, OperatorError>) -> u16 {
     match result {
         Ok(_) => 200,
         Err(OperatorError::Auth(_) | OperatorError::Unauthorized(_)) => 401,
-        Err(OperatorError::DuplicateRecording(_) | OperatorError::Conflict(_)) => 409,
+        Err(
+            OperatorError::DuplicateRecording(_)
+            | OperatorError::Conflict(_)
+            | OperatorError::InstallationInactive(_),
+        ) => 409,
         Err(OperatorError::InvalidArgument(_) | OperatorError::Unprocessable(_)) => 422,
         Err(OperatorError::PayloadTooLarge { .. }) => 413,
         Err(OperatorError::Protocol(_)) => 502,
@@ -2150,6 +2380,10 @@ fn operator_backoff(attempt: u32) -> Duration {
 }
 
 fn publish_operator_error(bus: &TelemetryBus, source: &str, err: &OperatorError) {
+    if matches!(err, OperatorError::InstallationInactive(_)) {
+        debug!(%source, "exhibition operation deferred until manual start");
+        return;
+    }
     bus.publish(TelemetryEvent::Error {
         source: source.to_string(),
         message: err.to_string(),
@@ -2862,15 +3096,65 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
+    async fn resumed_direct_digit_is_attached_to_the_new_call() {
+        for initial in [State::CallsPaused { on_hook: false }, State::DialTone] {
+            for digit in 0..=2 {
+                let bus = TelemetryBus::new(32);
+                let (effect_tx, _effect_rx) = mpsc::channel(32);
+                let gate = super::installation::InstallationGate::new(false);
+                let mut state = initial.clone();
+                if state == State::DialTone {
+                    super::publish_transition(&bus, &State::Idle, &state, &Event::HookOff);
+                }
+                handle_event(
+                    &mut state,
+                    Event::DigitDialed { digit },
+                    &effect_tx,
+                    &bus,
+                    &gate,
+                )
+                .await
+                .expect("handle first direct digit");
+                handle_event(&mut state, Event::HookOn, &effect_tx, &bus, &gate)
+                    .await
+                    .expect("hang up");
+                let mut tracker = super::observability::SessionTracker::new();
+                let events: Vec<_> = bus
+                    .snapshot_since(None)
+                    .into_iter()
+                    .flat_map(|record| tracker.observe(&record.event, 0))
+                    .collect();
+                assert!(
+                    matches!(
+                        events.as_slice(),
+                        [TelemetryEvent::CallStarted { .. }, TelemetryEvent::CallEnded {
+                            outcome: booth_hal::CallOutcome::HungUpDuringPrompt,
+                            digits_dialed,
+                            ..
+                        }] if digits_dialed == &digit.to_string()
+                    ),
+                    "{initial:?}: {events:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn pulse_timeout_publishes_decoded_digit_telemetry() {
         let bus = TelemetryBus::new(8);
         let mut records = bus.subscribe();
         let (effect_tx, _effect_rx) = mpsc::channel(8);
         let mut state = State::Dialing { pulses: 10 };
 
-        handle_event(&mut state, Event::Tick, &effect_tx, &bus)
-            .await
-            .expect("handle pulse timeout");
+        handle_event(
+            &mut state,
+            Event::Tick,
+            &effect_tx,
+            &bus,
+            &super::installation::InstallationGate::new(false),
+        )
+        .await
+        .expect("handle pulse timeout");
 
         let digit = records.recv().await.expect("digit telemetry");
         assert!(matches!(
@@ -2999,6 +3283,7 @@ mod tests {
     #[derive(Default)]
     struct CountingOperator {
         calls: AtomicUsize,
+        init_upload_error: Option<OperatorError>,
         question_attempts: AtomicUsize,
         question_draw_ids: std::sync::Mutex<Vec<String>>,
     }
@@ -3045,6 +3330,9 @@ mod tests {
             _metadata: &booth_hal::UploadMetadata,
         ) -> Result<UploadSlot, OperatorError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
+            if let Some(error) = &self.init_upload_error {
+                return Err(error.clone());
+            }
             Ok(UploadSlot {
                 id: "slot-1".to_string(),
                 upload_url: "https://storage.example.com/blob".to_string(),
@@ -3120,7 +3408,7 @@ mod tests {
                 &operator,
                 None,
                 "target/nonexistent.flac",
-                &event_tx,
+                Some(&event_tx),
                 &bus,
                 recording_id.to_string(),
                 Some("question-1".to_string()),
@@ -3135,13 +3423,67 @@ mod tests {
             assert_eq!(operator.calls.load(Ordering::Relaxed), 0);
             assert!(matches!(
                 event_rx.recv().await,
-                Some(booth_core::Event::UploadFailed { .. })
+                Some(booth_core::Event::UploadFinished {
+                    outcome: booth_core::UploadOutcome::Failed { .. },
+                    ..
+                })
             ));
             assert!(
                 bus.snapshot_since(None)
                     .into_iter()
                     .any(|record| { matches!(record.event, TelemetryEvent::UploadFailed { .. }) })
             );
+        }
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn replay_only_dequeues_confirmed_duplicate_recordings() {
+        use super::pending_uploads::{PendingUploadSpool, SpoolEntry};
+        use std::sync::Arc;
+        for (error, retained) in [
+            (OperatorError::DuplicateRecording("completed".into()), false),
+            (OperatorError::Conflict("unfinished".into()), true),
+            (OperatorError::InstallationInactive("gap".into()), true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let spool = Arc::new(PendingUploadSpool::open(dir.path()).unwrap());
+            spool
+                .enqueue(&SpoolEntry {
+                    recording_id: "answer".into(),
+                    question_id: None,
+                    path: "answer.flac".into(),
+                    size_bytes: Some(1),
+                    duration_ms: Some(1_000),
+                })
+                .unwrap();
+            let operator = Arc::new(CountingOperator {
+                init_upload_error: Some(error),
+                ..CountingOperator::default()
+            });
+            let source: Arc<tokio::sync::Mutex<Box<dyn booth_hal::AudioSource>>> = Arc::new(
+                tokio::sync::Mutex::new(Box::new(booth_mock::MockAudioSource::default())),
+            );
+            let task = super::spawn_upload_replay(
+                operator.clone(),
+                source,
+                spool.clone(),
+                super::installation::InstallationGate::new(false),
+                TelemetryBus::new(16),
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while operator.calls.load(Ordering::Relaxed) != 1
+                    || spool.contains("answer") != retained
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(operator.calls.load(Ordering::Relaxed), 1);
+            assert_eq!(spool.contains("answer"), retained);
+            task.abort();
+            let _ = task.await;
         }
     }
 

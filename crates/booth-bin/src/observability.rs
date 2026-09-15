@@ -215,8 +215,8 @@ impl SessionTracker {
         let mut out = Vec::new();
         match event {
             TelemetryEvent::StateTransition { from, to, .. } => {
-                let was_idle = from == "idle";
-                let now_idle = to == "idle";
+                let was_idle = matches!(from.as_str(), "idle" | "calls_paused");
+                let now_idle = matches!(to.as_str(), "idle" | "calls_paused");
                 if was_idle && !now_idle && self.current.is_none() {
                     let id = Uuid::new_v4().to_string();
                     self.current = Some(LiveSession {
@@ -242,6 +242,13 @@ impl SessionTracker {
                     && let Some(session) = self.current.take()
                 {
                     let outcome = match session.phase {
+                        SessionPhase::Prompt
+                        | SessionPhase::Recording
+                        | SessionPhase::Uploading
+                            if to == "calls_paused" =>
+                        {
+                            CallOutcome::Aborted
+                        }
                         SessionPhase::Prompt if session.digits.is_empty() => {
                             CallOutcome::HungUpBeforeDial
                         }
@@ -312,30 +319,6 @@ pub fn spawn_event_forwarder(
     // between spawn and the task's first poll.
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
-        // Replay any spooled batches from a previous run before processing
-        // new events. Events have stable eventIds so replay is idempotent.
-        if let Some(ref spool) = event_spool {
-            for (path, body) in spool.drain() {
-                match operator.push_events_json(&body).await {
-                    Ok(ack) => {
-                        debug!(
-                            accepted = ack.accepted,
-                            duplicates = ack.duplicates,
-                            "replayed spooled event batch"
-                        );
-                        EventSpool::remove_file(&path);
-                    }
-                    Err(OperatorError::Unsupported(_)) => {
-                        EventSpool::remove_file(&path);
-                    }
-                    Err(err) => {
-                        warn!(%err, "failed to replay spooled events; will retry next startup");
-                        break;
-                    }
-                }
-            }
-        }
-
         let mut tracker = SessionTracker::new();
         let mut batch: VecDeque<Value> = VecDeque::with_capacity(config.operator_forward.batch_max);
         let mut dropped: u64 = 0;
@@ -349,6 +332,12 @@ pub fn spawn_event_forwarder(
         loop {
             tokio::select! {
                 () = flush_tick(&mut flush) => {
+                    if let Some(ref spool) = event_spool {
+                        tokio::select! {
+                            () = replay_one_batch(&operator, spool) => {}
+                            () = shutdown_requested(&mut shutdown) => break,
+                        }
+                    }
                     if !batch.is_empty() {
                         // Race the flush against the shutdown signal so a
                         // hung operator call (the real client has a 10 s HTTP
@@ -357,8 +346,8 @@ pub fn spawn_event_forwarder(
                         // cancellation-safe: if shutdown wins, the batch is
                         // left intact for the shutdown drain to persist.
                         tokio::select! {
-                            ok = flush_once(&operator, &mut batch, &identity) => {
-                                after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config);
+                            ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref()) => {
+                                after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config).await;
                             }
                             () = shutdown_requested(&mut shutdown) => break,
                         }
@@ -380,8 +369,8 @@ pub fn spawn_event_forwarder(
                             );
                             if batch.len() >= config.operator_forward.batch_max {
                                 tokio::select! {
-                                    ok = flush_once(&operator, &mut batch, &identity) => {
-                                        after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config);
+                                    ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref()) => {
+                                        after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config).await;
                                     }
                                     () = shutdown_requested(&mut shutdown) => break,
                                 }
@@ -441,16 +430,42 @@ pub fn spawn_event_forwarder(
             let flushed = matches!(
                 tokio::time::timeout(
                     SHUTDOWN_FLUSH_TIMEOUT,
-                    flush_once(&operator, &mut batch, &identity),
+                    flush_once(&operator, &mut batch, &identity, event_spool.as_ref()),
                 )
                 .await,
                 Ok(true)
             );
             if !flushed {
-                spill_remaining(event_spool.as_ref(), &mut batch);
+                spill_remaining(event_spool.as_ref(), &mut batch).await;
             }
         }
     })
+}
+
+async fn replay_one_batch(operator: &Arc<dyn OperatorClient>, spool: &Arc<EventSpool>) {
+    // Bound replay to one request per flush tick; no restart is required.
+    let spool = Arc::clone(spool);
+    let (path, body) = match tokio::task::spawn_blocking(move || spool.oldest_batch()).await {
+        Ok(Some(batch)) => batch,
+        Ok(None) => return,
+        Err(err) => {
+            warn!(%err, "event spool read task failed");
+            return;
+        }
+    };
+    match operator.push_events_json(&body).await {
+        Ok(_) | Err(OperatorError::Unsupported(_)) => {
+            if let Err(err) =
+                tokio::task::spawn_blocking(move || EventSpool::remove_file(&path)).await
+            {
+                warn!(%err, "event spool removal task failed");
+            }
+        }
+        Err(OperatorError::InstallationInactive(_)) => {
+            debug!("retaining spooled events between exhibitions");
+        }
+        Err(err) => warn!(%err, "event replay failed; retaining batch for later retry"),
+    }
 }
 
 /// Spawn the system snapshot pusher task.
@@ -616,7 +631,7 @@ fn ingest_record(
 
 /// Update the `was_failing` recovery flag after a flush attempt, spilling the
 /// batch when the operator is unreachable so it survives buffer pressure.
-fn after_flush(
+async fn after_flush(
     ok: bool,
     was_failing: &mut bool,
     spool: Option<&Arc<EventSpool>>,
@@ -628,18 +643,19 @@ fn after_flush(
         *was_failing = false;
     } else if !ok {
         *was_failing = true;
-        maybe_spill(spool, batch, config);
+        maybe_spill(spool, batch, config).await;
     }
 }
 
 /// Attempt to flush the event batch to the operator.
 ///
 /// Returns `true` on success (batch cleared), `false` on failure (batch
-/// retained for next attempt).
+/// retained in memory or durably spooled for the next attempt).
 async fn flush_once(
     operator: &Arc<dyn OperatorClient>,
     batch: &mut VecDeque<Value>,
     identity: &RuntimeIdentity,
+    spool: Option<&Arc<EventSpool>>,
 ) -> bool {
     if batch.is_empty() {
         return true;
@@ -662,6 +678,11 @@ async fn flush_once(
             // the batch silently so we don't loop forever.
             batch.clear();
             true
+        }
+        Err(OperatorError::InstallationInactive(_)) => {
+            debug!("installation inactive; keeping unacknowledged events");
+            spill_remaining(spool, batch).await;
+            false
         }
         Err(err) => {
             // Keep the batch buffered for the next flush; the buffer cap
@@ -687,27 +708,17 @@ fn push_with_cap(batch: &mut VecDeque<Value>, item: Value, cap: usize, dropped_c
 /// Spill the in-memory batch to disk when the operator is unreachable and
 /// the buffer is approaching capacity. This prevents event loss across
 /// extended outages or booth restarts.
-fn maybe_spill(
+async fn maybe_spill(
     spool: Option<&Arc<EventSpool>>,
     batch: &mut VecDeque<Value>,
     config: &ObservabilityConfig,
 ) {
-    let Some(spool) = spool else { return };
     // Only spill when the buffer is at least half full — avoids spilling
     // tiny batches on every transient hiccup.
     if batch.len() < config.operator_forward.buffer_max / 2 {
         return;
     }
-    let items: Vec<Value> = batch.drain(..).collect();
-    if let Err(err) = spool.spill(&items) {
-        warn!(%err, "failed to spill event batch to disk");
-        // Put the items back so push_with_cap can still evict oldest.
-        for item in items {
-            batch.push_back(item);
-        }
-    } else {
-        debug!(count = items.len(), "spilled event batch to disk");
-    }
+    spill_remaining(spool, batch).await;
 }
 
 /// Unconditionally spill every buffered event to disk (used on shutdown).
@@ -715,26 +726,28 @@ fn maybe_spill(
 /// Unlike [`maybe_spill`], this does not wait for the buffer to fill up: at
 /// shutdown even a single un-acknowledged event (e.g. a `CallEnded`) must be
 /// persisted so the next startup replays it.
-fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<Value>) {
+async fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<Value>) {
     if batch.is_empty() {
         return;
     }
     let Some(spool) = spool else {
         warn!(
             count = batch.len(),
-            "no event spool configured; dropping buffered events on shutdown"
+            "no event spool configured; cannot persist buffered events"
         );
-        batch.clear();
         return;
     };
-    let items: Vec<Value> = batch.drain(..).collect();
-    if let Err(err) = spool.spill(&items) {
-        warn!(%err, count = items.len(), "failed to spill buffered events on shutdown");
-    } else {
-        debug!(
-            count = items.len(),
-            "spilled buffered events to disk on shutdown"
-        );
+    let items: Vec<Value> = batch.iter().cloned().collect();
+    let spool = Arc::clone(spool);
+    match tokio::task::spawn_blocking(move || spool.spill(&items)).await {
+        Ok(Ok(())) => {
+            debug!(count = batch.len(), "spilled buffered events to disk");
+            batch.clear();
+        }
+        Ok(Err(err)) => warn!(%err, count = batch.len(), "cannot persist events; keeping buffer"),
+        Err(err) => {
+            warn!(%err, count = batch.len(), "event spool write task failed; keeping buffer");
+        }
     }
 }
 
@@ -962,6 +975,107 @@ mod tests {
             [TelemetryEvent::CallStarted { .. }]
         ));
         assert!(t.current_session_id().is_some());
+    }
+
+    #[test]
+    fn paused_transitions_are_not_real_calls_or_errors() {
+        let mut tracker = SessionTracker::new();
+        for (from, to) in [
+            ("idle", "calls_paused"),
+            ("calls_paused", "calls_paused"),
+            ("calls_paused", "idle"),
+        ] {
+            assert!(tracker.observe(&transition(from, to, 1), 1).is_empty());
+        }
+        assert!(tracker.current_session_id().is_none());
+        assert!(matches!(
+            tracker
+                .observe(&transition("calls_paused", "dial_tone", 2), 2)
+                .as_slice(),
+            [TelemetryEvent::CallStarted { .. }]
+        ));
+        assert!(matches!(
+            tracker
+                .observe(&transition("dial_tone", "calls_paused", 3), 3)
+                .as_slice(),
+            [TelemetryEvent::CallEnded {
+                outcome: CallOutcome::Aborted,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn lifecycle_pauses_abort_calls_but_preserve_confirmed_upload_outcomes() {
+        for phase in ["dial_tone", "playing_question", "recording", "uploading"] {
+            let mut tracker = SessionTracker::new();
+            tracker.observe(&transition("idle", phase, 1), 1);
+            assert!(matches!(
+                tracker
+                    .observe(&transition(phase, "calls_paused", 2), 2)
+                    .as_slice(),
+                [TelemetryEvent::CallEnded {
+                    outcome: CallOutcome::Aborted,
+                    ..
+                }]
+            ));
+        }
+        let mut tracker = SessionTracker::new();
+        tracker.observe(&transition("idle", "uploading", 1), 1);
+        tracker.observe(
+            &TelemetryEvent::UploadCompleted {
+                recording_id: "answer".into(),
+                session_id: "session".into(),
+                duration_ms: 1,
+                bytes: 1,
+                at_monotonic_ns: 2,
+            },
+            2,
+        );
+        assert!(matches!(
+            tracker
+                .observe(&transition("uploading", "calls_paused", 3), 3)
+                .as_slice(),
+            [TelemetryEvent::CallEnded {
+                outcome: CallOutcome::RecordingCompleted,
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn inactive_conflict_retains_event_batch_and_spool_until_replay() {
+        let inner = Arc::new(booth_mock::MockOperatorClient::new());
+        inner.state().lock().await.fail_events =
+            Some(OperatorError::InstallationInactive("gap".into()));
+        let operator: Arc<dyn OperatorClient> = inner.clone();
+        let identity = RuntimeIdentity::new("booth");
+        let event = json!({"eventId":"retained", "type":"call_ended"});
+        let mut batch = VecDeque::from([event.clone()]);
+        assert!(!flush_once(&operator, &mut batch, &identity, None).await);
+        assert_eq!(batch, VecDeque::from([event.clone()]));
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        assert!(!flush_once(&operator, &mut batch, &identity, Some(&spool)).await);
+        assert!(batch.is_empty());
+        assert!(EventSpool::open(dir.path()).unwrap().has_pending());
+        replay_one_batch(&operator, &spool).await;
+        assert!(spool.has_pending());
+        assert!(inner.state().lock().await.event_batches.is_empty());
+
+        let blocked_path = dir.path().join("blocked");
+        let blocked = Arc::new(EventSpool::open(&blocked_path).unwrap());
+        std::fs::remove_dir(&blocked_path).unwrap();
+        std::fs::write(&blocked_path, b"not a directory").unwrap();
+        batch.push_back(event.clone());
+        assert!(!flush_once(&operator, &mut batch, &identity, Some(&blocked)).await);
+        assert_eq!(batch, VecDeque::from([event]));
+
+        inner.state().lock().await.fail_events = None;
+        replay_one_batch(&operator, &spool).await;
+        assert!(!spool.has_pending());
+        assert_eq!(inner.state().lock().await.event_batches.len(), 1);
     }
 
     #[test]
