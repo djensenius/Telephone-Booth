@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/djensenius/Telephone-Booth/compare/v0.13.0...v0.14.0) (2026-09-15)
+
+
+### Features
+
+* **runtime:** honor persistent between-exhibitions mode ([#170](https://github.com/djensenius/Telephone-Booth/issues/170)) ([9856629](https://github.com/djensenius/Telephone-Booth/commit/985662995b393d4a667b42187587a4ed63ccfc78))
+
 ## [0.13.0](https://github.com/djensenius/Telephone-Booth/compare/v0.12.2...v0.13.0) (2026-08-26)
 
 
