@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -21,6 +22,7 @@ const DEFAULT_MAX_FILES: usize = 50;
 pub struct EventSpool {
     dir: PathBuf,
     max_files: usize,
+    writer: Mutex<()>,
 }
 
 impl EventSpool {
@@ -31,12 +33,25 @@ impl EventSpool {
         Ok(Self {
             dir,
             max_files: DEFAULT_MAX_FILES,
+            writer: Mutex::new(()),
         })
     }
 
     /// Write a failed batch to disk for later replay.
     pub fn spill(&self, batch: &[Value]) -> std::io::Result<()> {
-        let filename = format!("{}-{}.json", monotonic_ns(), std::process::id());
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|err| std::io::Error::other(err.to_string()))?;
+        let sequence = self
+            .entries()?
+            .iter()
+            .filter_map(|path| batch_sequence(path))
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("event spool sequence exhausted"))?;
+        let filename = format!("batch-{sequence:020}.json");
         let path = self.dir.join(&filename);
         let tmp = self.dir.join(format!(".tmp-{filename}"));
         let body = serde_json::to_vec(batch)
@@ -48,7 +63,7 @@ impl EventSpool {
             let _ = std::fs::remove_file(&tmp);
         })?;
         std::fs::File::open(&self.dir)?.sync_all()?;
-        self.enforce_cap();
+        self.enforce_cap()?;
         Ok(())
     }
 
@@ -108,33 +123,58 @@ impl EventSpool {
     }
 
     fn sorted_entries(&self) -> Vec<PathBuf> {
-        let Ok(read_dir) = std::fs::read_dir(&self.dir) else {
-            return Vec::new();
-        };
-        let mut paths: Vec<PathBuf> = read_dir
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.extension().is_some_and(|ext| ext == "json")
-                    && !p
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with('.'))
-            })
-            .collect();
-        paths.sort();
-        paths
+        match self.entries() {
+            Ok(paths) => paths,
+            Err(err) => {
+                warn!(path = %self.dir.display(), %err, "cannot scan event spool");
+                Vec::new()
+            }
+        }
     }
 
-    fn enforce_cap(&self) {
-        let entries = self.sorted_entries();
+    fn entries(&self) -> std::io::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_file()
+                && path.extension().is_some_and(|ext| ext == "json")
+                && !path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with('.'))
+            {
+                // Legacy process-relative names precede sequenced batches;
+                // persisted modification times recover their cross-boot order.
+                let key = match batch_sequence(&path) {
+                    Some(sequence) => (true, u128::from(sequence)),
+                    None => (
+                        false,
+                        entry
+                            .metadata()?
+                            .modified()?
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(std::io::Error::other)?
+                            .as_nanos(),
+                    ),
+                };
+                paths.push((key, path));
+            }
+        }
+        paths.sort();
+        Ok(paths.into_iter().map(|(_, path)| path).collect())
+    }
+
+    fn enforce_cap(&self) -> std::io::Result<()> {
+        let entries = self.entries()?;
         if entries.len() > self.max_files {
             let to_remove = entries.len() - self.max_files;
             for path in entries.iter().take(to_remove) {
-                let _ = std::fs::remove_file(path);
+                std::fs::remove_file(path)?;
             }
+            std::fs::File::open(&self.dir)?.sync_all()?;
         }
+        Ok(())
     }
 }
 
@@ -143,12 +183,12 @@ pub fn event_spool_dir_for(data_dir: &Path) -> PathBuf {
     data_dir.join("event-spool")
 }
 
-fn monotonic_ns() -> u64 {
-    use std::time::Instant;
-
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
+fn batch_sequence(path: &Path) -> Option<u64> {
+    path.file_stem()?
+        .to_str()?
+        .strip_prefix("batch-")?
+        .parse()
+        .ok()
 }
 
 #[cfg(test)]
@@ -156,6 +196,26 @@ fn monotonic_ns() -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restart_preserves_oldest_batch_and_retention_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("9999999999999999999-123.json");
+        std::fs::write(&old, br#"[{"eventId":"old"}]"#).unwrap();
+        let spool = EventSpool::open(dir.path()).unwrap();
+        spool.spill(&[json!({"eventId": "new"})]).unwrap();
+        assert_eq!(spool.oldest_batch().unwrap().0, old);
+        drop(spool);
+
+        let mut reopened = EventSpool::open(dir.path()).unwrap();
+        reopened.max_files = 2;
+        reopened.spill(&[json!({"eventId": "newest"})]).unwrap();
+        let batches = reopened.drain();
+        assert_eq!(batches.len(), 2);
+        assert!(batches[0].1.contains("\"eventId\":\"new\""));
+        assert!(batches[1].1.contains("\"eventId\":\"newest\""));
+        assert!(!old.exists());
+    }
 
     #[test]
     fn oldest_batch_does_not_read_later_files() {
@@ -203,8 +263,6 @@ mod tests {
         for i in 0..5 {
             let batch = vec![json!({"eventId": format!("ev-{i}")})];
             spool.spill(&batch).expect("spill");
-            // Small delay so filenames sort distinctly.
-            std::thread::sleep(std::time::Duration::from_millis(2));
         }
 
         let entries = spool.sorted_entries();

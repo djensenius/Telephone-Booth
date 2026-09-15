@@ -32,6 +32,7 @@ Restarting the process must not be necessary to resume pending work.
   remembers hook position, plays nothing, and is not a call or error session.
   Seed hook position from the physical GPIO snapshot at boot; a handset already
   lifted resumes correctly without requiring a new edge.
+  Apply the first dial input even when it arrives before the resume notification.
   An interrupted existing call reports `aborted`, not a fabricated caller hangup;
   confirmed upload outcomes are preserved.
   Preserve digit mappings. Cancel abandoned prompt results with the existing
@@ -54,7 +55,9 @@ Restarting the process must not be necessary to resume pending work.
   the file and directory before clearing the buffer. Retain the buffer if
   persistence fails. Read and replay only the oldest spooled batch each forwarder
   flush tick, with filesystem work on the blocking pool. Keep existing
-  event-spool retention limits.
+  event-spool retention limits. Persist batch sequence numbers in filenames so
+  replay and retention stay ordered across restarts; legacy files precede new
+  batches and use filesystem modification times for their ordering.
   Nothing on the booth starts an installation implicitly.
 
 ## Consequences

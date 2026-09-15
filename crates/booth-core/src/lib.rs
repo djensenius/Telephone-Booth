@@ -506,11 +506,17 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
     };
     if accepting_calls {
         if matches!(state, State::CallsPaused { .. }) {
-            return if on_hook {
+            let (resumed, mut effects) = if on_hook {
                 (State::Idle, vec![Effect::PutStatus(BoothStatus::Idle)])
             } else {
                 handle_inner(State::Idle, Event::HookOff)
             };
+            if matches!(event, Event::RotaryPulse | Event::DigitDialed { .. }) {
+                let (next, input_effects) = handle_inner(resumed, event);
+                effects.extend(input_effects);
+                return (next, effects);
+            }
+            return (resumed, effects);
         }
         return handle_inner(state, event);
     }
@@ -641,7 +647,7 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
             let digit = if pulses == 10 { 0 } else { pulses };
             decode_digit(digit)
         }
-        (S::Dialing { .. }, E::DigitDialed { digit }) => decode_digit(digit),
+        (S::DialTone | S::Dialing { .. }, E::DigitDialed { digit }) => decode_digit(digit),
 
         // ---- RingingQuestion -> PlayingQuestion -> Beep -> Recording ----
         (S::RingingQuestion { question_id }, E::PlaybackEnded) => (
@@ -1026,6 +1032,32 @@ mod tests {
             handle_with_call_availability(state, Event::Tick, true).0,
             State::Idle
         );
+    }
+
+    #[test]
+    fn admission_resume_preserves_first_dial_input() {
+        let (state, effects) = handle_with_call_availability(
+            State::CallsPaused { on_hook: false },
+            Event::RotaryPulse,
+            true,
+        );
+        assert_eq!(state, State::Dialing { pulses: 1 });
+        assert!(effects.contains(&Effect::ArmPulseTimeout));
+        let (_, effects) = handle(state, Event::Tick);
+        assert!(effects.contains(&Effect::FetchRandomQuestion));
+
+        for (digit, expected) in [
+            (0, Effect::FetchInstructions),
+            (1, Effect::FetchRandomQuestion),
+            (2, Effect::FetchRandomMessage),
+        ] {
+            let (_, effects) = handle_with_call_availability(
+                State::CallsPaused { on_hook: false },
+                Event::DigitDialed { digit },
+                true,
+            );
+            assert!(effects.contains(&expected));
+        }
     }
 
     #[test]
