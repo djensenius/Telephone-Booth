@@ -43,8 +43,11 @@ Restarting the process must not be necessary to resume pending work.
   rotate past failures on later sweeps, and back off after a failed attempt.
   Recovered uploads never produce call-completion events. Live completion events
   carry recording identity so they cannot advance an unrelated caller's state.
-- Retain event batches on the new conflict, and replay at most one spooled batch
-  each forwarder flush tick. Keep existing event-spool retention limits.
+- Persist even small event batches immediately on the new conflict, syncing
+  the file and directory before clearing the buffer. Retain the buffer if
+  persistence fails. Read and replay only the oldest spooled batch each forwarder
+  flush tick, with filesystem work on the blocking pool. Keep existing
+  event-spool retention limits.
   Nothing on the booth starts an installation implicitly.
 
 ## Consequences

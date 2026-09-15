@@ -7,6 +7,7 @@
 //! Events carry a stable `eventId` so the operator deduplicates replayed
 //! batches — it is always safe to re-send.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -35,16 +36,20 @@ impl EventSpool {
 
     /// Write a failed batch to disk for later replay.
     pub fn spill(&self, batch: &[Value]) -> std::io::Result<()> {
-        self.enforce_cap();
         let filename = format!("{}-{}.json", monotonic_ns(), std::process::id());
         let path = self.dir.join(&filename);
         let tmp = self.dir.join(format!(".tmp-{filename}"));
         let body = serde_json::to_vec(batch)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&tmp, &body)?;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&body)?;
+        file.sync_all()?;
         std::fs::rename(&tmp, &path).inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
-        })
+        })?;
+        std::fs::File::open(&self.dir)?.sync_all()?;
+        self.enforce_cap();
+        Ok(())
     }
 
     /// Scan spool directory and return saved batches in oldest-first order.
@@ -56,35 +61,45 @@ impl EventSpool {
     /// [`Self::remove_file`] after each successful send. This prevents data
     /// loss if replay fails partway through.
     pub fn drain(&self) -> Vec<(PathBuf, String)> {
-        let entries = self.sorted_entries();
-        let mut batches = Vec::with_capacity(entries.len());
-        for path in &entries {
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    // Wrap the raw event array into the envelope the operator expects.
-                    match serde_json::from_slice::<Vec<Value>>(&bytes) {
-                        Ok(events) => {
-                            let envelope = serde_json::json!({ "events": events }).to_string();
-                            batches.push((path.clone(), envelope));
-                        }
-                        Err(err) => {
-                            warn!(path = %path.display(), %err, "corrupt event spool file; removing");
-                            let _ = std::fs::remove_file(path);
-                        }
-                    }
-                }
-                Err(err) => {
-                    warn!(path = %path.display(), %err, "cannot read event spool file");
-                }
-            }
-        }
+        let batches: Vec<_> = self
+            .sorted_entries()
+            .into_iter()
+            .filter_map(Self::read_batch)
+            .collect();
         debug!(count = batches.len(), "drained event spool");
         batches
     }
 
+    pub(crate) fn oldest_batch(&self) -> Option<(PathBuf, String)> {
+        self.sorted_entries()
+            .into_iter()
+            .next()
+            .and_then(Self::read_batch)
+    }
+
+    fn read_batch(path: PathBuf) -> Option<(PathBuf, String)> {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                warn!(path = %path.display(), %err, "cannot read event spool file");
+                return None;
+            }
+        };
+        match serde_json::from_slice::<Vec<Value>>(&bytes) {
+            Ok(events) => Some((path, serde_json::json!({ "events": events }).to_string())),
+            Err(err) => {
+                warn!(path = %path.display(), %err, "corrupt event spool file; removing");
+                Self::remove_file(&path);
+                None
+            }
+        }
+    }
+
     /// Remove a single spool file after successful replay.
     pub fn remove_file(path: &Path) {
-        let _ = std::fs::remove_file(path);
+        if let Err(err) = std::fs::remove_file(path) {
+            warn!(path = %path.display(), %err, "cannot remove event spool file");
+        }
     }
 
     /// Returns `true` if there are spooled batches on disk.
@@ -114,8 +129,8 @@ impl EventSpool {
 
     fn enforce_cap(&self) {
         let entries = self.sorted_entries();
-        if entries.len() >= self.max_files {
-            let to_remove = entries.len() - self.max_files + 1;
+        if entries.len() > self.max_files {
+            let to_remove = entries.len() - self.max_files;
             for path in entries.iter().take(to_remove) {
                 let _ = std::fs::remove_file(path);
             }
@@ -141,6 +156,21 @@ fn monotonic_ns() -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn oldest_batch_does_not_read_later_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = EventSpool::open(dir.path()).unwrap();
+        let first = dir.path().join("000.json");
+        let later = dir.path().join("999.json");
+        std::fs::write(&first, br#"[{"eventId":"first"}]"#).unwrap();
+        std::fs::write(&later, b"invalid json").unwrap();
+        assert_eq!(spool.oldest_batch().unwrap().0, first);
+        assert!(
+            later.exists(),
+            "reading the corrupt later batch would remove it"
+        );
+    }
 
     #[test]
     fn round_trip_spill_and_drain() {
