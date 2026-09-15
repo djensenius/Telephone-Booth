@@ -18,15 +18,17 @@ use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 
-use crate::{MAX_UPLOAD_DURATION_MS, OperatorConfig, redacted_token};
+use crate::{OperatorConfig, redacted_token};
 use async_trait::async_trait;
 use booth_hal::{
     BoothStatus, EventBatchAck, InstallationState, OperatorClient, OperatorError, OperatorMessage,
-    OperatorQuestion, QuestionId, RuntimeMode, SystemSnapshot, UploadSlot, redact_url,
+    OperatorQuestion, QuestionId, RuntimeMode, SystemSnapshot, UploadSlot,
 };
 
 #[cfg(feature = "operator")]
 use {
+    crate::MAX_UPLOAD_DURATION_MS,
+    booth_hal::redact_url,
     reqwest::header::{
         ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT,
     },
@@ -521,7 +523,7 @@ impl PiOperatorClient {
 #[async_trait]
 impl OperatorClient for PiOperatorClient {
     fn supports_installation_state(&self) -> bool {
-        true
+        cfg!(feature = "operator")
     }
 
     async fn installation_state(&self) -> Result<Option<InstallationState>, OperatorError> {
@@ -1022,4 +1024,19 @@ fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
 /// fe80::/10 — link-local addresses.
 fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xFFC0) == 0xFE80
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installation_capability_matches_operator_feature() -> Result<(), OperatorError> {
+        let client = PiOperatorClient::new(OperatorConfig::default())?;
+        assert_eq!(
+            client.supports_installation_state(),
+            cfg!(feature = "operator")
+        );
+        Ok(())
+    }
 }
