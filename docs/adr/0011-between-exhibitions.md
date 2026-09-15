@@ -38,6 +38,9 @@ Restarting the process must not be necessary to resume pending work.
   bounded upload tasks rather than the critical effect dispatcher. Fail
   explicitly if durable storage cannot open or enqueue.
   A deferral is not an upload acknowledgement or failure.
+- Track durability jobs separately from cancellable network tasks. On shutdown,
+  drain accepted recording-upload effects and their durable writes before
+  closing the dispatcher, without waiting for slow operator requests.
 - Replay recordings serially on admission reopening and every 30 seconds while
   open. Share per-recording claims with live uploads; retain failed entries,
   rotate past failures on later sweeps, and back off after a failed attempt.

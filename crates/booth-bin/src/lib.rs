@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::result::Result as StdResult;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -693,6 +693,7 @@ async fn run_runtime(
         bus.clone(),
     ));
     let audio_source: Arc<Mutex<Box<dyn AudioSource>>> = Arc::new(Mutex::new(audio_source));
+    let shutting_down = Arc::new(AtomicBool::new(false));
     let effect_task = tokio::spawn(effect_task(
         effect_rx,
         audio_tx.clone(),
@@ -708,6 +709,7 @@ async fn run_runtime(
         Arc::clone(&upload_spool),
         u64::from(config.audio.min_recording_secs).saturating_mul(1000),
         installation.clone(),
+        Arc::clone(&shutting_down),
     ));
 
     let debug_handles = if options.start_debug {
@@ -817,6 +819,8 @@ async fn run_runtime(
         }
     }
 
+    shutting_down.store(true, Ordering::SeqCst);
+    drop(event_rx);
     let _ = audio_tx.send(AudioCommand::Shutdown).await;
     installation_task.abort();
     upload_replay.abort();
@@ -825,11 +829,9 @@ async fn run_runtime(
         task.abort();
     }
     audio_task.abort();
-    // Stop the effect dispatcher *before* the terminal indication so a queued
-    // `Effect::SetStatusLed` cannot overwrite the fade after it starts. `abort`
-    // only requests cancellation, so wait for the task to actually stop —
-    // otherwise an in-flight `apply_status_led` could still land afterwards.
-    effect_task.abort();
+    // Drain accepted recording persistence, but cancel network work and other
+    // queued effects before the terminal indication.
+    drop(effect_tx);
     let _ = effect_task.await;
     // Drive the "shutting down" indication (red fade to off) directly, since the
     // effect task is no longer processing `Effect::SetStatusLed`.
@@ -1452,15 +1454,30 @@ async fn effect_task(
     upload_spool: Arc<pending_uploads::PendingUploadSpool>,
     min_recording_ms: u64,
     installation: installation::InstallationGate,
+    shutting_down: Arc<AtomicBool>,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    let mut durability_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     let mut pending_operator_effects = VecDeque::new();
     let mut effect_rx_closed = false;
     let fetch_generation = installation.fetch_generation.clone();
     let (status_tx, status_task) = spawn_status_writer(Arc::clone(&operator), bus.clone());
 
     loop {
+        if shutting_down.load(Ordering::SeqCst) {
+            operator_tasks.abort_all();
+            status_task.abort();
+        }
+        while let Some(result) = durability_tasks.try_join_next() {
+            log_operator_task_result(result, "upload durability task panicked");
+        }
+        if shutting_down.load(Ordering::SeqCst) && durability_tasks.len() >= OPERATOR_CONCURRENCY {
+            if let Some(result) = durability_tasks.join_next().await {
+                log_operator_task_result(result, "upload durability task panicked");
+            }
+            continue;
+        }
         // Drain any already-finished operator tasks so the set stays tidy.
         while let Some(result) = operator_tasks.try_join_next() {
             log_operator_task_result(result, "operator background task panicked");
@@ -1500,6 +1517,10 @@ async fn effect_task(
             }
         };
 
+        if shutting_down.load(Ordering::SeqCst) && !matches!(effect, Effect::UploadRecording { .. })
+        {
+            continue;
+        }
         match effect {
             // --- Critical path: executed inline, never blocked by network ---
             Effect::Play(source) => {
@@ -1670,13 +1691,27 @@ async fn effect_task(
                 let spool = Arc::clone(&upload_spool);
                 let audio_src = Arc::clone(&audio_source);
                 let installation = installation.clone();
+                let persistence_spool = Arc::clone(&spool);
+                let (persisted_tx, persisted_rx) = tokio::sync::oneshot::channel();
+                durability_tasks.spawn_blocking(move || {
+                    if let Err(Err(err)) = persisted_tx.send(persistence_spool.enqueue(&spool_entry)) {
+                        error!(%err, "pending upload persistence failed after network task stopped");
+                    }
+                });
+                if shutting_down.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let shutting_down = Arc::clone(&shutting_down);
                 operator_tasks.spawn(async move {
                     let _claim = claim;
-                    if let Err(err) = spool.clone().run_blocking(move |spool| spool.enqueue(&spool_entry)).await {
+                    if let Err(err) = persisted_rx.await.unwrap_or_else(|err| Err(std::io::Error::other(err))) {
                         error!(%err, %recording_id, "cannot persist upload; retaining recording without uploading");
                         send_upload_outcome(Some(&ev_tx), &recording_id, UploadOutcome::Failed {
                             reason: format!("cannot persist pending upload: {err}"),
                         }).await;
+                        return;
+                    }
+                    if shutting_down.load(Ordering::SeqCst) {
                         return;
                     }
                     if !installation.accepting_calls() {
@@ -1780,7 +1815,15 @@ async fn effect_task(
         }
     }
 
-    // Drain remaining operator tasks on shutdown.
+    operator_tasks.abort_all();
+    status_task.abort();
+    if let Some(task) = pulse_timeout {
+        task.abort();
+    }
+    while let Some(result) = durability_tasks.join_next().await {
+        log_operator_task_result(result, "upload durability task panicked during shutdown");
+    }
+    // Join cancelled network tasks after durable writes have finished.
     while let Some(result) = operator_tasks.join_next().await {
         if let Err(err) = result
             && !err.is_cancelled()
@@ -1788,7 +1831,6 @@ async fn effect_task(
             warn!(%err, "operator background task panicked during shutdown");
         }
     }
-    // Close the status queue and let the writer flush what is already queued.
     drop(status_tx);
     log_operator_task_result(status_task.await, "status writer task panicked");
 }

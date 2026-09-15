@@ -411,6 +411,67 @@ async fn slow_startup_status_never_blocks_gpio_or_power_controls() -> Result<(),
 }
 
 #[tokio::test]
+async fn immediate_shutdown_persists_queued_recording_without_waiting_for_network()
+-> Result<(), Box<dyn Error>> {
+    use booth_bin::pending_uploads::PendingUploadSpool;
+    use booth_hal::AudioSource;
+    use std::time::Duration;
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.debug.allow_controls = true;
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles
+        .operator
+        .state()
+        .lock()
+        .await
+        .questions
+        .push_back(booth_hal::OperatorQuestion {
+            id: "question".into(),
+            audio_url: "https://mock.invalid/question.flac".into(),
+            audio_sha256: None,
+            description: None,
+        });
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
+    wait_for_log(&bus, "recording started").await?;
+    let recording_id = handles
+        .audio_source
+        .clone()
+        .stop()
+        .await?
+        .ok_or("missing recording")?;
+    handles.operator.state().lock().await.latency = Some(Duration::from_mins(1));
+    runtime
+        .commands
+        .send(RuntimeCommand::InjectEvent(Event::RecordingFinished {
+            recording_id: recording_id.clone(),
+        }))
+        .await?;
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    tokio::time::timeout(Duration::from_secs(5), runtime.join).await???;
+    let pending = PendingUploadSpool::open(dir.path().join("pending-uploads"))?.scan();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].recording_id, recording_id);
+    assert_eq!(pending[0].question_id.as_deref(), Some("question"));
+    assert!(handles.operator.state().lock().await.uploads.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_accepts_debug_events_and_dispatches_effects() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let mut config = booth_bin::RuntimeConfig::default();
