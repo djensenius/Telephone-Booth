@@ -551,6 +551,15 @@ async fn run_runtime(
         power,
     } = adapters;
 
+    let initial_hook_on = gpio
+        .snapshot(PinRole::Hook)
+        .await
+        .context("read initial handset position")?;
+    bus.publish(TelemetryEvent::GpioEdge(GpioEdge {
+        role: PinRole::Hook,
+        level: initial_hook_on,
+        at_monotonic_ns: monotonic_ns(),
+    }));
     let installation = installation::InstallationGate::new(operator.supports_installation_state());
     let mut installation_rx = installation.subscribe();
     let lifecycle_operator = Arc::clone(&operator);
@@ -757,7 +766,9 @@ async fn run_runtime(
     let mut state = if accepting_calls {
         State::default()
     } else {
-        State::CallsPaused { on_hook: true }
+        State::CallsPaused {
+            on_hook: initial_hook_on,
+        }
     };
 
     // Startup is done: replace the boot indication with the one the core maps
@@ -766,6 +777,9 @@ async fn run_runtime(
     {
         let (colour, pattern) = booth_core::status_led_for(&state);
         apply_status_led(&status_led, colour, pattern, &bus, "ready").await;
+    }
+    if accepting_calls && !initial_hook_on {
+        handle_event(&mut state, Event::HookOff, &effect_tx, &bus, &installation).await?;
     }
 
     let mut shutdown = shutdown_signal(options.listen_signals);

@@ -471,6 +471,59 @@ async fn immediate_shutdown_persists_queued_recording_without_waiting_for_networ
     Ok(())
 }
 
+#[tokio::test(start_paused = true)]
+async fn lifted_handset_at_startup_resumes_without_a_new_gpio_edge() -> Result<(), Box<dyn Error>> {
+    use booth_bin::observability::SessionTracker;
+    use booth_hal::InstallationState;
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    handles.gpio.set_hook_on(false);
+    handles.operator.enable_installation_state();
+    handles.operator.state().lock().await.installation_state =
+        Some(InstallationState::BetweenExhibitions);
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+    wait_for_state(
+        &runtime.commands,
+        "initial lifted handset paused",
+        |state| matches!(state, State::CallsPaused { on_hook: false }),
+    )
+    .await?;
+    assert!(handles.audio_sink.state().await.history.is_empty());
+    let mut tracker = SessionTracker::new();
+    for record in bus.snapshot_since(None) {
+        assert!(tracker.observe(&record.event, 0).is_empty());
+    }
+    handles.operator.state().lock().await.installation_state = Some(InstallationState::Active);
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+    wait_for_state(
+        &runtime.commands,
+        "dial tone without a hook edge",
+        |state| *state == State::DialTone,
+    )
+    .await?;
+    wait_for_playback(&handles.audio_sink, "dial tone", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::DialTone))
+    })
+    .await?;
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
 #[tokio::test]
 async fn runtime_accepts_debug_events_and_dispatches_effects() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

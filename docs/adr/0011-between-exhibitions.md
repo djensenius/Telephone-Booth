@@ -30,6 +30,8 @@ Restarting the process must not be necessary to resume pending work.
   immediately and invalidates any older in-flight status response.
 - Keep call admission pure via `handle_with_call_availability`. `CallsPaused`
   remembers hook position, plays nothing, and is not a call or error session.
+  Seed hook position from the physical GPIO snapshot at boot; a handset already
+  lifted resumes correctly without requiring a new edge.
   An interrupted existing call reports `aborted`, not a fabricated caller hangup;
   confirmed upload outcomes are preserved.
   Preserve digit mappings. Cancel abandoned prompt results with the existing

@@ -13,7 +13,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -36,16 +36,25 @@ use tokio::sync::{Mutex, Notify, mpsc};
 pub struct GpioInjector {
     tx: mpsc::Sender<GpioEdge>,
     telemetry: Option<TelemetryBus>,
+    hook_on: Arc<AtomicBool>,
 }
 
 impl GpioInjector {
     /// Push a debounced edge into the mock GPIO stream.
     pub async fn push(&self, edge: GpioEdge) {
+        if edge.role == PinRole::Hook {
+            self.hook_on.store(edge.level, Ordering::SeqCst);
+        }
         if self.tx.send(edge).await.is_ok()
             && let Some(bus) = &self.telemetry
         {
             bus.publish(TelemetryEvent::GpioEdge(edge));
         }
+    }
+
+    /// Set the physical handset position without producing a new edge.
+    pub fn set_hook_on(&self, on_hook: bool) {
+        self.hook_on.store(on_hook, Ordering::SeqCst);
     }
 
     /// Inject a [`PinRole::PowerButton`] edge. `pressed` is the logical level
@@ -64,6 +73,7 @@ impl GpioInjector {
 /// In-memory GPIO port. Pair with [`GpioInjector`] for test setup.
 pub struct MockGpioPort {
     rx: mpsc::Receiver<GpioEdge>,
+    hook_on: Arc<AtomicBool>,
 }
 
 impl MockGpioPort {
@@ -81,7 +91,18 @@ impl MockGpioPort {
 
     fn build(telemetry: Option<TelemetryBus>) -> (Self, GpioInjector) {
         let (tx, rx) = mpsc::channel(64);
-        (Self { rx }, GpioInjector { tx, telemetry })
+        let hook_on = Arc::new(AtomicBool::new(true));
+        (
+            Self {
+                rx,
+                hook_on: Arc::clone(&hook_on),
+            },
+            GpioInjector {
+                tx,
+                telemetry,
+                hook_on,
+            },
+        )
     }
 }
 
@@ -94,8 +115,8 @@ impl GpioPort for MockGpioPort {
             .ok_or_else(|| GpioError::Stream("mock gpio channel closed".into()))
     }
 
-    async fn snapshot(&self, _role: PinRole) -> Result<bool, GpioError> {
-        Ok(false)
+    async fn snapshot(&self, role: PinRole) -> Result<bool, GpioError> {
+        Ok(role == PinRole::Hook && self.hook_on.load(Ordering::SeqCst))
     }
 }
 
