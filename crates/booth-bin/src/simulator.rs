@@ -1469,7 +1469,10 @@ fn derive_booth_status(state: &str) -> &'static str {
         "dial_tone" | "dialing" => "dial_tone",
         "ringing_question" | "playing_question" | "beep" => "playing_question",
         "recording" => "recording",
-        "uploading" => "uploading",
+        "finishing_timeout_recording"
+        | "uploading"
+        | "uploading_timeout"
+        | "recording_end_beep" => "uploading",
         "playing_message" => "playing_message",
         "playing_instructions" => "playing_instructions",
         "call_unavailable" => "call_unavailable",

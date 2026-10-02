@@ -103,14 +103,25 @@ pub fn status_led_for(state: &State) -> (LedColour, LedPattern) {
             },
         ),
         // Beep and recording the caller's answer: steady red.
-        State::Beep { .. } | State::Recording { .. } => (
+        State::Beep { .. }
+        | State::Recording { .. }
+        | State::UploadingTimedOut {
+            beep_pending: true, ..
+        }
+        | State::RecordingEndedBeep => (
             LedColour::Red,
             LedPattern::Steady {
                 brightness: LED_BRIGHTNESS_FULL,
             },
         ),
         // Finalizing / uploading a recording: fast blue blink.
-        State::FinishingRecording { .. } | State::Uploading { .. } => (
+        State::FinishingRecording { .. }
+        | State::FinishingTimedOutRecording { .. }
+        | State::Uploading { .. }
+        | State::UploadingTimedOut {
+            beep_pending: false,
+            ..
+        } => (
             LedColour::Blue,
             LedPattern::Blink {
                 period_ms: LED_FAST_BLINK_MS,
@@ -173,6 +184,15 @@ pub enum State {
         /// The question being answered.
         question_id: QuestionId,
     },
+    /// The configured recording-duration limit elapsed. The recording is being
+    /// finalized before upload, while `on_hook` tracks whether an end beep
+    /// should still be played to the caller.
+    FinishingTimedOutRecording {
+        /// The question being answered.
+        question_id: QuestionId,
+        /// Current hook state while finalization completes.
+        on_hook: bool,
+    },
     /// The caller hung up mid-recording. The recording is being finalized and
     /// we are waiting for its id (via [`Event::RecordingFinished`]) so the
     /// answer can still be uploaded instead of being dropped.
@@ -199,6 +219,20 @@ pub enum State {
         /// to `Idle` (silent) or `DialTone`.
         on_hook: bool,
     },
+    /// Uploading a recording that reached the configured duration limit while
+    /// the caller remains off-hook.
+    UploadingTimedOut {
+        /// Recording id from the audio adapter.
+        recording_id: RecordingId,
+        /// Question id this recording answers.
+        question_id: QuestionId,
+        /// `true` while the end-of-recording beep is playing; `false` once the
+        /// caller has been returned to dial tone.
+        beep_pending: bool,
+    },
+    /// The timed-out recording finished uploading before its end beep ended.
+    /// Once playback completes, the caller returns to dial tone.
+    RecordingEndedBeep,
     /// Playing a randomly chosen, previously-approved message (dial 2).
     PlayingMessage,
     /// Playing the instructions prompt (dial 0).
@@ -224,7 +258,11 @@ impl State {
                 BoothStatus::PlayingQuestion
             }
             State::Recording { .. } => BoothStatus::Recording,
-            State::FinishingRecording { .. } | State::Uploading { .. } => BoothStatus::Uploading,
+            State::FinishingRecording { .. }
+            | State::FinishingTimedOutRecording { .. }
+            | State::Uploading { .. }
+            | State::UploadingTimedOut { .. }
+            | State::RecordingEndedBeep => BoothStatus::Uploading,
             State::PlayingMessage => BoothStatus::PlayingMessage,
             State::PlayingInstructions => BoothStatus::PlayingInstructions,
             State::CallUnavailable => BoothStatus::CallUnavailable,
@@ -245,7 +283,10 @@ impl State {
             State::Beep { .. } => "beep",
             State::Recording { .. } => "recording",
             State::FinishingRecording { .. } => "finishing_recording",
+            State::FinishingTimedOutRecording { .. } => "finishing_timeout_recording",
             State::Uploading { .. } => "uploading",
+            State::UploadingTimedOut { .. } => "uploading_timeout",
+            State::RecordingEndedBeep => "recording_end_beep",
             State::PlayingMessage => "playing_message",
             State::PlayingInstructions => "playing_instructions",
             State::CallUnavailable => "call_unavailable",
@@ -291,6 +332,8 @@ pub enum Event {
     },
     /// The current playback finished naturally.
     PlaybackEnded,
+    /// The configured maximum recording duration elapsed.
+    RecordingTimedOut,
     /// The recording timer ran out (max duration reached) or the user hung up.
     RecordingFinished {
         /// Id of the finished local recording.
@@ -380,6 +423,10 @@ pub enum Effect {
     StopAudio,
     /// Begin recording the input device to a local FLAC file.
     StartRecording,
+    /// Arm the runtime timer using the configured maximum recording duration.
+    ArmRecordingTimeout,
+    /// Cancel the configured recording-duration timer.
+    CancelRecordingTimeout,
     /// Stop the current recording and return its id via `RecordingFinished`.
     StopRecording,
     /// Begin an upload for the finished `recording_id` answering `question_id`.
@@ -478,8 +525,16 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
         outcome,
     } = event
     {
-        if !matches!(&state, State::Uploading { recording_id: current, .. } if current == &recording_id)
-        {
+        if !matches!(
+            &state,
+            State::Uploading {
+                recording_id: current,
+                ..
+            } | State::UploadingTimedOut {
+                recording_id: current,
+                ..
+            } if current == &recording_id
+        ) {
             return (state, vec![]);
         }
         match outcome {
@@ -500,6 +555,7 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
             State::Idle => true,
             State::CallsPaused { on_hook }
             | State::FinishingRecording { on_hook, .. }
+            | State::FinishingTimedOutRecording { on_hook, .. }
             | State::Uploading { on_hook, .. } => *on_hook,
             _ => false,
         },
@@ -522,7 +578,11 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
     }
     let protected = matches!(
         state,
-        State::Recording { .. } | State::FinishingRecording { .. } | State::Uploading { .. }
+        State::Recording { .. }
+            | State::FinishingRecording { .. }
+            | State::FinishingTimedOutRecording { .. }
+            | State::Uploading { .. }
+            | State::UploadingTimedOut { .. }
     );
     if !protected {
         let effects = if matches!(state, State::CallsPaused { .. }) {
@@ -536,7 +596,11 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
     effects.retain(|effect| !matches!(effect, Effect::PutStatus(_) | Effect::Play(_)));
     if matches!(
         next,
-        State::Recording { .. } | State::FinishingRecording { .. } | State::Uploading { .. }
+        State::Recording { .. }
+            | State::FinishingRecording { .. }
+            | State::FinishingTimedOutRecording { .. }
+            | State::Uploading { .. }
+            | State::UploadingTimedOut { .. }
     ) {
         (next, effects)
     } else {
@@ -570,6 +634,7 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
                     // Hanging up is a full reset of the booth's outputs: stop
                     // any lingering playback before finalizing the recording.
                     Effect::StopAudio,
+                    Effect::CancelRecordingTimeout,
                     Effect::StopRecording,
                     Effect::CancelPulseTimeout,
                     Effect::PutStatus(BoothStatus::Uploading),
@@ -590,11 +655,25 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
                 vec![Effect::StopAudio, Effect::CancelPulseTimeout],
             );
         }
+        if let S::FinishingTimedOutRecording { question_id, .. } = state {
+            return (
+                S::FinishingTimedOutRecording {
+                    question_id,
+                    on_hook: true,
+                },
+                vec![
+                    Effect::StopAudio,
+                    Effect::CancelRecordingTimeout,
+                    Effect::CancelPulseTimeout,
+                ],
+            );
+        }
         return (
             S::Idle,
             vec![
                 Effect::StopAudio,
                 Effect::CancelPulseTimeout,
+                Effect::CancelRecordingTimeout,
                 Effect::PutStatus(BoothStatus::Idle),
             ],
         );
@@ -674,14 +753,69 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
             },
             vec![
                 Effect::StartRecording,
+                Effect::ArmRecordingTimeout,
                 Effect::PutStatus(BoothStatus::Recording),
             ],
         ),
+        (S::Recording { question_id }, E::RecordingTimedOut) => (
+            S::FinishingTimedOutRecording {
+                question_id,
+                on_hook: false,
+            },
+            vec![
+                Effect::CancelRecordingTimeout,
+                Effect::StopRecording,
+                Effect::PutStatus(BoothStatus::Uploading),
+            ],
+        ),
         (S::Recording { question_id }, E::RecordingFinished { recording_id }) => (
+            S::UploadingTimedOut {
+                recording_id: recording_id.clone(),
+                question_id: question_id.clone(),
+                beep_pending: true,
+            },
+            vec![
+                Effect::CancelRecordingTimeout,
+                Effect::Play(AudioRef::Builtin(BuiltinTone::Beep)),
+                Effect::UploadRecording {
+                    recording_id,
+                    question_id,
+                },
+                Effect::PutStatus(BoothStatus::Uploading),
+            ],
+        ),
+        (
+            S::FinishingTimedOutRecording {
+                question_id,
+                on_hook: false,
+            },
+            E::RecordingFinished { recording_id },
+        ) => (
+            S::UploadingTimedOut {
+                recording_id: recording_id.clone(),
+                question_id: question_id.clone(),
+                beep_pending: true,
+            },
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::Beep)),
+                Effect::UploadRecording {
+                    recording_id,
+                    question_id,
+                },
+                Effect::PutStatus(BoothStatus::Uploading),
+            ],
+        ),
+        (
+            S::FinishingTimedOutRecording {
+                question_id,
+                on_hook: true,
+            },
+            E::RecordingFinished { recording_id },
+        ) => (
             S::Uploading {
                 recording_id: recording_id.clone(),
                 question_id: question_id.clone(),
-                on_hook: false,
+                on_hook: true,
             },
             vec![
                 Effect::UploadRecording {
@@ -726,6 +860,13 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
             },
             vec![],
         ),
+        (S::FinishingTimedOutRecording { question_id, .. }, E::HookOff) => (
+            S::FinishingTimedOutRecording {
+                question_id,
+                on_hook: false,
+            },
+            vec![],
+        ),
         (
             S::Uploading {
                 recording_id,
@@ -741,6 +882,47 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
             },
             vec![],
         ),
+        (
+            S::UploadingTimedOut {
+                recording_id,
+                question_id,
+                beep_pending: true,
+            },
+            E::PlaybackEnded,
+        ) => (
+            S::UploadingTimedOut {
+                recording_id,
+                question_id,
+                beep_pending: false,
+            },
+            vec![],
+        ),
+        (
+            S::UploadingTimedOut {
+                beep_pending: true, ..
+            },
+            E::UploadComplete | E::UploadDeferred,
+        ) => (S::RecordingEndedBeep, vec![]),
+        (
+            S::UploadingTimedOut {
+                beep_pending: false,
+                ..
+            },
+            E::UploadComplete | E::UploadDeferred,
+        ) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
+        ),
+        (S::RecordingEndedBeep, E::PlaybackEnded) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::PutStatus(BoothStatus::DialTone),
+            ],
+        ),
         // The audio adapter never produced a recording (start failed, or the
         // finalize call found nothing in flight), so `RecordingFinished` will
         // never arrive. Recover instead of waiting forever: an off-hook caller
@@ -754,10 +936,31 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::Log {
                     message: alloc::format!("recording failed: {reason}"),
                 },
+                Effect::CancelRecordingTimeout,
                 // `StartRecording` was announced as `Recording`; correct that
                 // so the operator doesn't keep showing a recording that never
                 // happened (`Error`'s coarse status is `Idle`).
                 Effect::PutStatus(BoothStatus::Idle),
+            ],
+        ),
+        (S::FinishingTimedOutRecording { on_hook: true, .. }, E::RecordingFailed { reason }) => (
+            S::Idle,
+            vec![
+                Effect::StopAudio,
+                Effect::Log {
+                    message: alloc::format!("timed-out recording failed after hangup: {reason}"),
+                },
+                Effect::PutStatus(BoothStatus::Idle),
+            ],
+        ),
+        (S::FinishingTimedOutRecording { on_hook: false, .. }, E::RecordingFailed { reason }) => (
+            S::DialTone,
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone)),
+                Effect::Log {
+                    message: alloc::format!("timed-out recording failed: {reason}"),
+                },
+                Effect::PutStatus(BoothStatus::DialTone),
             ],
         ),
         (S::FinishingRecording { on_hook: true, .. }, E::RecordingFailed { reason }) => (
@@ -801,6 +1004,17 @@ fn handle_inner(state: State, event: Event) -> (State, Vec<Effect>) {
                 Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy)),
                 Effect::Log {
                     message: alloc::format!("upload failed: {reason}"),
+                },
+            ],
+        ),
+        (S::UploadingTimedOut { .. }, E::UploadFailed { reason }) => (
+            S::Error {
+                reason: reason.clone(),
+            },
+            vec![
+                Effect::Play(AudioRef::Builtin(BuiltinTone::LineBusy)),
+                Effect::Log {
+                    message: alloc::format!("timed-out recording upload failed: {reason}"),
                 },
             ],
         ),
@@ -1299,10 +1513,8 @@ mod tests {
     }
 
     #[test]
-    fn offhook_recording_upload_returns_to_dialtone() {
-        // Recording that ends while still off-hook (duration cap) uploads with
-        // on_hook: false and resumes at a dial tone on completion.
-        let (next, _) = handle(
+    fn timed_out_recording_uploads_beeps_and_returns_to_dialtone() {
+        let (next, effects) = handle(
             State::Recording {
                 question_id: "q1".into(),
             },
@@ -1312,19 +1524,76 @@ mod tests {
         );
         assert_eq!(
             next,
-            State::Uploading {
+            State::UploadingTimedOut {
                 recording_id: "rec-2".into(),
+                question_id: "q1".into(),
+                beep_pending: true,
+            }
+        );
+        assert!(effects.contains(&Effect::CancelRecordingTimeout));
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::Beep))));
+        assert!(effects.contains(&Effect::UploadRecording {
+            recording_id: "rec-2".into(),
+            question_id: "q1".into(),
+        }));
+
+        let (next, effects) = handle(next, Event::PlaybackEnded);
+        assert_eq!(
+            next,
+            State::UploadingTimedOut {
+                recording_id: "rec-2".into(),
+                question_id: "q1".into(),
+                beep_pending: false,
+            }
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Play(_)))
+        );
+
+        let (next, effects) = handle(next, Event::UploadComplete);
+        assert_eq!(next, State::DialTone);
+        assert!(effects.contains(&Effect::PutStatus(BoothStatus::DialTone)));
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))));
+    }
+
+    #[test]
+    fn configured_recording_timeout_finalizes_before_uploading() {
+        let (next, effects) = handle(
+            State::Recording {
+                question_id: "q1".into(),
+            },
+            Event::RecordingTimedOut,
+        );
+        assert_eq!(
+            next,
+            State::FinishingTimedOutRecording {
                 question_id: "q1".into(),
                 on_hook: false,
             }
         );
-        let (next, effects) = handle(next, Event::UploadComplete);
-        assert_eq!(next, State::DialTone);
-        assert!(
-            effects
-                .iter()
-                .any(|e| matches!(e, Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))))
+        assert!(effects.contains(&Effect::CancelRecordingTimeout));
+        assert!(effects.contains(&Effect::StopRecording));
+
+        let (next, effects) = handle(
+            next,
+            Event::RecordingFinished {
+                recording_id: "rec-2".into(),
+            },
         );
+        assert!(matches!(
+            next,
+            State::UploadingTimedOut {
+                beep_pending: true,
+                ..
+            }
+        ));
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::Beep))));
+        assert!(effects.contains(&Effect::UploadRecording {
+            recording_id: "rec-2".into(),
+            question_id: "q1".into(),
+        }));
     }
 
     #[test]
@@ -1532,11 +1801,26 @@ mod tests {
                 question_id: "q1".into(),
                 on_hook: true,
             },
+            State::FinishingTimedOutRecording {
+                question_id: "q1".into(),
+                on_hook: false,
+            },
             State::Uploading {
                 recording_id: "rec-1".into(),
                 question_id: "q1".into(),
                 on_hook: false,
             },
+            State::UploadingTimedOut {
+                recording_id: "rec-1".into(),
+                question_id: "q1".into(),
+                beep_pending: true,
+            },
+            State::UploadingTimedOut {
+                recording_id: "rec-1".into(),
+                question_id: "q1".into(),
+                beep_pending: false,
+            },
+            State::RecordingEndedBeep,
             State::PlayingMessage,
             State::PlayingInstructions,
             State::CallUnavailable,
@@ -1587,7 +1871,7 @@ mod tests {
         /// this asserts the mapping is total).
         #[test]
         fn random_walk_keeps_led_single_channel(
-            seq in proptest::collection::vec((proptest::bool::ANY, 0u8..20), 0..200)
+            seq in proptest::collection::vec((proptest::bool::ANY, 0u8..21), 0..200)
         ) {
             let mut state = State::Idle;
             for (accepting_calls, code) in seq {
@@ -1612,6 +1896,7 @@ mod tests {
                     17 => Event::UploadFinished { recording_id: "abandoned".into(), outcome: UploadOutcome::Complete },
                     18 => Event::DigitDialed { digit: 1 },
                     19 => Event::RecordingFailed { reason: "x".into() },
+                    20 => Event::RecordingTimedOut,
                     _ => Event::Tick,
                 };
                 let (next, effects) = handle_with_call_availability(state, event, accepting_calls);

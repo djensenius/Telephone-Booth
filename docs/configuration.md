@@ -116,6 +116,17 @@ mock      = false
 simulator = false
 ```
 
+### Recording duration
+
+`audio.max_recording_secs` is the caller-answer limit. The runtime arms that
+configured duration when recording begins; when it expires, the booth finalizes
+and uploads the recording, plays a second beep, and restores dial tone if the
+handset remains off-hook. Hanging up before the limit still finalizes and
+uploads immediately without playing the end beep.
+
+`audio.min_recording_secs` is the upload floor. Shorter recordings are deleted
+instead of being sent to the operator.
+
 ### Runtime startup mode
 
 `[runtime]` lets the systemd unit autostart the booth in `--mock` or

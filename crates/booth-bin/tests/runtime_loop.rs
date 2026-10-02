@@ -738,6 +738,125 @@ async fn hangup_during_slow_upload_is_not_blocked() -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+/// The configured recording limit must finalize and upload the answer, play a
+/// second beep, and restore dial tone without a hard-coded duration.
+#[tokio::test(start_paused = true)]
+async fn configured_recording_limit_uploads_beeps_and_returns_to_dialtone()
+-> Result<(), Box<dyn Error>> {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir()?;
+    let mut config = booth_bin::RuntimeConfig::default();
+    config.audio.max_recording_secs = 7;
+    config.audio.recordings_dir = dir.path().join("recordings").to_string_lossy().into_owned();
+    config.debug.allow_controls = true;
+    config.observability.enabled = false;
+    let bus = TelemetryBus::new(256);
+    let (adapters, handles) = build_mock_adapters(&bus);
+    {
+        let state = handles.operator.state();
+        let mut state = state.lock().await;
+        state.questions.push_back(booth_hal::OperatorQuestion {
+            id: "q-timeout".to_string(),
+            audio_url: "https://mock.invalid/q-timeout.flac".to_string(),
+            audio_sha256: None,
+            description: None,
+        });
+    }
+
+    let runtime = spawn_runtime(
+        config,
+        adapters,
+        bus.clone(),
+        RuntimeOptions {
+            start_debug: false,
+            listen_signals: false,
+            notify_systemd: false,
+            ..RuntimeOptions::default()
+        },
+    );
+
+    drive_to_recording(&runtime.commands, &handles.audio_sink).await?;
+    wait_for_log(&bus, "recording started").await?;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    let initial_beeps = handles
+        .audio_sink
+        .state()
+        .await
+        .history
+        .iter()
+        .filter(|source| matches!(source, AudioRef::Builtin(BuiltinTone::Beep)))
+        .count();
+
+    tokio::time::advance(Duration::from_secs(6)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(
+        snapshot(&runtime.commands).await?,
+        State::Recording { .. }
+    ));
+    assert_eq!(
+        handles
+            .audio_sink
+            .state()
+            .await
+            .history
+            .iter()
+            .filter(|source| matches!(source, AudioRef::Builtin(BuiltinTone::Beep)))
+            .count(),
+        initial_beeps
+    );
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    wait_for_playback(&handles.audio_sink, "recording-limit beep", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::Beep))
+    })
+    .await?;
+    assert_eq!(
+        handles
+            .audio_sink
+            .state()
+            .await
+            .history
+            .iter()
+            .filter(|source| matches!(source, AudioRef::Builtin(BuiltinTone::Beep)))
+            .count(),
+        initial_beeps + 1
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if handles.operator.state().lock().await.uploads.len() == 1 {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("timed-out recording was not uploaded".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    handles.audio_sink.finish_playback();
+    wait_for_state(
+        &runtime.commands,
+        "dial tone after recording limit",
+        |state| *state == State::DialTone,
+    )
+    .await?;
+    wait_for_playback(
+        &handles.audio_sink,
+        "dial tone after recording limit",
+        |source| matches!(source, AudioRef::Builtin(BuiltinTone::DialTone)),
+    )
+    .await?;
+
+    runtime.commands.send(RuntimeCommand::Shutdown).await?;
+    runtime.join.await??;
+    Ok(())
+}
+
 /// A recording shorter than `audio.min_recording_secs` must be discarded, not
 /// uploaded: no upload slot is issued and the booth returns to a dial tone.
 #[tokio::test]
@@ -793,6 +912,12 @@ async fn short_recording_is_discarded_without_upload() -> Result<(), Box<dyn Err
         },
     )
     .await?;
+
+    wait_for_playback(&handles.audio_sink, "discarded-recording beep", |source| {
+        matches!(source, AudioRef::Builtin(BuiltinTone::Beep))
+    })
+    .await?;
+    handles.audio_sink.finish_playback();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
