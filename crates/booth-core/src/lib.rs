@@ -226,8 +226,8 @@ pub enum State {
         recording_id: RecordingId,
         /// Question id this recording answers.
         question_id: QuestionId,
-        /// `true` while the end-of-recording beep is playing; `false` once the
-        /// caller has been returned to dial tone.
+        /// `true` while end-of-recording beep playback is pending or active;
+        /// `false` once it ends or call admission suppresses caller audio.
         beep_pending: bool,
     },
     /// The timed-out recording finished uploading before its end beep ended.
@@ -577,6 +577,21 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
         }
         return handle_inner(state, event);
     }
+    let (state, mut stop_timeout_beep) = match state {
+        State::UploadingTimedOut {
+            recording_id,
+            question_id,
+            beep_pending: true,
+        } => (
+            State::UploadingTimedOut {
+                recording_id,
+                question_id,
+                beep_pending: false,
+            },
+            true,
+        ),
+        state => (state, false),
+    };
     let protected = matches!(
         state,
         State::Recording { .. }
@@ -593,8 +608,24 @@ fn handle_available(state: State, event: Event, accepting_calls: bool) -> (State
         };
         return (State::CallsPaused { on_hook }, effects);
     }
-    let (next, mut effects) = handle_inner(state, event);
+    let (mut next, mut effects) = handle_inner(state, event);
+    if let State::UploadingTimedOut {
+        recording_id,
+        question_id,
+        beep_pending: true,
+    } = next
+    {
+        next = State::UploadingTimedOut {
+            recording_id,
+            question_id,
+            beep_pending: false,
+        };
+        stop_timeout_beep = true;
+    }
     effects.retain(|effect| !matches!(effect, Effect::PutStatus(_) | Effect::Play(_)));
+    if stop_timeout_beep {
+        effects.insert(0, Effect::StopAudio);
+    }
     if matches!(
         next,
         State::Recording { .. }
@@ -1247,6 +1278,77 @@ mod tests {
             handle_with_call_availability(state, Event::Tick, true).0,
             State::Idle
         );
+    }
+
+    #[test]
+    fn pausing_during_timeout_beep_stops_audio_and_clears_pending_flag() {
+        let state = State::UploadingTimedOut {
+            recording_id: "answer".into(),
+            question_id: "question".into(),
+            beep_pending: true,
+        };
+        let (state, effects) = handle_with_call_availability(state, Event::Tick, false);
+        assert_eq!(
+            state,
+            State::UploadingTimedOut {
+                recording_id: "answer".into(),
+                question_id: "question".into(),
+                beep_pending: false,
+            }
+        );
+        assert!(effects.contains(&Effect::StopAudio));
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Play(_)))
+        );
+    }
+
+    #[test]
+    fn paused_timeout_finalization_cannot_wait_for_a_suppressed_beep() {
+        let state = State::FinishingTimedOutRecording {
+            question_id: "question".into(),
+            on_hook: false,
+        };
+        let (state, effects) = handle_with_call_availability(
+            state,
+            Event::RecordingFinished {
+                recording_id: "answer".into(),
+            },
+            false,
+        );
+        assert_eq!(
+            state,
+            State::UploadingTimedOut {
+                recording_id: "answer".into(),
+                question_id: "question".into(),
+                beep_pending: false,
+            }
+        );
+        assert!(effects.contains(&Effect::StopAudio));
+        assert!(effects.contains(&Effect::UploadRecording {
+            recording_id: "answer".into(),
+            question_id: "question".into(),
+        }));
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Play(_) | Effect::PutStatus(_)))
+        );
+
+        let (state, effects) = handle_with_call_availability(state, Event::Tick, true);
+        assert!(matches!(
+            state,
+            State::UploadingTimedOut {
+                beep_pending: false,
+                ..
+            }
+        ));
+        assert!(effects.is_empty());
+
+        let (state, effects) = handle_with_call_availability(state, Event::UploadComplete, true);
+        assert_eq!(state, State::DialTone);
+        assert!(effects.contains(&Effect::Play(AudioRef::Builtin(BuiltinTone::DialTone))));
     }
 
     #[test]
