@@ -18,7 +18,7 @@ What do you think Judy and Heather would say about this space?
 How does knowing that workers' cottages once stood here change the way you
 experience the garden?
 
-This space is a Living Levee, a garden, a trail, and a public art gallery. What do you think of it as a whole?
+This space is known as a Living Levee, a garden, a trail, and a public art gallery. What is it to you?
 
 What do the years 1947 and 1974 mean to you? Do you know what it means to this space?
 
