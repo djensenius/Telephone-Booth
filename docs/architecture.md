@@ -52,9 +52,10 @@ flowchart LR
 ## State machine
 
 States: `Idle`, `DialTone`, `Dialing { pulses }`, `RingingQuestion`,
-`PlayingQuestion`, `Beep`, `Recording`, `FinishingRecording { question_id, on_hook }`,
-`Uploading { recording_id, on_hook }`,
-`PlayingMessage`, `PlayingInstructions`, `CallUnavailable`, `Error { reason }`.
+`PlayingQuestion`, `Beep`, `Recording`, `FinishingRecording`,
+`FinishingTimedOutRecording`, `Uploading`, `UploadingTimedOut`,
+`RecordingEndedBeep`, `PlayingMessage`, `PlayingInstructions`,
+`CallUnavailable`, `Error { reason }`.
 
 `CallsPaused { on_hook }` is the silent, non-call admission state. The runtime
 passes its reconciled availability to the pure `handle_with_call_availability`
@@ -64,12 +65,14 @@ It never fetches or plays prompts, including cached prompts.
 See [ADR 0011](adr/0011-between-exhibitions.md) for lifecycle, freshness, and replay policy.
 
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
-`DigitClosed(u8)`, `PlaybackEnded`, `RecordingFinished`, `RecordingFailed`,
-`UploadComplete`, `UploadFailed`, `Tick`.
+`DigitDialed { digit }`, `PlaybackEnded`, `RecordingTimedOut`,
+`RecordingFinished`, `RecordingFailed`, `UploadComplete`, `UploadFailed`,
+`Tick`.
 
 Effects the runtime executes: `Play(AudioRef)`, `Stop`, `StartRecording`,
-`StopRecording`, `Upload`, `FetchRandomQuestion`, `FetchRandomMessage`,
-`FetchInstructions`, `PutStatus(BoothStatus)`, `ArmPulseTimeout`.
+`ArmRecordingTimeout`, `CancelRecordingTimeout`, `StopRecording`, `Upload`,
+`FetchRandomQuestion`, `FetchRandomMessage`, `FetchInstructions`,
+`PutStatus(BoothStatus)`, `ArmPulseTimeout`.
 
 Pulses 1..=9 map to themselves; **10 pulses = digit 0**. More than 10 pulses
 in a single group resets to `DialTone`. A pulse group is closed by `Tick`
@@ -95,6 +98,14 @@ post-upload routing changes. `on_hook` (carried from `FinishingRecording` into
 returns to `Idle` silently instead of playing a dial tone to an empty booth.
 Recordings shorter than `audio.min_recording_secs` are discarded rather than
 uploaded.
+
+The runtime arms the recording timer from `audio.max_recording_secs`; the
+duration is never hard-coded in the state machine. When the limit expires, the
+booth finalizes and uploads the answer. While calls remain admitted, it plays
+an end beep; a successful or durably deferred upload then restores dial tone
+while the handset remains off-hook. A true upload failure plays the line-busy
+tone instead. Hanging up or pausing call admission during timeout finalization
+still preserves the upload but suppresses caller audio.
 
 If the exhibition ends, finalized answers are durably spooled and deferred rather
 than acknowledged as uploaded. Live `UploadFinished` events carry recording

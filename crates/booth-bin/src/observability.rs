@@ -232,7 +232,9 @@ impl SessionTracker {
                 if let Some(session) = self.current.as_mut() {
                     match to.as_str() {
                         "recording" => session.phase = SessionPhase::Recording,
-                        "uploading" => session.phase = SessionPhase::Uploading,
+                        "uploading" | "uploading_timeout" => {
+                            session.phase = SessionPhase::Uploading;
+                        }
                         "error" => session.phase = SessionPhase::OperatorErrorPhase,
                         _ => {}
                     }
@@ -566,7 +568,11 @@ fn state_name_to_booth_status(name: &str) -> booth_hal::BoothStatus {
             BoothStatus::PlayingQuestion
         }
         "recording" | "Recording" => BoothStatus::Recording,
-        "uploading" | "Uploading" => BoothStatus::Uploading,
+        "finishing_timeout_recording"
+        | "uploading"
+        | "uploading_timeout"
+        | "recording_end_beep"
+        | "Uploading" => BoothStatus::Uploading,
         "playing_message" | "PlayingMessage" => BoothStatus::PlayingMessage,
         "playing_instructions" | "PlayingInstructions" => BoothStatus::PlayingInstructions,
         "call_unavailable" | "CallUnavailable" => BoothStatus::CallUnavailable,

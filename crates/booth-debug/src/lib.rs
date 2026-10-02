@@ -1155,7 +1155,11 @@ fn operator_state_name(name: &str) -> String {
         }
         "beep" | "Beep" => "beep",
         "recording" | "Recording" => "recording",
-        "uploading" | "Uploading" => "uploading",
+        "finishing_timeout_recording"
+        | "uploading"
+        | "uploading_timeout"
+        | "recording_end_beep"
+        | "Uploading" => "uploading",
         "playing_message" | "PlayingMessage" => "playingMessage",
         "playing_instructions" | "PlayingInstructions" => "playingInstructions",
         "call_unavailable" | "CallUnavailable" => "callUnavailable",

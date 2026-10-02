@@ -717,6 +717,7 @@ async fn run_runtime(
         session_handle.clone(),
         Arc::clone(&upload_spool),
         u64::from(config.audio.min_recording_secs).saturating_mul(1000),
+        Duration::from_secs(u64::from(config.audio.max_recording_secs)),
         installation.clone(),
         Arc::clone(&shutting_down),
     ));
@@ -1475,10 +1476,12 @@ async fn effect_task(
     session_handle: SessionHandle,
     upload_spool: Arc<pending_uploads::PendingUploadSpool>,
     min_recording_ms: u64,
+    max_recording_duration: Duration,
     installation: installation::InstallationGate,
     shutting_down: Arc<AtomicBool>,
 ) {
     let mut pulse_timeout: Option<JoinHandle<()>> = None;
+    let mut recording_timeout: Option<JoinHandle<()>> = None;
     let mut operator_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     let mut durability_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     let mut pending_operator_effects = VecDeque::new();
@@ -1568,6 +1571,21 @@ async fn effect_task(
                             reason: err.to_string(),
                         })
                         .await;
+                }
+            }
+            Effect::ArmRecordingTimeout => {
+                if let Some(task) = recording_timeout.take() {
+                    task.abort();
+                }
+                let tx = event_tx.clone();
+                recording_timeout = Some(tokio::spawn(async move {
+                    tokio::time::sleep(max_recording_duration).await;
+                    let _ = tx.send(Event::RecordingTimedOut).await;
+                }));
+            }
+            Effect::CancelRecordingTimeout => {
+                if let Some(task) = recording_timeout.take() {
+                    task.abort();
                 }
             }
             Effect::StopRecording => {
@@ -1840,6 +1858,9 @@ async fn effect_task(
     operator_tasks.abort_all();
     status_task.abort();
     if let Some(task) = pulse_timeout {
+        task.abort();
+    }
+    if let Some(task) = recording_timeout {
         task.abort();
     }
     while let Some(result) = durability_tasks.join_next().await {
