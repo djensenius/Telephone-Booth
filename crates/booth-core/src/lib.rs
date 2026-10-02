@@ -334,7 +334,8 @@ pub enum Event {
     PlaybackEnded,
     /// The configured maximum recording duration elapsed.
     RecordingTimedOut,
-    /// The recording timer ran out (max duration reached) or the user hung up.
+    /// Recording finalization completed after a stop request and produced a
+    /// durable local recording id.
     RecordingFinished {
         /// Id of the finished local recording.
         recording_id: RecordingId,

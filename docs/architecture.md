@@ -65,7 +65,7 @@ It never fetches or plays prompts, including cached prompts.
 See [ADR 0011](adr/0011-between-exhibitions.md) for lifecycle, freshness, and replay policy.
 
 Events the runtime feeds in: `HookOn`, `HookOff`, `RotaryPulse`,
-`DigitClosed(u8)`, `PlaybackEnded`, `RecordingTimedOut`,
+`DigitDialed { digit }`, `PlaybackEnded`, `RecordingTimedOut`,
 `RecordingFinished`, `RecordingFailed`, `UploadComplete`, `UploadFailed`,
 `Tick`.
 
@@ -101,9 +101,11 @@ uploaded.
 
 The runtime arms the recording timer from `audio.max_recording_secs`; the
 duration is never hard-coded in the state machine. When the limit expires, the
-booth finalizes and uploads the answer, plays an end beep, and restores dial
-tone while the handset remains off-hook. Hanging up during timeout finalization
-still preserves the upload but suppresses the beep because nobody is listening.
+booth finalizes and uploads the answer. While calls remain admitted, it plays
+an end beep; a successful or durably deferred upload then restores dial tone
+while the handset remains off-hook. A true upload failure plays the line-busy
+tone instead. Hanging up or pausing call admission during timeout finalization
+still preserves the upload but suppresses caller audio.
 
 If the exhibition ends, finalized answers are durably spooled and deferred rather
 than acknowledged as uploaded. Live `UploadFinished` events carry recording
