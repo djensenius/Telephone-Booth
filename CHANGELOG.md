@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/djensenius/Telephone-Booth/compare/v0.14.1...v0.14.2) (2026-10-02)
+
+
+### Documentation
+
+* add Cambridge site-specific questions and research ([203439b](https://github.com/djensenius/Telephone-Booth/commit/203439b50b503c43db276a1d0cdb33317e134fbf))
+
 ## [0.14.1](https://github.com/djensenius/Telephone-Booth/compare/v0.14.0...v0.14.1) (2026-10-02)
 
 
