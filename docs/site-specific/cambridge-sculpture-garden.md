@@ -11,20 +11,24 @@ message or dial 2 to retrieve a message. Thank you.
 
 ## Questions
 
-If this place was a parking lot instead of a sculpture garden, would you miss what could have been?
+If this place were a parking lot instead of a sculpture garden, would you miss
+what could have been?
 
 What do you think Judy and Heather would say about this space?
 
 How does knowing that workers' cottages once stood here change the way you
 experience the garden?
 
-This space is known as a Living Levee, a garden, a trail, and a public art gallery. What is it to you?
+This space is known as a Living Levee, a garden, a trail, and a public art
+gallery. What is it to you?
 
-What do the years 1947 and 1974 mean to you? Do you know what it means to this space?
+What do the years 1947 and 1974 mean to you? Do you know what they mean to
+this space?
 
 Have you listened to the frog? What does it have to say?
 
-The Great Tree is buried five feet below the garden. What stories does it keep buried?
+The Grand Oak is buried five feet below the garden. What stories does it keep
+buried?
 
 What might the Grand Oak remember?
 
@@ -32,9 +36,11 @@ What is the relationship between beauty and political action?
 
 What question should this garden ask its visitors?
 
-A dozen workers' cottages once stood here, accross from the factory. What would those inhabitants think of the garden today?
+A dozen workers' cottages once stood here, across from the factory. What would
+those inhabitants think of the garden today?
 
-What does the Dish with One Spoon mean to you and to this space? If you don't know, what would you imagine it means?
+What does the Dish With One Spoon mean to you and to this space? If you don't
+know, what would you imagine it means?
 
 This land has centuries of broken promises. What promise have you broken?
 
