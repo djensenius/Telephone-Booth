@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/djensenius/Telephone-Booth/compare/v0.14.0...v0.14.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* **runtime:** end recordings at configured limit ([8ecd636](https://github.com/djensenius/Telephone-Booth/commit/8ecd636c673c85706dd5092cf25e17e90eb505cb))
+
 ## [0.14.0](https://github.com/djensenius/Telephone-Booth/compare/v0.13.0...v0.14.0) (2026-09-15)
 
 
