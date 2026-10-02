@@ -16,8 +16,7 @@ what could have been?
 
 What do you think Judy and Heather would say about this space?
 
-How does knowing that workers' cottages once stood here change the way you
-experience the garden?
+How do you experience this garden knowing workers' cottages once stood here?
 
 This space is known as a Living Levee, a garden, a trail, and a public art
 gallery. What is it to you?
@@ -25,14 +24,12 @@ gallery. What is it to you?
 What do the years 1947 and 1974 mean to you? Do you know what they mean to
 this space?
 
-Have you listened to the frog? What does it have to say?
+Have you listened to the toad? What does it have to say?
 
 The Grand Oak is buried five feet below the garden. What stories does it keep
 buried?
 
 What might the Grand Oak remember?
-
-What is the relationship between beauty and political action?
 
 What question should this garden ask its visitors?
 
