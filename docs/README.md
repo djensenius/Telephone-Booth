@@ -12,6 +12,8 @@ rebuilds it from the filesystem; CI fails if it drifts.
 ## About the work
 
 - [Artist statement & bio](artist-statement.md) — the installation's concept, site-specific context, and artist bio
+- [Cambridge Sculpture Garden installation notes](site-specific/cambridge-sculpture-garden.md) —
+  questions and research on the garden, Grand Oak, Living Levee, and public art
 - [St. Anne's installation notes](site-specific/st-anne.md) — questions, operator script, and weekly Anglican readings
 
 ## Setup & Development
