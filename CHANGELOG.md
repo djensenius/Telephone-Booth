@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.2](https://github.com/djensenius/Telephone-Booth/compare/v0.14.1...v0.14.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* bound observability spool replay batches ([ea82714](https://github.com/djensenius/Telephone-Booth/commit/ea82714a24a2babf89c659c4857c1ac850aeaa24))
+
+
+### Documentation
+
+* add Cambridge site-specific questions and research ([203439b](https://github.com/djensenius/Telephone-Booth/commit/203439b50b503c43db276a1d0cdb33317e134fbf))
+
 ## [0.14.1](https://github.com/djensenius/Telephone-Booth/compare/v0.14.0...v0.14.1) (2026-10-02)
 
 
