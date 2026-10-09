@@ -49,6 +49,15 @@ use uuid::Uuid;
 /// acknowledged within this window is spilled to disk for replay instead.
 const SHUTDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Hard server-side limit for `POST /v1/events` batches.
+///
+/// Keep this in sync with `BOOTH_EVENT_BATCH_MAX` in the operator shared
+/// package. The booth's local `batch_max` is configurable, but neither live
+/// flushes nor durable replay should ever send more than the operator accepts:
+/// an oversized spooled file would otherwise be permanently unreplayable and
+/// retried forever.
+const OPERATOR_EVENT_BATCH_MAX: usize = 500;
+
 /// Top-level observability config block in `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -330,13 +339,14 @@ pub fn spawn_event_forwarder(
         flush.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut next_seq: u64 = 0;
         let mut was_failing = false;
+        let request_batch_max = effective_event_batch_max(config.operator_forward.batch_max);
 
         loop {
             tokio::select! {
                 () = flush_tick(&mut flush) => {
                     if let Some(ref spool) = event_spool {
                         tokio::select! {
-                            () = replay_one_batch(&operator, spool) => {}
+                            () = replay_one_batch(&operator, spool, request_batch_max) => {}
                             () = shutdown_requested(&mut shutdown) => break,
                         }
                     }
@@ -348,7 +358,7 @@ pub fn spawn_event_forwarder(
                         // cancellation-safe: if shutdown wins, the batch is
                         // left intact for the shutdown drain to persist.
                         tokio::select! {
-                            ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref()) => {
+                            ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref(), request_batch_max) => {
                                 after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config).await;
                             }
                             () = shutdown_requested(&mut shutdown) => break,
@@ -369,9 +379,9 @@ pub fn spawn_event_forwarder(
                                 &bus,
                                 config.operator_forward.buffer_max,
                             );
-                            if batch.len() >= config.operator_forward.batch_max {
+                            if batch.len() >= request_batch_max {
                                 tokio::select! {
-                                    ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref()) => {
+                                    ok = flush_once(&operator, &mut batch, &identity, event_spool.as_ref(), request_batch_max) => {
                                         after_flush(ok, &mut was_failing, event_spool.as_ref(), &mut batch, &config).await;
                                     }
                                     () = shutdown_requested(&mut shutdown) => break,
@@ -432,29 +442,51 @@ pub fn spawn_event_forwarder(
             let flushed = matches!(
                 tokio::time::timeout(
                     SHUTDOWN_FLUSH_TIMEOUT,
-                    flush_once(&operator, &mut batch, &identity, event_spool.as_ref()),
+                    flush_once(
+                        &operator,
+                        &mut batch,
+                        &identity,
+                        event_spool.as_ref(),
+                        request_batch_max,
+                    ),
                 )
                 .await,
                 Ok(true)
             );
             if !flushed {
-                spill_remaining(event_spool.as_ref(), &mut batch).await;
+                spill_remaining(event_spool.as_ref(), &mut batch, request_batch_max).await;
             }
         }
     })
 }
 
-async fn replay_one_batch(operator: &Arc<dyn OperatorClient>, spool: &Arc<EventSpool>) {
+fn effective_event_batch_max(configured: usize) -> usize {
+    configured.clamp(1, OPERATOR_EVENT_BATCH_MAX)
+}
+
+async fn replay_one_batch(
+    operator: &Arc<dyn OperatorClient>,
+    spool: &Arc<EventSpool>,
+    max_events_per_request: usize,
+) {
     // Bound replay to one request per flush tick; no restart is required.
-    let spool = Arc::clone(spool);
-    let (path, body) = match tokio::task::spawn_blocking(move || spool.oldest_batch()).await {
-        Ok(Some(batch)) => batch,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "event spool read task failed");
-            return;
-        }
-    };
+    let spool_for_read = Arc::clone(spool);
+    let (path, body) =
+        match tokio::task::spawn_blocking(move || spool_for_read.oldest_batch()).await {
+            Ok(Some(batch)) => batch,
+            Ok(None) => return,
+            Err(err) => {
+                warn!(%err, "event spool read task failed");
+                return;
+            }
+        };
+    if let Some(events) = events_from_batch_body(&body)
+        && events.len() > max_events_per_request
+    {
+        split_oversized_spool_batch(spool, path, events, max_events_per_request).await;
+        return;
+    }
+
     match operator.push_events_json(&body).await {
         Ok(_) | Err(OperatorError::Unsupported(_)) => {
             if let Err(err) =
@@ -467,6 +499,47 @@ async fn replay_one_batch(operator: &Arc<dyn OperatorClient>, spool: &Arc<EventS
             debug!("retaining spooled events between exhibitions");
         }
         Err(err) => warn!(%err, "event replay failed; retaining batch for later retry"),
+    }
+}
+
+fn events_from_batch_body(body: &str) -> Option<Vec<Value>> {
+    let mut value = serde_json::from_str::<Value>(body).ok()?;
+    match value.get_mut("events")? {
+        Value::Array(events) => Some(std::mem::take(events)),
+        _ => None,
+    }
+}
+
+async fn split_oversized_spool_batch(
+    spool: &Arc<EventSpool>,
+    path: std::path::PathBuf,
+    events: Vec<Value>,
+    max_events_per_request: usize,
+) {
+    let original_count = events.len();
+    let chunk_size = max_events_per_request.max(1);
+    let spool = Arc::clone(spool);
+    match tokio::task::spawn_blocking(move || {
+        spool.replace_file_with_chunks(&path, &events, chunk_size)
+    })
+    .await
+    {
+        Ok(Ok(())) => debug!(
+            original_count,
+            chunk_size, "split oversized event spool batch for bounded replay"
+        ),
+        Ok(Err(err)) => warn!(
+            %err,
+            original_count,
+            chunk_size,
+            "failed to split oversized event spool batch; retaining original"
+        ),
+        Err(err) => warn!(
+            %err,
+            original_count,
+            chunk_size,
+            "event spool split task failed; retaining original"
+        ),
     }
 }
 
@@ -662,42 +735,45 @@ async fn flush_once(
     batch: &mut VecDeque<Value>,
     identity: &RuntimeIdentity,
     spool: Option<&Arc<EventSpool>>,
+    max_events_per_request: usize,
 ) -> bool {
-    if batch.is_empty() {
-        return true;
+    let max_events_per_request = effective_event_batch_max(max_events_per_request);
+    while !batch.is_empty() {
+        let take = batch.len().min(max_events_per_request);
+        let events: Vec<&Value> = batch.iter().take(take).collect();
+        let body = json!({ "events": events }).to_string();
+        match operator.push_events_json(&body).await {
+            Ok(ack) => {
+                debug!(
+                    accepted = ack.accepted,
+                    duplicates = ack.duplicates,
+                    booth = %identity.booth_id,
+                    count = take,
+                    "POST /v1/events flushed"
+                );
+                batch.drain(..take);
+            }
+            Err(OperatorError::Unsupported(_)) => {
+                // The operator client doesn't support events at all; drop
+                // the batch silently so we don't loop forever.
+                batch.clear();
+                return true;
+            }
+            Err(OperatorError::InstallationInactive(_)) => {
+                debug!("installation inactive; keeping unacknowledged events");
+                spill_remaining(spool, batch, max_events_per_request).await;
+                return false;
+            }
+            Err(err) => {
+                // Keep the batch buffered for the next flush; the buffer cap
+                // in push_with_cap will eventually drop oldest if the
+                // operator stays unreachable.
+                warn!(%err, count = take, "POST /v1/events failed; keeping batch buffered");
+                return false;
+            }
+        }
     }
-    let events: Vec<&Value> = batch.iter().collect();
-    let body = json!({ "events": events }).to_string();
-    match operator.push_events_json(&body).await {
-        Ok(ack) => {
-            debug!(
-                accepted = ack.accepted,
-                duplicates = ack.duplicates,
-                booth = %identity.booth_id,
-                "POST /v1/events flushed"
-            );
-            batch.clear();
-            true
-        }
-        Err(OperatorError::Unsupported(_)) => {
-            // The operator client doesn't support events at all; drop
-            // the batch silently so we don't loop forever.
-            batch.clear();
-            true
-        }
-        Err(OperatorError::InstallationInactive(_)) => {
-            debug!("installation inactive; keeping unacknowledged events");
-            spill_remaining(spool, batch).await;
-            false
-        }
-        Err(err) => {
-            // Keep the batch buffered for the next flush; the buffer cap
-            // in push_with_cap will eventually drop oldest if the
-            // operator stays unreachable.
-            warn!(%err, "POST /v1/events failed; keeping batch buffered");
-            false
-        }
-    }
+    true
 }
 
 fn push_with_cap(batch: &mut VecDeque<Value>, item: Value, cap: usize, dropped_counter: &mut u64) {
@@ -724,7 +800,12 @@ async fn maybe_spill(
     if batch.len() < config.operator_forward.buffer_max / 2 {
         return;
     }
-    spill_remaining(spool, batch).await;
+    spill_remaining(
+        spool,
+        batch,
+        effective_event_batch_max(config.operator_forward.batch_max),
+    )
+    .await;
 }
 
 /// Unconditionally spill every buffered event to disk (used on shutdown).
@@ -732,7 +813,11 @@ async fn maybe_spill(
 /// Unlike [`maybe_spill`], this does not wait for the buffer to fill up: at
 /// shutdown even a single un-acknowledged event (e.g. a `CallEnded`) must be
 /// persisted so the next startup replays it.
-async fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<Value>) {
+async fn spill_remaining(
+    spool: Option<&Arc<EventSpool>>,
+    batch: &mut VecDeque<Value>,
+    max_events_per_file: usize,
+) {
     if batch.is_empty() {
         return;
     }
@@ -744,10 +829,22 @@ async fn spill_remaining(spool: Option<&Arc<EventSpool>>, batch: &mut VecDeque<V
         return;
     };
     let items: Vec<Value> = batch.iter().cloned().collect();
+    let max_events_per_file = effective_event_batch_max(max_events_per_file);
     let spool = Arc::clone(spool);
-    match tokio::task::spawn_blocking(move || spool.spill(&items)).await {
+    match tokio::task::spawn_blocking(move || {
+        for chunk in items.chunks(max_events_per_file) {
+            spool.spill(chunk)?;
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    {
         Ok(Ok(())) => {
-            debug!(count = batch.len(), "spilled buffered events to disk");
+            debug!(
+                count = batch.len(),
+                chunk_size = max_events_per_file,
+                "spilled buffered events to disk"
+            );
             batch.clear();
         }
         Ok(Err(err)) => warn!(%err, count = batch.len(), "cannot persist events; keeping buffer"),
@@ -1059,14 +1156,14 @@ mod tests {
         let identity = RuntimeIdentity::new("booth");
         let event = json!({"eventId":"retained", "type":"call_ended"});
         let mut batch = VecDeque::from([event.clone()]);
-        assert!(!flush_once(&operator, &mut batch, &identity, None).await);
+        assert!(!flush_once(&operator, &mut batch, &identity, None, 200).await);
         assert_eq!(batch, VecDeque::from([event.clone()]));
         let dir = tempfile::tempdir().unwrap();
         let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
-        assert!(!flush_once(&operator, &mut batch, &identity, Some(&spool)).await);
+        assert!(!flush_once(&operator, &mut batch, &identity, Some(&spool), 200).await);
         assert!(batch.is_empty());
         assert!(EventSpool::open(dir.path()).unwrap().has_pending());
-        replay_one_batch(&operator, &spool).await;
+        replay_one_batch(&operator, &spool, 200).await;
         assert!(spool.has_pending());
         assert!(inner.state().lock().await.event_batches.is_empty());
 
@@ -1075,13 +1172,48 @@ mod tests {
         std::fs::remove_dir(&blocked_path).unwrap();
         std::fs::write(&blocked_path, b"not a directory").unwrap();
         batch.push_back(event.clone());
-        assert!(!flush_once(&operator, &mut batch, &identity, Some(&blocked)).await);
+        assert!(!flush_once(&operator, &mut batch, &identity, Some(&blocked), 200).await);
         assert_eq!(batch, VecDeque::from([event]));
 
         inner.state().lock().await.fail_events = None;
-        replay_one_batch(&operator, &spool).await;
+        replay_one_batch(&operator, &spool, 200).await;
         assert!(!spool.has_pending());
         assert_eq!(inner.state().lock().await.event_batches.len(), 1);
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn oversized_spool_batch_is_split_before_replay() {
+        let inner = Arc::new(booth_mock::MockOperatorClient::new());
+        let operator: Arc<dyn OperatorClient> = inner.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Arc::new(EventSpool::open(dir.path()).unwrap());
+        let events: Vec<Value> = (0..501)
+            .map(|i| json!({"eventId": format!("event-{i}"), "type": "error"}))
+            .collect();
+        spool.spill(&events).unwrap();
+
+        replay_one_batch(&operator, &spool, 200).await;
+        assert!(spool.has_pending());
+        assert!(inner.state().lock().await.event_batches.is_empty());
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                .count(),
+            3
+        );
+
+        replay_one_batch(&operator, &spool, 200).await;
+        replay_one_batch(&operator, &spool, 200).await;
+        replay_one_batch(&operator, &spool, 200).await;
+        assert!(!spool.has_pending());
+        let batches = inner.state().lock().await.event_batches.clone();
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].matches("\"eventId\"").count(), 200);
+        assert_eq!(batches[1].matches("\"eventId\"").count(), 200);
+        assert_eq!(batches[2].matches("\"eventId\"").count(), 101);
     }
 
     #[test]
