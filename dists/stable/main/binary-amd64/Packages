@@ -1,0 +1,20 @@
+Package: telephone-booth-operator-cli
+Architecture: amd64
+Version: 0.7.0-1
+Priority: optional
+Section: utils
+Maintainer: David Jensenius
+Installed-Size: 10590
+Depends: libasound2
+Filename: pool/main/t/telephone-booth/telephone-booth-operator-cli_0.7.0-1_amd64.deb
+Size: 3246124
+MD5sum: 27c0037d09340fe808c3247f39363fae
+SHA1: 44543736f48455384d4b0c721ecf72ef8bd50715
+SHA256: d3222f227e14453f7893ef51a1aa17be67a3c74c29e1c808e16e8ea686b75d21
+SHA512: 2e804e64f16df2e9db3fc4b1020bea3483ea4834d3670b178c28729e0f5d5bb51f0919c6fdc139395b111fa310720cb45faad2de4937f7563aaae73ed39dc3c4
+Homepage: https://github.com/djensenius/Telephone-Booth-Operator-cli
+Description: Terminal operator console (TUI) for the Telephone-Booth installation.
+ Terminal UI operator console for the Telephone Booth art installation. Manages
+ messages, questions, sessions, and live system health, and connects to the
+ booth's on-device debug server.
+

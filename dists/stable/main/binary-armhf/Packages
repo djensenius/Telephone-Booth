@@ -1,3 +1,23 @@
+Package: telephone-booth-operator-cli
+Architecture: armhf
+Version: 0.7.0-1
+Priority: optional
+Section: utils
+Maintainer: David Jensenius
+Installed-Size: 8470
+Depends: libasound2
+Filename: pool/main/t/telephone-booth/telephone-booth-operator-cli_0.7.0-1_armhf.deb
+Size: 2620616
+MD5sum: 677cb160f3ff10dda9a0130574da1880
+SHA1: c898bcfbe4f465cba6e1079717b66e5b0a730c62
+SHA256: 0557bafa738c5346521d3d73102e60dcd6664f03af21b18d8a26e74766a44095
+SHA512: fa54497b31851a1022048688843644d4c8b83e8c6f6cca6dc9ec14dbb2a15c840bc093144c7703af63b41de28e75d0951bef22691a51a6c29c098d2f469463bc
+Homepage: https://github.com/djensenius/Telephone-Booth-Operator-cli
+Description: Terminal operator console (TUI) for the Telephone-Booth installation.
+ Terminal UI operator console for the Telephone Booth art installation. Manages
+ messages, questions, sessions, and live system health, and connects to the
+ booth's on-device debug server.
+
 Package: telephone-booth
 Architecture: armhf
 Version: 0.1.0-1
