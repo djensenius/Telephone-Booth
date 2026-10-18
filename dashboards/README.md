@@ -11,7 +11,7 @@ data flow and the metric catalog.
 | `booth-overview.json`         | Booth — Overview               | CPU temp, fan command, load, memory, uptime, network, pickups/day. |
 | `booth-call-activity.json`    | Booth — Pickup activity        | Selected-range pickup stats plus outcome, digit, recording, and upload-failure diagnostics. |
 | `booth-audio.json`            | Booth — Audio & operator HTTP  | Input/output dBFS, operator request rate, p95 latency, dropped events. |
-| `booth-thermals.json`         | Booth — Thermals               | Pi, router, modem, fan, outdoor weather, and repeated sensor charts.  |
+| `booth-thermals.json`         | Booth — Thermals               | Pi, router, modem, fan, Shelly heat-mat plug, outdoor weather, and repeated sensor charts. |
 | `booth-combined.json`         | Telephone Booth (tabbed)       | Overview, pickup activity, and audio in three tabs (Grafana 12+, schema v2). |
 
 The four single-focus dashboards use the classic dashboard schema
@@ -51,6 +51,8 @@ multi-booth deployments.
 - `$booth` filters Pi temperature series by `booth_id`.
 - `$router` selects one or more `instance` labels from the fixed
   `job="TelephoneRouter"` scrape job.
+- `$shelly_device` selects the Shelly `device` label for plug telemetry. It
+  defaults to `vivosun_heat_mat` and drives the heat-mat power/current panels.
 - `$thermal_sensor` selects thermal-zone `name` labels. It is multi-value,
   defaults to **All**, and drives the repeated per-sensor panels in the
   collapsible **Individual router thermal zones** row. With **All** selected,
@@ -60,8 +62,10 @@ The dashboard defaults to a rolling 24-hour view. Its combined temperature
 chart overlays Pi CPU, router battery, the hottest of the router's four modem
 zones, outdoor air temperature, and apparent temperature. Separate panels
 retain each source's detail, while the weather row adds current condition,
-humidity, cloud cover, fetch health, and freshness. Fan PWM is a commanded
-duty ratio; the RPM panel remains empty when no tachometer wire is connected.
+humidity, cloud cover, fetch health, and freshness. The Shelly row shows the
+Vivosun heat mat's present watt/current draw, plug health, plug temperature,
+and recent power/electrical history. Fan PWM is a commanded duty ratio; the RPM
+panel remains empty when no tachometer wire is connected.
 
 The router exporter does not publish `booth_id`, so `$booth` and `$router`
 intentionally filter their respective Pi and router series independently.
