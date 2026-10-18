@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Pi, GL.iNet router, fan, and modeled outdoor-weather correlation.",
+  "description": "Pi, GL.iNet router, fan, Shelly heat-mat plug, and modeled outdoor-weather correlation.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -731,6 +731,249 @@
       "type": "timeseries"
     },
     {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+      "id": 22,
+      "panels": [],
+      "title": "Vivosun heat mat / Shelly plug",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current Vivosun heat mat draw through the Shelly Plug. 0 W means the mat/controller is currently off.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "yellow", "value": 60 }
+            ]
+          },
+          "unit": "watt"
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 49 },
+      "id": 23,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_power_watts{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "instant": true,
+          "legendFormat": "{{device}} · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Heat mat draw",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Current draw through the Shelly Plug in amperes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "min": 0,
+          "unit": "amp"
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 49 },
+      "id": 24,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_current_amperes{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "instant": true,
+          "legendFormat": "{{device}} · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Heat mat current",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Shelly Plug internal temperature. This is the plug electronics temperature, not the mat temperature.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 55 },
+              { "color": "red", "value": 70 }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 49 },
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_temperature_celsius{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "instant": true,
+          "legendFormat": "{{device}} · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Shelly temperature",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Whether the booth can currently poll the Shelly Plug over the LAN.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "options": {
+                "0": { "color": "red", "text": "Offline" },
+                "1": { "color": "green", "text": "Online" }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 49 },
+      "id": 26,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_up{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "instant": true,
+          "legendFormat": "{{device}} · {{booth_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Shelly poll status",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Heat mat power over time. 0 W means the mat/controller is off; non-zero draw means it is actively heating.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+          "min": 0,
+          "unit": "watt"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 54 },
+      "id": 27,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_power_watts{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "legendFormat": "Power · {{device}} · {{booth_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Heat mat power",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Shelly Plug electrical readings and internal temperature over time.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Voltage" },
+            "properties": [{ "id": "unit", "value": "volt" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Current" },
+            "properties": [{ "id": "unit", "value": "amp" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Shelly temperature" },
+            "properties": [{ "id": "unit", "value": "celsius" }]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 54 },
+      "id": 28,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "min", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "expr": "booth_shelly_plug_voltage_volts{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "legendFormat": "Voltage",
+          "refId": "A"
+        },
+        {
+          "expr": "booth_shelly_plug_current_amperes{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "legendFormat": "Current",
+          "refId": "B"
+        },
+        {
+          "expr": "booth_shelly_plug_temperature_celsius{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
+          "legendFormat": "Shelly temperature",
+          "refId": "C"
+        }
+      ],
+      "title": "Shelly voltage, current, and temperature",
+      "type": "timeseries"
+    },
+    {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "description": "All exported GL.iNet thermal zones for the selected router instances.",
       "fieldConfig": {
@@ -748,7 +991,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 48 },
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 63 },
       "id": 7,
       "options": {
         "legend": {
@@ -771,7 +1014,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 59 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 74 },
       "id": 8,
       "panels": [],
       "title": "Individual router thermal zones",
@@ -795,7 +1038,7 @@
           "unit": "celsius"
         }
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 60 },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 75 },
       "id": 9,
       "maxPerRow": 3,
       "options": {
@@ -850,6 +1093,22 @@
         "name": "booth",
         "options": [],
         "query": "label_values(booth_uptime_seconds, booth_id)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "vivosun_heat_mat", "value": "vivosun_heat_mat" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(booth_shelly_plug_power_watts{booth_id=~\"$booth\"}, device)",
+        "includeAll": true,
+        "label": "Shelly device",
+        "multi": true,
+        "name": "shelly_device",
+        "options": [],
+        "query": "label_values(booth_shelly_plug_power_watts{booth_id=~\"$booth\"}, device)",
         "refresh": 2,
         "regex": "",
         "sort": 1,
