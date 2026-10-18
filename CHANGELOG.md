@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/djensenius/Telephone-Booth/compare/v0.14.2...v0.15.0) (2026-10-18)
+
+
+### Features
+
+* **observability:** collect Shelly plug power metrics ([4e10b37](https://github.com/djensenius/Telephone-Booth/commit/4e10b37d6312ae6a9f536988486b4d8dc4605bea))
+
 ## [0.14.2](https://github.com/djensenius/Telephone-Booth/compare/v0.14.1...v0.14.2) (2026-10-09)
 
 
