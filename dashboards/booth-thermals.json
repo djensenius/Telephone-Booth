@@ -874,7 +874,7 @@
         "graphMode": "none",
         "justifyMode": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "value"
+        "textMode": "value_and_name"
       },
       "targets": [
         {
@@ -929,15 +929,15 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Voltage" },
+            "matcher": { "id": "byFrameRefID", "options": "A" },
             "properties": [{ "id": "unit", "value": "volt" }]
           },
           {
-            "matcher": { "id": "byName", "options": "Current" },
+            "matcher": { "id": "byFrameRefID", "options": "B" },
             "properties": [{ "id": "unit", "value": "amp" }]
           },
           {
-            "matcher": { "id": "byName", "options": "Shelly temperature" },
+            "matcher": { "id": "byFrameRefID", "options": "C" },
             "properties": [{ "id": "unit", "value": "celsius" }]
           }
         ]
@@ -956,17 +956,17 @@
       "targets": [
         {
           "expr": "booth_shelly_plug_voltage_volts{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
-          "legendFormat": "Voltage",
+          "legendFormat": "Voltage · {{device}} · {{booth_id}}",
           "refId": "A"
         },
         {
           "expr": "booth_shelly_plug_current_amperes{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
-          "legendFormat": "Current",
+          "legendFormat": "Current · {{device}} · {{booth_id}}",
           "refId": "B"
         },
         {
           "expr": "booth_shelly_plug_temperature_celsius{booth_id=~\"$booth\",device=~\"$shelly_device\"}",
-          "legendFormat": "Shelly temperature",
+          "legendFormat": "Shelly temperature · {{device}} · {{booth_id}}",
           "refId": "C"
         }
       ],
