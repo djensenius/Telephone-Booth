@@ -827,6 +827,51 @@ pub struct SystemSnapshot {
     /// directly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_mode: Option<RuntimeMode>,
+    /// External Shelly smart-plug power meters configured for the booth, such
+    /// as the Vivosun heat-mat monitor. Empty when no Shelly devices are
+    /// configured or no readings have been fetched yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shelly: Vec<ShellyDeviceStats>,
+}
+
+/// One Shelly smart-plug power-meter reading.
+///
+/// Values mirror Shelly Gen 2+/Gen 4 `Switch.GetStatus` fields and remain
+/// optional so partial/older firmware responses can still be forwarded.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellyDeviceStats {
+    /// Stable local label from the booth configuration, for example
+    /// `vivosun_heat_mat`.
+    pub device: String,
+    /// Local URL or host configured for the device. This is operational
+    /// metadata, not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Whether the Shelly relay output is energized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_on: Option<bool>,
+    /// Active power in watts (`apower`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_watts: Option<f64>,
+    /// Line voltage in volts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_volts: Option<f64>,
+    /// AC frequency in hertz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_hertz: Option<f64>,
+    /// Current draw in amperes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_amperes: Option<f64>,
+    /// Cumulative active energy reported by Shelly, in watt-hours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_watt_hours: Option<f64>,
+    /// Shelly device temperature in degrees Celsius.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_celsius: Option<f64>,
+    /// Unix timestamp, according to the booth, when this reading was fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at_unix_seconds: Option<u64>,
 }
 
 /// Linux PWM cooling-fan state reported through sysfs.

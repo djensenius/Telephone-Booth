@@ -393,6 +393,7 @@ error messages) ever become labels.
 | `booth_errors_total`                    | `source`                            | `Error` events; `source` is a bounded enum. |
 | `booth_network_receive_bytes_total`     | `iface`                             | sysinfo per-interface counters.           |
 | `booth_network_transmit_bytes_total`    | `iface`                             | sysinfo per-interface counters.           |
+| `booth_shelly_plug_fetch_failures_total` | `device`, `reason`                 | Failed Shelly requests; `reason` is `transport`, `http`, `response_too_large`, `json`, or `clock`. |
 | `booth_outdoor_weather_fetch_failures_total` | `source`, `reason`              | Failed Open-Meteo requests; `reason` is `transport`, `http`, `response_too_large`, `decode`, `clock`, or `invalid_data`. |
 
 ### Gauges
@@ -414,6 +415,15 @@ error messages) ever become labels.
 | `booth_fan_speed_rpm`                | (none) — measured RPM, or `NaN` without tachometer feedback. |
 | `booth_fan_cooling_state`            | (none) — active kernel thermal cooling state. |
 | `booth_fan_max_cooling_state`        | (none) — highest cooling state supported by the driver. |
+| `booth_shelly_plug_up`               | `device` — 1 when the latest Shelly fetch succeeded, otherwise 0. |
+| `booth_shelly_plug_output_on`        | `device` — 1 when the plug relay output is on, otherwise 0. |
+| `booth_shelly_plug_power_watts`      | `device` — active power draw in watts. |
+| `booth_shelly_plug_voltage_volts`    | `device` — line voltage in volts. |
+| `booth_shelly_plug_current_amperes`  | `device` — current draw in amperes. |
+| `booth_shelly_plug_frequency_hertz`  | `device` — AC frequency in hertz. |
+| `booth_shelly_plug_energy_watt_hours` | `device` — cumulative active energy from Shelly. |
+| `booth_shelly_plug_temperature_celsius` | `device` — Shelly device temperature. |
+| `booth_shelly_plug_last_success_timestamp_seconds` | `device` — booth receipt time for the latest valid sample. |
 | `booth_outdoor_weather_temperature_celsius` | `source` — modeled outdoor air temperature. |
 | `booth_outdoor_weather_apparent_temperature_celsius` | `source` — modeled apparent temperature. |
 | `booth_outdoor_weather_relative_humidity_percent` | `source` — relative humidity in `[0, 100]`. |
@@ -476,6 +486,33 @@ Or inspect the Prometheus series:
 
 ```sh
 curl -s http://127.0.0.1:8080/metrics | grep '^booth_fan_'
+```
+
+## Shelly power monitor
+
+When `[shelly]` is enabled, `booth-bin` polls the configured Shelly's local
+HTTP/RPC endpoint (`/rpc/Switch.GetStatus?id=0` by default). The current heat
+mat plug defaults to `endpoint = "192.168.8.220"` and `device =
+"vivosun_heat_mat"`; both are configurable.
+
+On success, the collector updates the `booth_shelly_plug_*` gauges and stores
+the latest reading in `SystemSampler`, so the next `/v1/system` push to the
+operator includes a `snapshot.shelly[]` entry with fields such as
+`powerWatts`, `currentAmperes`, `voltageVolts`, `outputOn`, and
+`fetchedAtUnixSeconds`. On failure it leaves the last valid values intact,
+sets `booth_shelly_plug_up` to 0, and increments
+`booth_shelly_plug_fetch_failures_total` with a bounded reason.
+
+Inspect the live JSON directly:
+
+```sh
+curl -s http://127.0.0.1:8080/v1/system | jq .shelly
+```
+
+Or inspect the Prometheus series:
+
+```sh
+curl -s http://127.0.0.1:8080/metrics | grep '^booth_shelly_plug_'
 ```
 
 ## Histograms

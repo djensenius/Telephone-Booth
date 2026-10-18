@@ -86,6 +86,17 @@ batch_max = 200
 flush_interval_ms = 2000
 buffer_max = 4096
 
+[shelly]
+# Shelly Plug US Gen4 currently monitoring the Vivosun heat mat.
+# Enable to publish booth_shelly_plug_* metrics and include readings in
+# /v1/system snapshots sent to the operator.
+enabled = false
+device = "vivosun_heat_mat"
+endpoint = "192.168.8.220"
+switch_id = 0
+poll_interval_seconds = 15
+request_timeout_seconds = 5
+
 [weather]
 enabled = false
 # Rounded deployment coordinates; both are required when weather is enabled.

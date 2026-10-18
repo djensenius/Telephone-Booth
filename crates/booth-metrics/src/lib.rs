@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use booth_hal::{
     AudioChannel, AudioDeviceStats, CallOutcome, CpuStats, DiskStats, FanStats, MemoryStats,
-    NetworkStats, ProcessStats, RuntimeMode, SystemSnapshot, TelemetryEvent,
+    NetworkStats, ProcessStats, RuntimeMode, ShellyDeviceStats, SystemSnapshot, TelemetryEvent,
 };
 use booth_telemetry::TelemetryBus;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -299,6 +299,45 @@ pub fn record_outdoor_weather_failure(source: &'static str, reason: &'static str
     .increment(1);
 }
 
+/// Publish gauges for a Shelly smart-plug reading.
+pub fn record_shelly_device_gauges(sample: &ShellyDeviceStats) {
+    let device = sample.device.clone();
+    metrics::gauge!("booth_shelly_plug_up", "device" => device.clone()).set(1.0);
+    metrics::gauge!("booth_shelly_plug_output_on", "device" => device.clone()).set(
+        sample
+            .output_on
+            .map_or(f64::NAN, |output_on| if output_on { 1.0 } else { 0.0 }),
+    );
+    metrics::gauge!("booth_shelly_plug_power_watts", "device" => device.clone())
+        .set(sample.power_watts.unwrap_or(f64::NAN));
+    metrics::gauge!("booth_shelly_plug_voltage_volts", "device" => device.clone())
+        .set(sample.voltage_volts.unwrap_or(f64::NAN));
+    metrics::gauge!("booth_shelly_plug_current_amperes", "device" => device.clone())
+        .set(sample.current_amperes.unwrap_or(f64::NAN));
+    metrics::gauge!("booth_shelly_plug_frequency_hertz", "device" => device.clone())
+        .set(sample.frequency_hertz.unwrap_or(f64::NAN));
+    metrics::gauge!("booth_shelly_plug_energy_watt_hours", "device" => device.clone())
+        .set(sample.energy_watt_hours.unwrap_or(f64::NAN));
+    metrics::gauge!("booth_shelly_plug_temperature_celsius", "device" => device.clone())
+        .set(sample.temperature_celsius.unwrap_or(f64::NAN));
+    if let Some(fetched_at_unix_seconds) = sample.fetched_at_unix_seconds {
+        #[allow(clippy::cast_precision_loss)]
+        metrics::gauge!("booth_shelly_plug_last_success_timestamp_seconds", "device" => device)
+            .set(fetched_at_unix_seconds as f64);
+    }
+}
+
+/// Mark the latest Shelly fetch as failed and increment its bounded reason counter.
+pub fn record_shelly_device_failure(device: &str, reason: &'static str) {
+    metrics::gauge!("booth_shelly_plug_up", "device" => device.to_string()).set(0.0);
+    metrics::counter!(
+        "booth_shelly_plug_fetch_failures_total",
+        "device" => device.to_string(),
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 /// Builds [`SystemSnapshot`]s on demand and updates the booth's gauges.
 ///
 /// The sampler subscribes to [`TelemetryEvent::AudioDeviceChange`] events
@@ -321,6 +360,7 @@ struct SystemSamplerInner {
     sysinfo: Mutex<SysinfoState>,
     audio: Mutex<AudioDeviceStats>,
     runtime_mode: Mutex<Option<RuntimeMode>>,
+    shelly: Mutex<Vec<ShellyDeviceStats>>,
 }
 
 #[cfg(feature = "system")]
@@ -350,6 +390,7 @@ impl SystemSampler {
                 }),
                 audio: Mutex::new(AudioDeviceStats::default()),
                 runtime_mode: Mutex::new(None),
+                shelly: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -395,6 +436,19 @@ impl SystemSampler {
         }
     }
 
+    /// Record or replace the latest reading for one configured Shelly device.
+    pub fn record_shelly_device(&self, stats: ShellyDeviceStats) {
+        let mut shelly = self.inner.shelly.lock();
+        if let Some(existing) = shelly
+            .iter_mut()
+            .find(|existing| existing.device == stats.device)
+        {
+            *existing = stats;
+        } else {
+            shelly.push(stats);
+        }
+    }
+
     /// Take one snapshot, refreshing the underlying `sysinfo` state. Cheap
     /// enough to call on a 5 s cadence — `sysinfo` reuses its allocations.
     #[must_use]
@@ -404,6 +458,7 @@ impl SystemSampler {
             temperature_celsius: read_cpu_temp_celsius(),
             fan: read_fan_stats(),
             runtime_mode: *self.inner.runtime_mode.lock(),
+            shelly: self.inner.shelly.lock().clone(),
             ..SystemSnapshot::default()
         };
         #[cfg(feature = "system")]
@@ -1205,6 +1260,92 @@ mod tests {
             available.ends_with(" 0"),
             "fan should be unavailable: {available}"
         );
+    }
+
+    #[test]
+    fn partial_shelly_sample_clears_missing_gauges() {
+        let _guard = METRICS_TEST_LOCK.lock();
+        let handle = ensure_registry();
+        let device = "partial_shelly_sample_clears_missing_gauges";
+        record_shelly_device_gauges(&ShellyDeviceStats {
+            device: device.to_string(),
+            output_on: Some(true),
+            power_watts: Some(40.0),
+            voltage_volts: Some(120.0),
+            frequency_hertz: Some(60.0),
+            current_amperes: Some(0.33),
+            energy_watt_hours: Some(12.0),
+            temperature_celsius: Some(38.0),
+            fetched_at_unix_seconds: Some(100),
+            ..ShellyDeviceStats::default()
+        });
+        record_shelly_device_gauges(&ShellyDeviceStats {
+            device: device.to_string(),
+            output_on: Some(false),
+            fetched_at_unix_seconds: Some(101),
+            ..ShellyDeviceStats::default()
+        });
+
+        let text = handle.render();
+        assert!(
+            metric_line(&text, "booth_shelly_plug_up", device).ends_with(" 1"),
+            "successful partial sample should keep the device up"
+        );
+        assert!(
+            metric_line(&text, "booth_shelly_plug_output_on", device).ends_with(" 0"),
+            "present output_on should update to false"
+        );
+        assert!(
+            metric_line(&text, "booth_shelly_plug_power_watts", device).ends_with(" NaN"),
+            "missing power should clear the previous value"
+        );
+        assert!(
+            metric_line(&text, "booth_shelly_plug_current_amperes", device).ends_with(" NaN"),
+            "missing current should clear the previous value"
+        );
+        assert!(
+            metric_line(
+                &text,
+                "booth_shelly_plug_last_success_timestamp_seconds",
+                device
+            )
+            .ends_with(" 101"),
+            "success timestamp should reflect the partial sample"
+        );
+    }
+
+    #[test]
+    fn system_snapshot_does_not_replay_shelly_success_after_failure() {
+        let _guard = METRICS_TEST_LOCK.lock();
+        let handle = ensure_registry();
+        let device = "system_snapshot_does_not_replay_shelly_success_after_failure";
+        let sampler = SystemSampler::new();
+        let sample = ShellyDeviceStats {
+            device: device.to_string(),
+            output_on: Some(true),
+            power_watts: Some(40.0),
+            fetched_at_unix_seconds: Some(100),
+            ..ShellyDeviceStats::default()
+        };
+        record_shelly_device_gauges(&sample);
+        sampler.record_shelly_device(sample);
+        record_shelly_device_failure(device, "transport");
+
+        record_snapshot_gauges(&sampler.sample_once());
+
+        let text = handle.render();
+        assert!(
+            metric_line(&text, "booth_shelly_plug_up", device).ends_with(" 0"),
+            "system snapshot recording must not mask the failed poll"
+        );
+    }
+
+    fn metric_line<'a>(text: &'a str, metric: &str, device: &str) -> &'a str {
+        let prefix = format!("{metric}{{");
+        let device_label = format!("device=\"{device}\"");
+        text.lines()
+            .find(|line| line.starts_with(&prefix) && line.contains(&device_label))
+            .unwrap_or_else(|| panic!("missing {metric} for {device} in:\n{text}"))
     }
 
     #[test]
