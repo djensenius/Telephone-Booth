@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use booth_hal::{
     AudioChannel, AudioDeviceStats, CallOutcome, CpuStats, DiskStats, FanStats, MemoryStats,
-    NetworkStats, ProcessStats, RuntimeMode, SystemSnapshot, TelemetryEvent,
+    NetworkStats, ProcessStats, RuntimeMode, ShellyDeviceStats, SystemSnapshot, TelemetryEvent,
 };
 use booth_telemetry::TelemetryBus;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -299,6 +299,56 @@ pub fn record_outdoor_weather_failure(source: &'static str, reason: &'static str
     .increment(1);
 }
 
+/// Publish gauges for a Shelly smart-plug reading.
+pub fn record_shelly_device_gauges(sample: &ShellyDeviceStats) {
+    let device = sample.device.clone();
+    metrics::gauge!("booth_shelly_plug_up", "device" => device.clone()).set(1.0);
+    if let Some(output_on) = sample.output_on {
+        metrics::gauge!("booth_shelly_plug_output_on", "device" => device.clone())
+            .set(if output_on { 1.0 } else { 0.0 });
+    }
+    if let Some(power_watts) = sample.power_watts {
+        metrics::gauge!("booth_shelly_plug_power_watts", "device" => device.clone())
+            .set(power_watts);
+    }
+    if let Some(voltage_volts) = sample.voltage_volts {
+        metrics::gauge!("booth_shelly_plug_voltage_volts", "device" => device.clone())
+            .set(voltage_volts);
+    }
+    if let Some(current_amperes) = sample.current_amperes {
+        metrics::gauge!("booth_shelly_plug_current_amperes", "device" => device.clone())
+            .set(current_amperes);
+    }
+    if let Some(frequency_hertz) = sample.frequency_hertz {
+        metrics::gauge!("booth_shelly_plug_frequency_hertz", "device" => device.clone())
+            .set(frequency_hertz);
+    }
+    if let Some(energy_watt_hours) = sample.energy_watt_hours {
+        metrics::gauge!("booth_shelly_plug_energy_watt_hours", "device" => device.clone())
+            .set(energy_watt_hours);
+    }
+    if let Some(temperature_celsius) = sample.temperature_celsius {
+        metrics::gauge!("booth_shelly_plug_temperature_celsius", "device" => device.clone())
+            .set(temperature_celsius);
+    }
+    if let Some(fetched_at_unix_seconds) = sample.fetched_at_unix_seconds {
+        #[allow(clippy::cast_precision_loss)]
+        metrics::gauge!("booth_shelly_plug_last_success_timestamp_seconds", "device" => device)
+            .set(fetched_at_unix_seconds as f64);
+    }
+}
+
+/// Mark the latest Shelly fetch as failed and increment its bounded reason counter.
+pub fn record_shelly_device_failure(device: &str, reason: &'static str) {
+    metrics::gauge!("booth_shelly_plug_up", "device" => device.to_string()).set(0.0);
+    metrics::counter!(
+        "booth_shelly_plug_fetch_failures_total",
+        "device" => device.to_string(),
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 /// Builds [`SystemSnapshot`]s on demand and updates the booth's gauges.
 ///
 /// The sampler subscribes to [`TelemetryEvent::AudioDeviceChange`] events
@@ -321,6 +371,7 @@ struct SystemSamplerInner {
     sysinfo: Mutex<SysinfoState>,
     audio: Mutex<AudioDeviceStats>,
     runtime_mode: Mutex<Option<RuntimeMode>>,
+    shelly: Mutex<Vec<ShellyDeviceStats>>,
 }
 
 #[cfg(feature = "system")]
@@ -350,6 +401,7 @@ impl SystemSampler {
                 }),
                 audio: Mutex::new(AudioDeviceStats::default()),
                 runtime_mode: Mutex::new(None),
+                shelly: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -395,6 +447,19 @@ impl SystemSampler {
         }
     }
 
+    /// Record or replace the latest reading for one configured Shelly device.
+    pub fn record_shelly_device(&self, stats: ShellyDeviceStats) {
+        let mut shelly = self.inner.shelly.lock();
+        if let Some(existing) = shelly
+            .iter_mut()
+            .find(|existing| existing.device == stats.device)
+        {
+            *existing = stats;
+        } else {
+            shelly.push(stats);
+        }
+    }
+
     /// Take one snapshot, refreshing the underlying `sysinfo` state. Cheap
     /// enough to call on a 5 s cadence — `sysinfo` reuses its allocations.
     #[must_use]
@@ -404,6 +469,7 @@ impl SystemSampler {
             temperature_celsius: read_cpu_temp_celsius(),
             fan: read_fan_stats(),
             runtime_mode: *self.inner.runtime_mode.lock(),
+            shelly: self.inner.shelly.lock().clone(),
             ..SystemSnapshot::default()
         };
         #[cfg(feature = "system")]
@@ -521,6 +587,9 @@ pub fn record_snapshot_gauges(snapshot: &SystemSnapshot) {
     if let Some(uptime) = snapshot.uptime_seconds {
         #[allow(clippy::cast_precision_loss)]
         metrics::gauge!("booth_uptime_seconds").set(uptime as f64);
+    }
+    for shelly in &snapshot.shelly {
+        record_shelly_device_gauges(shelly);
     }
 }
 

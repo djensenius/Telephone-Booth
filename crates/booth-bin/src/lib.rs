@@ -30,6 +30,7 @@ use booth_pi::{
 use booth_telemetry::TelemetryBus;
 use observability::{ObservabilityConfig, SessionHandle};
 use serde::{Deserialize, Serialize};
+use shelly::ShellyConfig;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
@@ -43,6 +44,7 @@ pub mod file_storage;
 mod installation;
 pub mod observability;
 pub mod pending_uploads;
+pub mod shelly;
 pub mod weather;
 
 /// Production config path used by the systemd service.
@@ -85,6 +87,8 @@ pub struct RuntimeConfig {
     pub telemetry: TelemetryConfig,
     /// Observability stack (system metrics + operator event forwarding).
     pub observability: ObservabilityConfig,
+    /// Shelly smart-plug power monitor metrics.
+    pub shelly: ShellyConfig,
     /// Modeled outdoor-weather metrics.
     pub weather: WeatherConfig,
     /// Runtime startup mode (mock / simulator) for autostart deployments.
@@ -122,6 +126,7 @@ impl Default for RuntimeConfig {
             debug: DebugConfig::default(),
             telemetry: TelemetryConfig::default(),
             observability: ObservabilityConfig::default(),
+            shelly: ShellyConfig::default(),
             weather: WeatherConfig::default(),
             runtime: RuntimeStartupConfig::default(),
             debug_token: None,
@@ -622,11 +627,18 @@ async fn run_runtime(
                     sampler_for_consumer,
                 ));
                 observability_tasks.push(booth_metrics::spawn_system_sampler(
-                    sampler,
+                    sampler.clone(),
                     bus.clone(),
                     sampler_config,
                     identity.start,
                 ));
+                #[cfg(feature = "shelly")]
+                if config.shelly.enabled {
+                    observability_tasks.push(shelly::spawn_shelly_collector(
+                        config.shelly.clone(),
+                        sampler.clone(),
+                    )?);
+                }
                 #[cfg(feature = "weather")]
                 if config.weather.enabled {
                     observability_tasks.push(weather::spawn_weather_collector(config.weather)?);
@@ -2487,6 +2499,35 @@ fn validate_config(config: &RuntimeConfig) -> Result<()> {
     }
     if fwd.system_push_interval_ms == 0 {
         bail!("observability.operator_forward.system_push_interval_ms must be greater than 0");
+    }
+
+    // --- Shelly power monitor bounds ---
+    if config.shelly.poll_interval_seconds < shelly::MIN_POLL_INTERVAL_SECONDS {
+        bail!(
+            "shelly.poll_interval_seconds must be at least {}",
+            shelly::MIN_POLL_INTERVAL_SECONDS
+        );
+    }
+    if config.shelly.request_timeout_seconds == 0
+        || config.shelly.request_timeout_seconds > shelly::MAX_REQUEST_TIMEOUT_SECONDS
+    {
+        bail!(
+            "shelly.request_timeout_seconds must be between 1 and {}",
+            shelly::MAX_REQUEST_TIMEOUT_SECONDS
+        );
+    }
+    if config.shelly.enabled {
+        if !config.observability.enabled {
+            bail!("shelly.enabled requires observability.enabled");
+        }
+        if config.shelly.device.trim().is_empty() {
+            bail!("shelly.device must not be empty when shelly is enabled");
+        }
+        if config.shelly.endpoint.trim().is_empty() {
+            bail!("shelly.endpoint must not be empty when shelly is enabled");
+        }
+        #[cfg(not(feature = "shelly"))]
+        bail!("shelly.enabled = true but this binary was built without the `shelly` Cargo feature");
     }
 
     // --- Outdoor weather bounds ---

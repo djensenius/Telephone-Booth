@@ -101,6 +101,15 @@ batch_max         = 200       # events per POST /v1/events
 flush_interval_ms = 2000
 buffer_max        = 4096      # hard cap; drop-oldest on overflow
 
+[shelly]
+# Shelly Plug US Gen4 currently monitoring the Vivosun heat mat.
+enabled                 = false
+device                  = "vivosun_heat_mat"
+endpoint                = "192.168.8.220"
+switch_id               = 0
+poll_interval_seconds   = 15
+request_timeout_seconds = 5
+
 [weather]
 enabled              = false
 # Rounded deployment coordinates; both are required when enabled.
@@ -216,6 +225,24 @@ Remote write to VictoriaMetrics is **not** controlled here — that's
 vmagent's job. See [`observability.md`](observability.md#packaging)
 for the vmagent unit and the `BOOTH_VM_REMOTE_WRITE_URL` env var that
 lives in `/etc/phone-booth/vmagent.env`.
+
+### Shelly power monitor
+
+`[shelly]` enables a booth-owned Shelly HTTP/RPC poller for a smart plug such
+as the Shelly Plug US Gen4 currently measuring the Vivosun heat mat. It runs
+only when both `shelly.enabled` and `observability.enabled` are true.
+
+The default `endpoint` is `192.168.8.220`, the known IP for the current heat-mat
+plug. A bare IP/host is treated as HTTP; a full `http://` or `https://` URL is
+also accepted. The collector calls `/rpc/Switch.GetStatus?id=<switch_id>` and
+publishes readings into `/metrics` as `booth_shelly_plug_*` gauges, keyed by the
+bounded `device` label. The latest successful reading is also included in the
+periodic `/v1/system` snapshot sent to the operator, under `snapshot.shelly[]`.
+
+`poll_interval_seconds` must be at least 2 seconds, and
+`request_timeout_seconds` must be between 1 and 30 seconds. The default config
+is safe-but-off: add `enabled = true` when the booth should collect and forward
+the plug data.
 
 ### Outdoor weather
 
