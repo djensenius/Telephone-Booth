@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/djensenius/Telephone-Booth/compare/v0.15.0...v0.15.1) (2026-10-18)
+
+
+### Documentation
+
+* **dashboards:** add Shelly heat mat panels ([ad3175e](https://github.com/djensenius/Telephone-Booth/commit/ad3175e9ca49b4725a675e5c7ed40229b9323361))
+
 ## [0.15.0](https://github.com/djensenius/Telephone-Booth/compare/v0.14.2...v0.15.0) (2026-10-18)
 
 
